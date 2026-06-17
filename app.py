@@ -24,6 +24,7 @@ RRF_RANK_WINDOW_SIZE = 100
 MAX_RESULT_SIZE = 50
 KNN_NUM_CANDIDATES = 300
 FACETS_CACHE_TTL_SECONDS = 60
+VECTOR_FIELDS_CACHE_TTL_SECONDS = 300
 BM25_RETRIEVER = "bm25"
 DENSE_RETRIEVER = "dense"
 BM25_RRF_WEIGHT = 1.0
@@ -49,7 +50,7 @@ SOURCE_EXCLUDES = [
 ]
 
 _facets_cache: tuple[float, dict[str, Any]] | None = None
-_vector_fields_cache: tuple[str, ...] | None = None
+_vector_fields_cache: tuple[float, tuple[str, ...]] | None = None
 
 app = FastAPI(title="Resume Search Prototype")
 app.mount("/static", StaticFiles(directory=WEB_DIR), name="static")
@@ -190,6 +191,8 @@ def _bm25_body(query_text: str, filters: list[dict[str, Any]], size: int) -> dic
             "pre_tags": ["<mark>"],
             "post_tags": ["</mark>"],
             "fields": {
+                "application.position_name": {"fragment_size": 120, "number_of_fragments": 1},
+                "candidate.major": {"fragment_size": 80, "number_of_fragments": 1},
                 "section_text.projects": {"fragment_size": 160, "number_of_fragments": 2},
                 "section_text.internships": {"fragment_size": 160, "number_of_fragments": 1},
                 "section_text.education": {"fragment_size": 160, "number_of_fragments": 1},
@@ -406,7 +409,12 @@ def _run_hybrid_search(
         }
         for future in as_completed(futures):
             name, weight = futures[future]
-            response = future.result()
+            try:
+                response = future.result()
+            except Exception:
+                # One retriever failing should not crash the entire search;
+                # degrade gracefully with whatever retriever(s) succeeded.
+                continue
             response["_retriever_name"] = name
             response["_rrf_weight"] = weight
             responses.append(response)
@@ -415,8 +423,9 @@ def _run_hybrid_search(
 
 def _available_vector_fields() -> tuple[str, ...]:
     global _vector_fields_cache
-    if _vector_fields_cache is not None:
-        return _vector_fields_cache
+    now = time.monotonic()
+    if _vector_fields_cache and _vector_fields_cache[0] > now:
+        return _vector_fields_cache[1]
 
     mapping = _es("GET", f"/{INDEX_ALIAS}/_mapping")
     properties: dict[str, Any] = {}
@@ -428,8 +437,8 @@ def _available_vector_fields() -> tuple[str, ...]:
         for field in VECTOR_FIELDS
         if properties.get(field, {}).get("type") == "dense_vector"
     )
-    _vector_fields_cache = fields
-    return _vector_fields_cache
+    _vector_fields_cache = (now + VECTOR_FIELDS_CACHE_TTL_SECONDS, fields)
+    return fields
 
 
 # ---------------------------------------------------------------------------
@@ -573,7 +582,9 @@ def _format_hit(hit: dict[str, Any], rrf_score: float | None = None) -> dict[str
     highlight = hit.get("highlight", {})
 
     snippets = (
-        highlight.get("section_text.projects")
+        highlight.get("application.position_name")
+        or highlight.get("candidate.major")
+        or highlight.get("section_text.projects")
         or highlight.get("section_text.internships")
         or highlight.get("section_text.education")
         or highlight.get("candidate.school")

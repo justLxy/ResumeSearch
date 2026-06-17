@@ -17,7 +17,7 @@ DEFAULT_INDEX = "resumes_v1"
 DEFAULT_ALIAS = "resumes_current"
 BULK_BATCH_SIZE = 100
 REQUEST_TIMEOUT_SECONDS = 90
-SEMANTIC_PROFILE_CHAR_BUDGET = 480
+SEMANTIC_PROFILE_CHAR_BUDGET = 512
 VECTOR_FIELDS = ("semantic_profile_vector",)
 
 
@@ -29,8 +29,8 @@ def _dense_vector_mapping() -> dict[str, Any]:
         "index": True,
         "index_options": {
             "type": "hnsw",
-            "m": 16,
-            "ef_construction": 100,
+            "m": 32,
+            "ef_construction": 300,
         },
     }
 
@@ -141,12 +141,28 @@ INDEX_BODY: dict[str, Any] = {
                         "search_analyzer": "resume_search",
                         "fields": {"keyword": {"type": "keyword"}},
                     },
-                    "college": {"type": "text", "analyzer": "resume_text"},
-                    "major": {"type": "text", "analyzer": "resume_text"},
+                    "college": {
+                        "type": "text",
+                        "analyzer": "resume_text",
+                        "search_analyzer": "resume_search",
+                    },
+                    "major": {
+                        "type": "text",
+                        "analyzer": "resume_text",
+                        "search_analyzer": "resume_search",
+                    },
                     "education_level": {"type": "keyword"},
                     "degree": {"type": "keyword"},
-                    "research_direction": {"type": "text", "analyzer": "resume_text"},
-                    "lab_name": {"type": "text", "analyzer": "resume_text"},
+                    "research_direction": {
+                        "type": "text",
+                        "analyzer": "resume_text",
+                        "search_analyzer": "resume_search",
+                    },
+                    "lab_name": {
+                        "type": "text",
+                        "analyzer": "resume_text",
+                        "search_analyzer": "resume_search",
+                    },
                     "paper_level": {"type": "keyword"},
                 },
             },
@@ -164,8 +180,16 @@ INDEX_BODY: dict[str, Any] = {
                         "search_analyzer": "resume_search",
                         "fields": {"keyword": {"type": "keyword"}},
                     },
-                    "department": {"type": "text", "analyzer": "resume_text"},
-                    "title": {"type": "text", "analyzer": "resume_text"},
+                    "department": {
+                        "type": "text",
+                        "analyzer": "resume_text",
+                        "search_analyzer": "resume_search",
+                    },
+                    "title": {
+                        "type": "text",
+                        "analyzer": "resume_text",
+                        "search_analyzer": "resume_search",
+                    },
                     "work_type": {"type": "keyword"},
                     "description": {
                         "type": "text",
@@ -375,12 +399,12 @@ def _build_search_text(doc: dict[str, Any]) -> str:
     application = doc.get("application") or {}
     candidate = doc.get("candidate") or {}
     lines = [
-        _project_semantic_text(doc),
-        _internship_semantic_text(doc),
-        _profile_line("能力标签", "，".join(doc.get("skills") or [])),
-        _education_semantic_text(doc),
         _profile_line("目标岗位", application.get("position_name")),
         _profile_line("专业背景", candidate.get("major")),
+        _profile_line("能力标签", "，".join(doc.get("skills") or [])),
+        _project_semantic_text(doc),
+        _internship_semantic_text(doc),
+        _education_semantic_text(doc),
     ]
     cleaned = _strip_semantic_exclusions(_compact_join(lines), _semantic_exclusions(doc))
     return _budgeted_join(cleaned.splitlines(), SEMANTIC_PROFILE_CHAR_BUDGET)

@@ -208,7 +208,7 @@ class SearchLogicTests(unittest.TestCase):
         self.assertNotIn("张三", search_text)
         self.assertNotIn("百度在线网络技术", embedding_inputs["semantic_profile_vector"])
         self.assertNotIn("学士", embedding_inputs["semantic_profile_vector"])
-        self.assertLessEqual(len(embedding_inputs["semantic_profile_vector"]), 480)
+        self.assertLessEqual(len(embedding_inputs["semantic_profile_vector"]), 512)
         self.assertIn("机器学习", search_text)
         self.assertIn("自然语言处理", embedding_inputs["semantic_profile_vector"])
         self.assertIn("推荐系统", embedding_inputs["semantic_profile_vector"])

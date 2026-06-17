@@ -5,3 +5,4 @@ uvicorn>=0.23
 sentence-transformers==3.4.1
 torch>=2.0
 modelscope>=1.14
+huggingface-hub>=0.20

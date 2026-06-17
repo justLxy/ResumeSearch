@@ -65,12 +65,20 @@ def _download_from_modelscope() -> str:
 
 
 def _fetch_dense_weights(dense_dir: str) -> None:
-    for filename in ("pytorch_model.bin", "model.safetensors"):
+    for filename in ("model.safetensors", "pytorch_model.bin"):
         dst = os.path.join(dense_dir, filename)
         if os.path.exists(dst):
+            return
+        try:
+            hf_path = _try_hf_download(f"2_Dense/{filename}")
+            shutil.copyfile(hf_path, dst)
+            return
+        except Exception:
             continue
-        hf_path = _try_hf_download(f"2_Dense/{filename}")
-        shutil.copyfile(hf_path, dst)
+    raise RuntimeError(
+        "无法下载 2_Dense 权重文件（model.safetensors 或 pytorch_model.bin），"
+        "请检查网络或设置 HF_ENDPOINT=https://hf-mirror.com 后重试"
+    )
 
 
 def _try_hf_download(filename: str) -> str:
