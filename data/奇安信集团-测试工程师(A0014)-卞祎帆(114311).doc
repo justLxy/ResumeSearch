@@ -1,0 +1,637 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>卞祎帆</title>
+    <meta http-equiv="Content-Type" content="text/html; charset=UTF-8"/>
+    <style type="text/css">
+        body {
+            position: relative;
+            font-family: Microsoft YaHei;
+            width: 736px;
+            margin: auto
+        }
+        .resume-body {
+            position: relative;
+            background: #fff;
+            margin-bottom: 20px;
+            padding-bottom: 20px;
+        }
+        .resume-body ul li {
+            font-size: 12px;
+            color: #666;
+            overflow: hidden;
+            line-height: 25px;
+            vertical-align: middle;
+        }
+        .user-photo {
+            position: absolute;
+            width: 90px;
+        }
+        img {
+            width: 100px;
+            vertical-align: top;
+        }
+        #table td {
+            font-size: 12px;
+            padding: 5px;
+            border-top: 1px solid #ccc;
+            border-right: 1px solid #ccc;
+        }
+        #table {
+            width: 100%;
+            margin: 10px;
+            border-left: 1px solid #ccc;
+            border-bottom: 1px solid #ccc;
+        }
+        .wish{
+            margin-left: 20px;
+        }
+    </style>
+</head>
+<body>
+<div class="row resume-body">
+
+<table id="table" cellpadding="0" cellspacing="0">
+    <tr>
+        <td width="500">
+            <ul>
+                <li>
+                    求职意愿：<br/>
+                            <span class="wish">第1志愿--测试工程师--奇安信集团</span><br/>
+                </li>
+                <li>
+                    个人编号：114311
+                </li>
+                <li>
+                    申请时间：2019-09-05
+                </li>
+            </ul>
+
+        </td>
+        <td width="216" valign="top">
+                <div class="user-photo">
+                    <img src="http://applyjob.chinahr.com/astFile/stream/null" alt="" width="120" height="100" />
+                </div>
+        </td>
+    </tr>
+</table>
+    <table id="table" cellpadding="0" cellspacing="0">
+            <tr>
+                <td colspan="2" width="716"><h2>个人信息</h2></td>
+            </tr>
+                            <tr>
+                                <td>姓名</td>
+                                <td>
+                                        卞祎帆
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>性别</td>
+                                <td>
+                                        女
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>出生日期</td>
+                                <td>
+                                        1995-06-26
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>民族</td>
+                                <td>
+                                        汉族
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>国籍</td>
+                                <td>
+                                        中国
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>证件信息</td>
+                                <td>
+                                        身份证:    410481199506269048
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>政治面貌</td>
+                                <td>
+                                        团员
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>大学入学前户口所在城市</td>
+                                <td>
+                                        平顶山
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>目前所在城市</td>
+                                <td>
+                                        西安
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>最高（在读）学位</td>
+                                <td>
+                                        硕士
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>毕业时间</td>
+                                <td>
+                                        2020-06-30
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>毕业（在读）院校</td>
+                                <td>
+                                        西安光学精密机械研究所
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>专业</td>
+                                <td>
+                                        电子与通信工程
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>移动电话</td>
+                                <td>
+                                        15529572987
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>紧急联系电话</td>
+                                <td>
+                                        15529572987
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>电子邮箱</td>
+                                <td>
+                                        byf626@outlook.com
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>是否接受调剂</td>
+                                <td>
+                                        是
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>可面试城市</td>
+                                <td>
+                                        西安现场
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>从哪里知道招聘信息的</td>
+                                <td>
+                                        牛客网
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>内推码</td>
+                                <td>
+                                        TEfrXAQL
+                                </td>
+                            </tr>
+            <tr>
+                <td colspan="2" width="716"><h2>教育经历</h2></td>
+            </tr>
+                            <tr>
+                                <td>开始日期</td>
+                                <td>
+                                        2013-09-01
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>取得毕业证时间</td>
+                                <td>
+                                        2017-06-18
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>学校</td>
+                                <td>
+                                        河南师范大学
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>学院</td>
+                                <td>
+                                        计算机与信息工程学院
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>专业</td>
+                                <td>
+                                        通信工程
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>学历</td>
+                                <td>
+                                        本科
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>学位</td>
+                                <td>
+                                        学士
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>主修课程</td>
+                                <td>
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>研究方向</td>
+                                <td>
+                                        数字图像处理
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>实验室名称</td>
+                                <td>
+                                        无
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>导师姓名</td>
+                                <td>
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>导师联系方式</td>
+                                <td>
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>论文发表等级</td>
+                                <td>
+                                        无
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>GitHub</td>
+                                <td>
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>开始日期</td>
+                                <td>
+                                        2017-09-01
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>取得毕业证时间</td>
+                                <td>
+                                        2020-06-30
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>学校</td>
+                                <td>
+                                        西安光学精密机械研究所
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>学院</td>
+                                <td>
+                                        材料学院
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>专业</td>
+                                <td>
+                                        电子与通信工程
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>学历</td>
+                                <td>
+                                        硕士研究生
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>学位</td>
+                                <td>
+                                        硕士
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>主修课程</td>
+                                <td>
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>研究方向</td>
+                                <td>
+                                        数据采集及融合
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>实验室名称</td>
+                                <td>
+                                        空间科学与微光探测实验室
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>导师姓名</td>
+                                <td>
+                                        王乐
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>导师联系方式</td>
+                                <td>
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>论文发表等级</td>
+                                <td>
+                                        EI
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>GitHub</td>
+                                <td>
+                                </td>
+                            </tr>
+            <tr>
+                <td colspan="2" width="716"><h2>实习经历</h2></td>
+            </tr>
+                            <tr>
+                                <td>开始日期</td>
+                                <td>
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>结束日期</td>
+                                <td>
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>企业名称</td>
+                                <td>
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>企业性质</td>
+                                <td>
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>企业规模</td>
+                                <td>
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>所在部门</td>
+                                <td>
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>职位名称</td>
+                                <td>
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>工作性质</td>
+                                <td>
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>工作描述</td>
+                                <td>
+                                </td>
+                            </tr>
+            <tr>
+                <td colspan="2" width="716"><h2>项目经验</h2></td>
+            </tr>
+                            <tr>
+                                <td>开始日期</td>
+                                <td>
+                                        2018-08-17
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>结束日期</td>
+                                <td>
+                                        至今
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>项目名称</td>
+                                <td>
+                                        空间高能宇宙辐射探测设施
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>项目描述</td>
+                                <td>
+                                        在中国空间站高能宇宙线探测设施项目的研究中，为实现对大动态范围的暗物质超快微光探测，需要完成大动态范围增强型 sCMOS
+（IsCMOS）相机系统的研制。对于大动态范围 sCMOS 探测器的研制，需要针对量能器输出信号的特性以及 sCMOS 探测器的工作特性进行分析，从而实现信号的高速、大动态范围的测量。
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>项目职责</td>
+                                <td>
+                                        在项目中主要负责扩大探测器动态范围高低增益算法研究和解决量能器输出信号的能量计算的难题。对于sCMOS
+探测器，一次成像可以输出两路信号，分别为分别是高增益信号与低增益信号，两路信号均为 11bit 分辨率的图像数据，把两个 11bit
+分辨率的图像数据融合为一个 16bit 分辨率的图像数据，从而实现探测器大动态范围的测量。运用MATLAB对融合前的图像数据进行分析，测得高低增益的线性范围，分别算得高低增益的曲线的斜率，在线性范围内找到合适的曲线使两增益融合，并以信噪比作为判断依据，找到最合适的那条融合曲线，从而实现增益的融合。
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>开始日期</td>
+                                <td>
+                                        2018-11-10
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>结束日期</td>
+                                <td>
+                                        2019-09-03
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>项目名称</td>
+                                <td>
+                                        先导A类紫外光谱仪
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>项目描述</td>
+                                <td>
+                                        在项目中，科学气球作为飞行工具，会搭载紫外光谱仪等科学载荷飞行至离地面30km处，紫外光谱仪载荷在到达飞行高度后会进行科学探测，探测紫外波段的紫外信息，并由天线及数传系统传至地面。
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>项目职责</td>
+                                <td>
+                                        在项目中负责配合项目组中紫外光谱仪的地检软件的编写与测试(主要负责地检软件的测试工作），通过此次的项目经历对软件的编写与测试有一定的认识。在项目中，主要使用VC++对编写的软件进行测试工作，先对软件的每一个被测模块进行孤立测试，将测试通过的模块进行集成测试，之后根据软件需求，编写软件测试用力，对软件进行系统测试，看是否能达到之前的协议要求，对不能实现的部分进行代码修改，从而得到可以在试验现场使用的地检软件。
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>开始日期</td>
+                                <td>
+                                        2018-08-17
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>结束日期</td>
+                                <td>
+                                        2018-11-10
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>项目名称</td>
+                                <td>
+                                        远紫外电离层探测器
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>项目描述</td>
+                                <td>
+                                        远紫外电离层探测器在当卫星发射后，在电离层飞行向下传输数据，传输的数据格式为二维的灰度图像数据，为了进行下一步的科学研究，需要对下传数据进行处理。
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>项目职责</td>
+                                <td>
+                                        在项目中主要负责处理远紫外电离层探测器的下传数据，利用MATLAB对下传进行几何校正和辐射校正，对下传数据进行定标操作。主要运用基于标定的两点法对下传的图像数据进行校正操作。一般的几何校正均为地面有基本点的校正操作，但是由于此次探测，地面并没有设置基本点，因此在校正时提出运用比例尺，使物距和相距形成一个比例尺，从而得到比例系数，依次得到旋转矩阵，从而进行校正工作。
+                                </td>
+                            </tr>
+            <tr>
+                <td colspan="2" width="716"><h2>语言能力</h2></td>
+            </tr>
+                            <tr>
+                                <td>英语等级考试成绩</td>
+                                <td>
+                                        CET 6:    436
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>英语口语水平</td>
+                                <td>
+                                        简单会话
+                                </td>
+                            </tr>
+            <tr>
+                <td colspan="2" width="716"><h2>IT技能</h2></td>
+            </tr>
+                            <tr>
+                                <td>IT技能</td>
+                                <td>
+                                        MySQL
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>使用时间</td>
+                                <td>
+                                        3个月
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>熟练程度</td>
+                                <td>
+                                        一般
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>主要编程语言</td>
+                                <td>
+                                        C/C++
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>其它编程语言</td>
+                                <td>
+                                        MATLAB
+                                </td>
+                            </tr>
+            <tr>
+                <td colspan="2" width="716"><h2>奖励、活动</h2></td>
+            </tr>
+                            <tr>
+                                <td>是否有参赛获奖经历</td>
+                                <td>
+                                        否
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>参赛奖项</td>
+                                <td>
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>参赛奖项级别</td>
+                                <td>
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>校内活动描述</td>
+                                <td>
+                                </td>
+                            </tr>
+            <tr>
+                <td colspan="2" width="716"><h2>接受offer之后可实习信息</h2></td>
+            </tr>
+                            <tr>
+                                <td>毕业后意向</td>
+                                <td>
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>是否可以实习</td>
+                                <td>
+                                        是
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>可开始工作日期</td>
+                                <td>
+                                        2020-07-01
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>每周可实习工作日天数</td>
+                                <td>
+                                        5
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>可实习周期</td>
+                                <td>
+                                        6个月以上
+                                </td>
+                            </tr>
+            <tr>
+                <td colspan="2" width="716"><h2>上传简历</h2></td>
+            </tr>
+                            <tr>
+                                <td>上传中文简历</td>
+                                <td>
+                                        卞祎帆-软件测试工程师 .pdf
+                                </td>
+                            </tr>
+    </table>
+    <table id="table" cellpadding="0" cellspacing="0">
+            <tr>
+                <td colspan="2" width="716"><h2>期望工作城市</h2></td>
+            </tr>
+                            <tr>
+                                <td>期望工作城市</td>
+                                <td>
+                                        西安
+                                </td>
+                            </tr>
+    </table>
+</div>
+</body>
+</html>

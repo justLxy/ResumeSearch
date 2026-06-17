@@ -1,0 +1,5 @@
+.DS_Store
+__pycache__/
+*.pyc
+
+elasticsearch-9.3.0/

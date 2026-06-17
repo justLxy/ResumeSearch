@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ResumeSearch 简历检索</title>
+    <link rel="stylesheet" href="/static/styles.css?v=business-ui-1" />
+  </head>
+  <body>
+    <header class="search-header">
+      <div class="brand">
+        <span class="brand-kicker">简历检索平台</span>
+        <strong>ResumeSearch</strong>
+      </div>
+      <div class="search-wrap">
+        <div class="search-box">
+          <span class="search-icon" aria-hidden="true"></span>
+          <input id="searchInput" placeholder="输入岗位、技能、项目关键词" autocomplete="off" />
+          <button id="searchButton" aria-label="检索简历">检索</button>
+        </div>
+        <div class="quick-queries" aria-label="快捷搜索">
+          <span class="quick-label">快捷搜索</span>
+          <button data-query="Python 自然语言处理">Python 自然语言处理</button>
+          <button data-query="机器学习 医疗">机器学习 医疗</button>
+          <button data-query="Java 服务端">Java 服务端</button>
+        </div>
+      </div>
+      <div id="clusterStatus" class="cluster-status"><span></span><strong>ES</strong><em>检测中…</em></div>
+    </header>
+
+    <main class="page">
+      <section class="filters" aria-label="筛选条件">
+        <div class="filter-head">
+          <h2>筛选条件</h2>
+        </div>
+        <div class="filter-row">
+          <span class="filter-label">学历</span>
+          <div class="option-list">
+            <label><input type="radio" name="degree" value="" checked />不限</label>
+            <label><input type="radio" name="degree" value="博士" />博士</label>
+            <label><input type="radio" name="degree" value="硕士" />硕士</label>
+            <label><input type="radio" name="degree" value="学士" />学士</label>
+            <label><input type="radio" name="degree" value="本科" />本科</label>
+          </div>
+        </div>
+
+        <div class="filter-row">
+          <span class="filter-label">经验</span>
+          <div class="range-control">
+            <input id="yearsRange" class="range" type="range" min="0" max="5" step="0.5" value="0" />
+            <span id="yearsLabel" class="range-value">不限经验</span>
+          </div>
+        </div>
+
+        <div class="filter-row">
+          <span class="filter-label">城市</span>
+          <div id="cityFilters" class="chip-list"></div>
+        </div>
+
+        <div class="filter-row">
+          <span class="filter-label">技能</span>
+          <div id="skillFilters" class="chip-list"></div>
+        </div>
+      </section>
+
+      <section class="result-area">
+        <section class="result-meta">
+          <span>显示 <strong id="totalCount">0</strong> 条结果</span>
+          <span id="queryMode">浏览全部候选人</span>
+        </section>
+
+        <section id="results" class="results"></section>
+      </section>
+    </main>
+
+    <div id="overlay" class="overlay"></div>
+    <aside id="drawer" class="drawer">
+      <div class="drawer-head">
+        <div>
+          <div id="drawerName" class="drawer-name"></div>
+          <div id="drawerMeta" class="drawer-meta"></div>
+        </div>
+        <button id="drawerClose" class="icon-button" aria-label="关闭详情"><span aria-hidden="true">×</span></button>
+      </div>
+      <div id="drawerContent" class="drawer-content"></div>
+    </aside>
+
+    <script src="/static/app.js?v=business-ui-1"></script>
+  </body>
+</html>
