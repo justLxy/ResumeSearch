@@ -25,6 +25,8 @@ RRF 把精确匹配和语义匹配结合起来。
 
 ```text
 用户查询
+  ├─ 轻量结构化解析
+  │    └─ 从自然语言中识别明确年限、城市、学历、技能筛选
   ├─ BM25 / keyword / filter 检索
   │    └─ 负责实体、关键词、结构化条件
   ├─ dense vector 检索
@@ -32,6 +34,13 @@ RRF 把精确匹配和语义匹配结合起来。
   └─ RRF 融合排序
        └─ 两路都命中的候选人排序更靠前
 ```
+
+当前实现有几个边界：
+
+- 候选人编号、岗位编号、手机号、邮箱、学校、公司等精确查询优先走 keyword/BM25，不触发 dense vector。
+- `自然语言处理`、`深度学习`、`推荐召回`、`模型落地` 这类短能力表达会触发 dense vector，不再要求必须是长句。
+- 前端技能筛选是 AND 语义，选择 `Python` 和 `NLP` 表示候选人必须同时具备两个技能。
+- 用户直接输入 `0.5年以上 北京 本科 推荐系统` 时，会基于索引里的城市、学历、技能词表和明确年限模式解析成 filter + 剩余 query；普通 `推荐系统 NLP SQL` 仍作为宽召回文本查询，不强行拆成多个硬过滤。
 
 ## 检索字段分工
 
@@ -164,6 +173,14 @@ languages:
 
 ## BM25 / keyword / filter Use Case
 
+### 查询：`M20260001`
+
+这是候选人编号查询，应走 `application.candidate_no` 的 keyword 精确匹配，不需要向量参与。
+
+### 查询：`A0009`
+
+这是岗位编号查询，应走 `application.position_code` 的 keyword 精确匹配。岗位编号是结构化实体，不应该靠 BM25 分词或向量相似度猜。
+
 ### 查询：`北京交通大学`
 
 这是学校实体查询。它应该主要依赖 keyword、phrase 和 nested BM25。
@@ -190,7 +207,7 @@ section_text.education BM25 命中
 
 ### 查询：`百度在线网络技术`
 
-这是公司实体查询。
+这是公司实体查询。应优先匹配实习公司；如果查询的是投递公司，比如 `奇安信集团`，则匹配 `application.company` 和 `application.wishes.company`。
 
 命中字段：
 
@@ -202,6 +219,8 @@ section_text.internships: 企业名称: 百度在线网络技术
 检索方式：
 
 ```text
+application.company keyword 精确命中
+application.wishes.company nested keyword 精确命中
 nested internships.company.keyword 精确命中
 nested internships.company phrase 命中
 section_text.internships BM25 命中
@@ -260,7 +279,7 @@ internships.description: 使用推荐系统、NLP、SQL 完成实现和验证
 
 这是全文查询加结构化过滤。
 
-应该拆成：
+系统会拆成：
 
 ```text
 query: 推荐系统
@@ -269,7 +288,7 @@ filters:
   candidate.years_experience >= 0.5
   application.expected_work_cities contains 北京
   candidate.highest_degree = 本科
-  skills contains 推荐系统
+  skills must contain 推荐系统
 ```
 
 执行方式：
@@ -281,6 +300,8 @@ RRF 融合两路结果
 ```
 
 城市、学历、年限、技能标签作为 filter 生效，不应该被拼进向量里靠相似度判断。
+
+注意：硬过滤会提高精确性，但可能返回 0 条。比如当前 mock 数据中如果没有候选人同时满足 `0.5 年以上 + 北京 + 本科 + 推荐系统`，结果就是 0，这比用向量强行补满结果页更符合筛选语义。
 
 ## 向量检索 Use Case
 
@@ -406,8 +427,15 @@ internships.description: 离线模型
 
 ```text
 BM25 retriever:
+  查 application.candidate_no
+  查 application.position_code
+  查 application.company
   查 application.position_name
   查 application.wishes.position_name
+  查 application.wishes.company
+  查 candidate.name
+  查 candidate.phone / candidate.email
+  查 candidate.school
   查 skills_text
   查 skills
   查 section_text.projects
@@ -480,6 +508,24 @@ BM25 没命中的 dense-only 候选：
 
 因此，最终返回数量可能小于页面默认上限 20。20 只是最多返回条数，不代表每次搜索都应该有 20 个相关候选。
 
+接口返回数量字段含义：
+
+```text
+returned_count:
+  当前响应实际返回的结果数
+
+matched_total:
+  BM25 / keyword / filter 侧的真实命中总数
+
+candidate_total:
+  参与 RRF 融合后被接受的候选数量
+
+retrieval_warnings:
+  embedding 生成或某一路 retriever 降级失败时的可观测信息
+```
+
+不要把 `candidate_total` 当作业务总命中数。dense vector 的内部 top-k 只是排序候选窗口，不等价于用户条件下的匹配总数。
+
 ## 反例：为什么 `北京大学` 不应误召回
 
 用户输入：
@@ -529,6 +575,35 @@ internships.company: 百度在线网络技术
 ```
 
 ## 常见问题
+
+### embedding 和索引版本如何保持一致？
+
+索引 mapping 的 `_meta` 会记录当前 embedding 契约：
+
+```yaml
+embedding_model_id: IEITYuan/Yuan-embedding-2.0-zh
+embedding_vector_dims: 1792
+embedding_normalized: true
+semantic_profile_version: semantic-profile-v2
+```
+
+每条文档也会写入 `embedding.model_id`、`embedding.vector_dims`、`embedding.normalized` 和 `embedding.semantic_profile_version`，用于排查“查询向量和文档向量是否同源”。
+
+下面这些变更都需要重建索引并重新生成向量：
+
+```text
+embedding 模型或 pooling / dense 层变化
+VECTOR_DIMS 变化
+semantic_profile_vector 输入字段或顺序变化
+dense_vector mapping / HNSW 参数变化
+analyzer 或 keyword 字段 mapping 变化
+```
+
+本地 mock 数据重建命令：
+
+```bash
+python generate_mock_resumes.py --count 50 --seed 20260616 --recreate --no-output
+```
 
 ### 为什么不把整份简历直接向量化？
 

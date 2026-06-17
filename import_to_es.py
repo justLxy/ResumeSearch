@@ -8,7 +8,7 @@ from typing import Any
 
 import requests
 
-from embedding_service import VECTOR_DIMS, encode_batch
+from embedding_service import MODEL_ID, VECTOR_DIMS, encode_batch
 from resume_parser import discover_doc_files, parse_resume_batch
 
 
@@ -18,6 +18,8 @@ DEFAULT_ALIAS = "resumes_current"
 BULK_BATCH_SIZE = 100
 REQUEST_TIMEOUT_SECONDS = 90
 SEMANTIC_PROFILE_CHAR_BUDGET = 512
+SEMANTIC_PROFILE_VERSION = "semantic-profile-v2"
+EMBEDDING_NORMALIZED = True
 VECTOR_FIELDS = ("semantic_profile_vector",)
 
 
@@ -56,10 +58,24 @@ INDEX_BODY: dict[str, Any] = {
     },
     "mappings": {
         "dynamic": False,
+        "_meta": {
+            "embedding_model_id": MODEL_ID,
+            "embedding_vector_dims": VECTOR_DIMS,
+            "embedding_normalized": EMBEDDING_NORMALIZED,
+            "semantic_profile_version": SEMANTIC_PROFILE_VERSION,
+        },
         "properties": {
             "resume_id": {"type": "keyword"},
             "parse_status": {"type": "keyword"},
             "parser_version": {"type": "keyword"},
+            "embedding": {
+                "properties": {
+                    "model_id": {"type": "keyword"},
+                    "vector_dims": {"type": "integer"},
+                    "normalized": {"type": "boolean"},
+                    "semantic_profile_version": {"type": "keyword"},
+                }
+            },
             "file": {
                 "properties": {
                     "path": {"type": "keyword"},
@@ -321,6 +337,12 @@ def _enrich_doc(doc: dict[str, Any]) -> dict[str, Any]:
         candidate["years_experience"] = years_experience
     doc["skills_text"] = " ".join(doc.get("skills") or [])
     doc["search_text"] = _build_search_text(doc)
+    doc["embedding"] = {
+        "model_id": MODEL_ID,
+        "vector_dims": VECTOR_DIMS,
+        "normalized": EMBEDDING_NORMALIZED,
+        "semantic_profile_version": SEMANTIC_PROFILE_VERSION,
+    }
     _drop_index_debug_fields(doc)
     return doc
 
@@ -399,12 +421,12 @@ def _build_search_text(doc: dict[str, Any]) -> str:
     application = doc.get("application") or {}
     candidate = doc.get("candidate") or {}
     lines = [
-        _profile_line("目标岗位", application.get("position_name")),
-        _profile_line("专业背景", candidate.get("major")),
-        _profile_line("能力标签", "，".join(doc.get("skills") or [])),
         _project_semantic_text(doc),
         _internship_semantic_text(doc),
+        _profile_line("能力标签", "，".join(doc.get("skills") or [])),
         _education_semantic_text(doc),
+        _profile_line("目标岗位", application.get("position_name")),
+        _profile_line("专业背景", candidate.get("major")),
     ]
     cleaned = _strip_semantic_exclusions(_compact_join(lines), _semantic_exclusions(doc))
     return _budgeted_join(cleaned.splitlines(), SEMANTIC_PROFILE_CHAR_BUDGET)

@@ -1,7 +1,27 @@
+import json
 import unittest
 
-from app import BM25_RETRIEVER, DENSE_RETRIEVER, _default_snippet, _hybrid_total, _rrf_merge, _use_dense
-from import_to_es import _build_search_text, _embedding_inputs, _estimate_years_experience
+from app import (
+    BM25_RETRIEVER,
+    DENSE_RETRIEVER,
+    _build_filters,
+    _default_snippet,
+    _hybrid_total,
+    _lexical_query,
+    _lexical_total,
+    _parse_query_constraints,
+    _rrf_merge,
+    _use_dense,
+)
+from import_to_es import (
+    EMBEDDING_NORMALIZED,
+    SEMANTIC_PROFILE_VERSION,
+    VECTOR_DIMS,
+    INDEX_BODY,
+    _build_search_text,
+    _embedding_inputs,
+    _estimate_years_experience,
+)
 
 
 class SearchLogicTests(unittest.TestCase):
@@ -90,6 +110,11 @@ class SearchLogicTests(unittest.TestCase):
         results = _rrf_merge([bm25_response, vector_response], 10, allow_dense_only=False)
 
         self.assertFalse(_use_dense("北京大学"))
+        self.assertFalse(_use_dense("奇安信集团"))
+        self.assertFalse(_use_dense("M20260001"))
+        self.assertFalse(_use_dense("A0009"))
+        self.assertTrue(_use_dense("自然语言处理"))
+        self.assertTrue(_use_dense("推荐召回"))
         self.assertTrue(_use_dense("做过推荐系统召回和 NLP 模型落地的人"))
         self.assertEqual(_hybrid_total([bm25_response, vector_response], allow_dense_only=False), 1)
         self.assertEqual([item["id"] for item in results], ["lexical-1"])
@@ -214,6 +239,85 @@ class SearchLogicTests(unittest.TestCase):
         self.assertIn("推荐系统", embedding_inputs["semantic_profile_vector"])
         self.assertIn("医疗问答系统", embedding_inputs["semantic_profile_vector"])
         self.assertLess(search_text.index("项目名称"), search_text.index("实习职位"))
+
+    def test_skill_filters_are_and_terms(self) -> None:
+        filters = _build_filters("", [], ["Python", "NLP", "Python"], 0)
+        self.assertEqual(
+            filters,
+            [
+                {"term": {"skills": "Python"}},
+                {"term": {"skills": "NLP"}},
+            ],
+        )
+
+    def test_mixed_query_constraints_are_parsed_from_facets(self) -> None:
+        parsed = _parse_query_constraints(
+            "0.5年以上 北京 本科 推荐系统",
+            facets={
+                "degrees": [{"key": "本科"}],
+                "cities": [{"key": "北京"}],
+                "skills": [{"key": "推荐系统"}],
+            },
+        )
+
+        self.assertEqual(parsed["query_text"], "推荐系统")
+        self.assertEqual(
+            parsed["constraints"],
+            {
+                "min_years": 0.5,
+                "degree": "本科",
+                "cities": ["北京"],
+                "skills": ["推荐系统"],
+            },
+        )
+        self.assertIn({"term": {"skills": "推荐系统"}}, parsed["filters"])
+
+    def test_plain_skill_query_stays_broad(self) -> None:
+        parsed = _parse_query_constraints(
+            "推荐系统 NLP SQL",
+            facets={
+                "degrees": [{"key": "本科"}],
+                "cities": [{"key": "北京"}],
+                "skills": [{"key": "推荐系统"}, {"key": "NLP"}, {"key": "SQL"}],
+            },
+        )
+
+        self.assertEqual(parsed["query_text"], "推荐系统 NLP SQL")
+        self.assertEqual(parsed["filters"], [])
+
+    def test_lexical_query_covers_exact_recruiting_fields(self) -> None:
+        query_json = json.dumps(_lexical_query("A0009"), ensure_ascii=False)
+
+        self.assertIn("application.candidate_no", query_json)
+        self.assertIn("application.position_code", query_json)
+        self.assertIn("application.company", query_json)
+        self.assertIn("application.wishes", query_json)
+
+    def test_lexical_total_uses_bm25_total_not_candidate_window(self) -> None:
+        bm25_response = _response(
+            BM25_RETRIEVER,
+            [
+                _hit("lexical-1", "词面第一"),
+            ],
+            total=125,
+        )
+        vector_response = _response(
+            DENSE_RETRIEVER,
+            [
+                _hit("vector-1", "向量第一"),
+            ],
+        )
+
+        self.assertEqual(_lexical_total([bm25_response, vector_response]), 125)
+        self.assertEqual(_hybrid_total([bm25_response, vector_response], allow_dense_only=True), 2)
+
+    def test_index_mapping_records_embedding_contract(self) -> None:
+        meta = INDEX_BODY["mappings"]["_meta"]
+
+        self.assertEqual(meta["embedding_vector_dims"], VECTOR_DIMS)
+        self.assertEqual(meta["semantic_profile_version"], SEMANTIC_PROFILE_VERSION)
+        self.assertEqual(meta["embedding_normalized"], EMBEDDING_NORMALIZED)
+        self.assertIn("embedding", INDEX_BODY["mappings"]["properties"])
 
 
 def _response(

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import html
+import logging
+import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -18,12 +20,14 @@ ES_URL = "http://localhost:9200"
 INDEX_ALIAS = "resumes_current"
 BASE_DIR = Path(__file__).resolve().parent
 WEB_DIR = BASE_DIR / "web"
+logger = logging.getLogger(__name__)
 
 RRF_RANK_CONSTANT = 60
 RRF_RANK_WINDOW_SIZE = 100
 MAX_RESULT_SIZE = 50
 KNN_NUM_CANDIDATES = 300
 FACETS_CACHE_TTL_SECONDS = 60
+FILTER_VOCAB_CACHE_TTL_SECONDS = 300
 VECTOR_FIELDS_CACHE_TTL_SECONDS = 300
 BM25_RETRIEVER = "bm25"
 DENSE_RETRIEVER = "dense"
@@ -48,8 +52,23 @@ SOURCE_EXCLUDES = [
     *VECTOR_FIELDS,
     *LEGACY_VECTOR_FIELDS,
 ]
+EXACT_LOOKUP_RE = re.compile(
+    r"^(?:[A-Za-z]\d{3,}|M\d{6,}|\d{6,}|1[3-9]\d{9}|[^@\s]+@[^@\s]+\.[^@\s]+)$",
+    re.I,
+)
+YEAR_FILTER_RE = re.compile(r"^(?P<years>\d+(?:\.\d+)?)\s*年(?:以上|及以上|\+)?$")
+EXACT_ENTITY_SUFFIXES = ("大学", "学院", "公司", "集团")
+DEGREE_ALIASES = {
+    "博士研究生": "博士",
+    "博士": "博士",
+    "硕士研究生": "硕士",
+    "硕士": "硕士",
+    "学士": "本科",
+    "本科": "本科",
+}
 
 _facets_cache: tuple[float, dict[str, Any]] | None = None
+_filter_vocab_cache: tuple[float, dict[str, set[str]]] | None = None
 _vector_fields_cache: tuple[float, tuple[str, ...]] | None = None
 
 app = FastAPI(title="Resume Search Prototype")
@@ -70,19 +89,39 @@ def search(
     min_years: float = 0,
     limit: int = 20,
 ) -> dict[str, Any]:
-    query_text = q.strip()
+    raw_query_text = q.strip()
+    parsed_query = _parse_query_constraints(raw_query_text) if raw_query_text else _empty_parsed_query()
+    query_text = parsed_query["query_text"]
     size = _normalize_limit(limit)
-    filters = _build_filters(degree, cities, skills, min_years)
+    filters = [
+        *_build_filters(degree, cities, skills, min_years),
+        *parsed_query["filters"],
+    ]
+    retrieval_warnings: list[str] = []
 
     if query_text:
         # Hybrid: BM25 + semantic profile kNN merged with manual RRF.
         use_dense = _use_dense(query_text)
-        query_vector = encode_single(query_text) if use_dense else []
+        query_vector: list[float] = []
+        if use_dense:
+            try:
+                query_vector = encode_single(query_text)
+            except Exception as exc:
+                logger.exception("query embedding failed")
+                retrieval_warnings.append(f"dense embedding failed: {exc}")
+                use_dense = False
         rank_window_size = max(size, RRF_RANK_WINDOW_SIZE)
-        responses = _run_hybrid_search(query_text, query_vector, filters, rank_window_size, use_dense)
-        allow_dense_only = use_dense
+        responses, retriever_warnings = _run_hybrid_search(
+            query_text,
+            query_vector,
+            filters,
+            rank_window_size,
+            use_dense,
+        )
+        retrieval_warnings.extend(retriever_warnings)
+        matched_total = _lexical_total(responses)
+        allow_dense_only = use_dense and _allow_dense_only(query_text)
         candidate_total = _hybrid_total(responses, allow_dense_only)
-        matched_total = candidate_total
         results = _rrf_merge(responses, size, allow_dense_only)
     elif filters:
         browse_size = MAX_RESULT_SIZE
@@ -114,10 +153,13 @@ def search(
 
     return {
         "query": q,
+        "effective_query": query_text,
+        "parsed_constraints": parsed_query["constraints"],
         "total": len(results),
         "returned_count": len(results),
         "matched_total": matched_total,
         "candidate_total": candidate_total,
+        "retrieval_warnings": retrieval_warnings,
         "results": results,
         "facets": _load_facets(),
     }
@@ -160,21 +202,123 @@ def _build_filters(
         highest_degree = _normalize_highest_degree(degree)
         filters.append({"term": {"candidate.highest_degree": highest_degree}})
     if cities:
-        filters.append({"terms": {"application.expected_work_cities": cities}})
+        filters.append({"terms": {"application.expected_work_cities": _dedupe(cities)}})
     if skills:
-        filters.append({"terms": {"skills": skills}})
+        for skill in _dedupe(skills):
+            filters.append({"term": {"skills": skill}})
     if min_years > 0:
         filters.append({"range": {"candidate.years_experience": {"gte": min_years}}})
     return filters
 
 
 def _normalize_highest_degree(degree: str) -> str:
-    aliases = {
-        "学士": "本科",
-        "本科": "本科",
-        "硕士研究生": "硕士",
+    return DEGREE_ALIASES.get(degree, degree)
+
+
+def _dedupe(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for value in values:
+        cleaned = str(value).strip()
+        if cleaned and cleaned not in seen:
+            seen.add(cleaned)
+            result.append(cleaned)
+    return result
+
+
+def _empty_parsed_query() -> dict[str, Any]:
+    return {"query_text": "", "filters": [], "constraints": {}}
+
+
+def _parse_query_constraints(
+    query_text: str,
+    facets: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    text = query_text.strip()
+    if not text:
+        return _empty_parsed_query()
+
+    tokens = _query_tokens(text)
+    year_tokens = [token for token in tokens if _parse_year_filter_token(token) is not None]
+    should_parse = len(tokens) >= 2 or bool(year_tokens)
+    if not should_parse:
+        return {"query_text": text, "filters": [], "constraints": {}}
+
+    if facets is None:
+        vocab = _load_filter_vocab()
+        known_cities = vocab["cities"]
+        known_skills = vocab["skills"]
+        known_degrees = vocab["degrees"] | set(DEGREE_ALIASES)
+    else:
+        known_cities = _facet_keys(facets, "cities")
+        known_skills = _facet_keys(facets, "skills")
+        known_degrees = _facet_keys(facets, "degrees") | set(DEGREE_ALIASES)
+
+    remove_tokens: set[str] = set()
+    constraints: dict[str, Any] = {}
+    filters: list[dict[str, Any]] = []
+
+    parsed_years = [_parse_year_filter_token(token) for token in tokens]
+    parsed_years = [years for years in parsed_years if years is not None]
+    if parsed_years:
+        min_years = max(parsed_years)
+        filters.append({"range": {"candidate.years_experience": {"gte": min_years}}})
+        constraints["min_years"] = min_years
+        remove_tokens.update(year_tokens)
+
+    degree_tokens = [token for token in tokens if token in known_degrees]
+    if degree_tokens:
+        degree = _normalize_highest_degree(degree_tokens[0])
+        filters.append({"term": {"candidate.highest_degree": degree}})
+        constraints["degree"] = degree
+        remove_tokens.update(degree_tokens)
+
+    cities = _dedupe([token for token in tokens if token in known_cities])
+    if cities:
+        filters.append({"terms": {"application.expected_work_cities": cities}})
+        constraints["cities"] = cities
+        remove_tokens.update(cities)
+
+    # Only promote skill tokens to hard filters when the same free-text input
+    # already contains an explicit structured constraint. Plain skill queries
+    # remain broad BM25+dense searches to preserve recall.
+    if filters:
+        skills = _dedupe([token for token in tokens if token in known_skills])
+        if skills:
+            for skill in skills:
+                filters.append({"term": {"skills": skill}})
+            constraints["skills"] = skills
+
+    remaining_tokens = [token for token in tokens if token not in remove_tokens]
+    remaining_query = " ".join(remaining_tokens).strip()
+    return {
+        "query_text": remaining_query,
+        "filters": filters,
+        "constraints": constraints,
     }
-    return aliases.get(degree, degree)
+
+
+def _query_tokens(query_text: str) -> list[str]:
+    return [
+        token
+        for token in re.split(r"[\s,，、;/；]+", query_text.strip())
+        if token
+    ]
+
+
+def _facet_keys(facets: dict[str, Any], name: str) -> set[str]:
+    return {
+        str(item.get("key")).strip()
+        for item in facets.get(name, [])
+        if item.get("key")
+    }
+
+
+def _parse_year_filter_token(token: str) -> float | None:
+    match = YEAR_FILTER_RE.match(token)
+    if not match:
+        return None
+    return float(match.group("years"))
 
 
 def _bm25_body(query_text: str, filters: list[dict[str, Any]], size: int) -> dict[str, Any]:
@@ -209,15 +353,50 @@ def _bm25_body(query_text: str, filters: list[dict[str, Any]], size: int) -> dic
 
 def _lexical_query(query_text: str) -> dict[str, Any]:
     should: list[dict[str, Any]] = [
+        {"term": {"application.candidate_no": {"value": query_text.upper(), "boost": 40}}},
+        {"term": {"application.position_code": {"value": query_text.upper(), "boost": 35}}},
         {"term": {"candidate.name.keyword": {"value": query_text, "boost": 30}}},
+        {"term": {"candidate.phone": {"value": query_text, "boost": 28}}},
+        {"term": {"candidate.email": {"value": query_text, "boost": 28}}},
         {"term": {"candidate.school.keyword": {"value": query_text, "boost": 24}}},
+        {"term": {"application.company": {"value": query_text, "boost": 20}}},
         {"term": {"application.position_name.keyword": {"value": query_text, "boost": 16}}},
         {"term": {"skills": {"value": query_text, "boost": 14}}},
+        {"term": {"candidate.highest_degree": {"value": _normalize_highest_degree(query_text), "boost": 8}}},
         {"match_phrase": {"candidate.school": {"query": query_text, "boost": 12}}},
         {"match_phrase": {"section_text.education": {"query": query_text, "boost": 8}}},
         {"match_phrase": {"application.position_name": {"query": query_text, "boost": 8}}},
         {"match_phrase": {"section_text.projects": {"query": query_text, "boost": 6}}},
         {"match_phrase": {"section_text.internships": {"query": query_text, "boost": 6}}},
+        {
+            "nested": {
+                "path": "application.wishes",
+                "score_mode": "max",
+                "query": {
+                    "bool": {
+                        "should": [
+                            {
+                                "term": {
+                                    "application.wishes.company": {
+                                        "value": query_text,
+                                        "boost": 16,
+                                    }
+                                }
+                            },
+                            {
+                                "match_phrase": {
+                                    "application.wishes.position_name": {
+                                        "query": query_text,
+                                        "boost": 8,
+                                    }
+                                }
+                            },
+                        ],
+                        "minimum_should_match": 1,
+                    }
+                },
+            }
+        },
         {
             "nested": {
                 "path": "education",
@@ -238,6 +417,22 @@ def _lexical_query(query_text: str) -> dict[str, Any]:
                                     "education.school": {
                                         "query": query_text,
                                         "boost": 12,
+                                    }
+                                }
+                            },
+                            {
+                                "term": {
+                                    "education.education_level": {
+                                        "value": _normalize_highest_degree(query_text),
+                                        "boost": 5,
+                                    }
+                                }
+                            },
+                            {
+                                "term": {
+                                    "education.degree": {
+                                        "value": query_text,
+                                        "boost": 5,
                                     }
                                 }
                             },
@@ -387,7 +582,7 @@ def _run_hybrid_search(
     filters: list[dict[str, Any]],
     rank_window_size: int,
     use_dense: bool = True,
-) -> list[dict[str, Any]]:
+) -> tuple[list[dict[str, Any]], list[str]]:
     requests_to_run = [
         (BM25_RETRIEVER, BM25_RRF_WEIGHT, _bm25_body(query_text, filters, rank_window_size)),
     ]
@@ -402,6 +597,7 @@ def _run_hybrid_search(
         )
 
     responses: list[dict[str, Any]] = []
+    warnings: list[str] = []
     with ThreadPoolExecutor(max_workers=len(requests_to_run)) as executor:
         futures = {
             executor.submit(_es, "POST", f"/{INDEX_ALIAS}/_search", body): (name, weight)
@@ -411,14 +607,16 @@ def _run_hybrid_search(
             name, weight = futures[future]
             try:
                 response = future.result()
-            except Exception:
+            except Exception as exc:
                 # One retriever failing should not crash the entire search;
                 # degrade gracefully with whatever retriever(s) succeeded.
+                logger.exception("%s retriever failed", name)
+                warnings.append(f"{name} retriever failed: {exc}")
                 continue
             response["_retriever_name"] = name
             response["_rrf_weight"] = weight
             responses.append(response)
-    return responses
+    return responses, warnings
 
 
 def _available_vector_fields() -> tuple[str, ...]:
@@ -455,6 +653,17 @@ def _hybrid_total(
         for _rank, hit, _debug in _accepted_hits(response, lexical_ids, allow_dense_only):
             ids.add(hit["_id"])
     return len(ids)
+
+
+def _lexical_total(responses: list[dict[str, Any]]) -> int:
+    for response in responses:
+        if response.get("_retriever_name") != BM25_RETRIEVER:
+            continue
+        total = response.get("hits", {}).get("total", {})
+        if isinstance(total, dict):
+            return int(total.get("value") or 0)
+        return int(total or 0)
+    return 0
 
 def _rrf_merge(
     responses: list[dict[str, Any]],
@@ -563,9 +772,22 @@ def _lexical_doc_ids(responses: list[dict[str, Any]]) -> set[str]:
 
 def _use_dense(query_text: str) -> bool:
     compact = "".join(query_text.split())
-    if len(compact) >= 8:
+    if not compact or _looks_like_exact_lookup(compact):
+        return False
+    if len(query_text.split()) >= 2:
         return True
-    return len(query_text.split()) >= 2
+    return len(compact) >= 4
+
+
+def _allow_dense_only(query_text: str) -> bool:
+    compact = "".join(query_text.split())
+    return bool(compact) and not _looks_like_exact_lookup(compact)
+
+
+def _looks_like_exact_lookup(compact_query: str) -> bool:
+    if EXACT_LOOKUP_RE.match(compact_query):
+        return True
+    return compact_query.endswith(EXACT_ENTITY_SUFFIXES)
 
 
 # ---------------------------------------------------------------------------
@@ -708,6 +930,34 @@ def _load_facets() -> dict[str, Any]:
     }
     _facets_cache = (now + FACETS_CACHE_TTL_SECONDS, facets)
     return facets
+
+
+def _load_filter_vocab() -> dict[str, set[str]]:
+    global _filter_vocab_cache
+    now = time.monotonic()
+    if _filter_vocab_cache and _filter_vocab_cache[0] > now:
+        return _filter_vocab_cache[1]
+
+    body = {
+        "size": 0,
+        "aggs": {
+            "degrees": {"terms": {"field": "candidate.highest_degree", "size": 50}},
+            "cities": {"terms": {"field": "application.expected_work_cities", "size": 200}},
+            "skills": {"terms": {"field": "skills", "size": 1000}},
+        },
+    }
+    result = _es("POST", f"/{INDEX_ALIAS}/_search", body)
+    aggs = result.get("aggregations", {})
+    vocab = {
+        name: {
+            str(bucket.get("key")).strip()
+            for bucket in aggs.get(name, {}).get("buckets", [])
+            if bucket.get("key")
+        }
+        for name in ("degrees", "cities", "skills")
+    }
+    _filter_vocab_cache = (now + FILTER_VOCAB_CACHE_TTL_SECONDS, vocab)
+    return vocab
 
 
 def _es(method: str, path: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
