@@ -1,5 +1,26 @@
+# OS / editor files
 .DS_Store
-__pycache__/
-*.pyc
+Thumbs.db
 
-elasticsearch-9.3.0/
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Local Elasticsearch runtime
+elasticsearch-*/
+
+# Generated mock data and local parse outputs
+generate_mock_resumes.py
+mock_resumes*.jsonl
+parsed_resumes*.jsonl
