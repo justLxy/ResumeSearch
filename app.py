@@ -30,6 +30,8 @@ KNN_NUM_CANDIDATES = 300
 FACETS_CACHE_TTL_SECONDS = 60
 FILTER_VOCAB_CACHE_TTL_SECONDS = 300
 VECTOR_FIELDS_CACHE_TTL_SECONDS = 300
+SKILL_FACET_AGG_SIZE = 200
+SKILL_FACET_DISPLAY_SIZE = 30
 BM25_RETRIEVER = "bm25"
 DENSE_RETRIEVER = "dense"
 BM25_RRF_WEIGHT = 1.0
@@ -70,6 +72,29 @@ DEGREE_ALIASES = {
     "学士": "本科",
     "本科": "本科",
 }
+CANONICAL_SKILL_LABELS = {
+    "c": "C",
+    "c++": "C++",
+    "c#": "C#",
+    "css": "CSS",
+    "docker": "Docker",
+    "html": "HTML",
+    "java": "Java",
+    "javascript": "JavaScript",
+    "jvm": "JVM",
+    "linux": "Linux",
+    "mysql": "MySQL",
+    "nlp": "NLP",
+    "pytorch": "PyTorch",
+    "redis": "Redis",
+    "spark": "Spark",
+    "spring boot": "Spring Boot",
+    "spring cloud": "Spring Cloud",
+    "sql": "SQL",
+    "tensorflow": "TensorFlow",
+    "typescript": "TypeScript",
+    "vue": "Vue",
+}
 
 _facets_cache: tuple[float, dict[str, Any]] | None = None
 _filter_vocab_cache: tuple[float, dict[str, set[str]]] | None = None
@@ -97,8 +122,9 @@ def search(
     parsed_query = _parse_query_constraints(raw_query_text) if raw_query_text else _empty_parsed_query()
     query_text = parsed_query["query_text"]
     size = _normalize_limit(limit)
+    skill_vocab = _load_filter_vocab()["skills"] if skills else None
     filters = [
-        *_build_filters(degree, cities, skills, min_years),
+        *_build_filters(degree, cities, skills, min_years, skill_vocab=skill_vocab),
         *parsed_query["filters"],
     ]
     retrieval_warnings: list[str] = []
@@ -200,6 +226,7 @@ def _build_filters(
     cities: list[str],
     skills: list[str],
     min_years: float,
+    skill_vocab: set[str] | None = None,
 ) -> list[dict[str, Any]]:
     filters: list[dict[str, Any]] = []
     if degree:
@@ -208,8 +235,8 @@ def _build_filters(
     if cities:
         filters.append({"terms": {"application.expected_work_cities": _dedupe(cities)}})
     if skills:
-        for skill in _dedupe(skills):
-            filters.append({"term": {"skills": skill}})
+        for skill in _dedupe_casefold(skills):
+            filters.append(_skill_filter(skill, skill_vocab))
     if min_years > 0:
         filters.append({"range": {"candidate.years_experience": {"gte": min_years}}})
     return filters
@@ -228,6 +255,62 @@ def _dedupe(values: list[str]) -> list[str]:
             seen.add(cleaned)
             result.append(cleaned)
     return result
+
+
+def _dedupe_casefold(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for value in values:
+        cleaned = str(value).strip()
+        key = _casefold_key(cleaned)
+        if cleaned and key not in seen:
+            seen.add(key)
+            result.append(cleaned)
+    return result
+
+
+def _casefold_key(value: str) -> str:
+    return str(value).strip().casefold()
+
+
+def _skill_filter(skill: str, skill_vocab: set[str] | None = None) -> dict[str, Any]:
+    variants = _skill_variants(skill, skill_vocab)
+    if len(variants) == 1:
+        return {"term": {"skills": variants[0]}}
+    return {"terms": {"skills": variants}}
+
+
+def _skill_variants(skill: str, skill_vocab: set[str] | None = None) -> list[str]:
+    cleaned = str(skill).strip()
+    if not cleaned or not skill_vocab:
+        return [cleaned]
+
+    target_key = _casefold_key(cleaned)
+    variants = [
+        str(value).strip()
+        for value in skill_vocab
+        if str(value).strip() and _casefold_key(str(value)) == target_key
+    ]
+    if not variants:
+        return [cleaned]
+
+    return sorted(set(variants), key=lambda value: (_skill_label_sort_key(value), value))
+
+
+def _skill_label_sort_key(value: str) -> tuple[int, int, str]:
+    return (-_skill_label_score(value), len(value), value.casefold())
+
+
+def _skill_label_score(value: str) -> int:
+    stripped = value.strip()
+    letters = [char for char in stripped if char.isalpha()]
+    has_upper = any(char.isupper() for char in letters)
+    has_lower = any(char.islower() for char in letters)
+    if has_upper and has_lower:
+        return 4 if any(char.isupper() for char in stripped[1:]) else 3
+    if has_upper:
+        return 2 if len(stripped) <= 3 else 1
+    return 0
 
 
 def _empty_parsed_query() -> dict[str, Any]:
@@ -287,10 +370,10 @@ def _parse_query_constraints(
     # already contains an explicit structured constraint. Plain skill queries
     # remain broad BM25+dense searches to preserve recall.
     if filters:
-        skills = _dedupe([token for token in tokens if token in known_skills])
+        skills = _known_skill_tokens(tokens, known_skills)
         if skills:
             for skill in skills:
-                filters.append({"term": {"skills": skill}})
+                filters.append(_skill_filter(skill, known_skills))
             constraints["skills"] = skills
 
     remaining_tokens = [token for token in tokens if token not in remove_tokens]
@@ -330,6 +413,26 @@ def _facet_keys(facets: dict[str, Any], name: str) -> set[str]:
         for item in facets.get(name, [])
         if item.get("key")
     }
+
+
+def _known_skill_tokens(tokens: list[str], known_skills: set[str]) -> list[str]:
+    preferred_by_key: dict[str, str] = {}
+    for skill in known_skills:
+        key = _casefold_key(skill)
+        if not key:
+            continue
+        current = preferred_by_key.get(key)
+        if current is None or _skill_label_sort_key(skill) < _skill_label_sort_key(current):
+            preferred_by_key[key] = skill
+
+    result: list[str] = []
+    seen: set[str] = set()
+    for token in tokens:
+        key = _casefold_key(token)
+        if key in preferred_by_key and key not in seen:
+            seen.add(key)
+            result.append(_display_skill_label([preferred_by_key[key]]))
+    return result
 
 
 def _parse_year_filter_token(token: str) -> float | None:
@@ -1105,7 +1208,7 @@ def _load_facets() -> dict[str, Any]:
         "aggs": {
             "degrees": {"terms": {"field": "candidate.highest_degree", "size": 20}},
             "cities": {"terms": {"field": "application.expected_work_cities", "size": 20}},
-            "skills": {"terms": {"field": "skills", "size": 30}},
+            "skills": {"terms": {"field": "skills", "size": SKILL_FACET_AGG_SIZE}},
             "positions": {"terms": {"field": "application.position_name.keyword", "size": 20}},
         },
     }
@@ -1119,8 +1222,43 @@ def _load_facets() -> dict[str, Any]:
         ]
         for name in ("degrees", "cities", "skills", "positions")
     }
+    facets["skills"] = _merge_case_insensitive_skill_buckets(
+        aggs.get("skills", {}).get("buckets", []),
+        SKILL_FACET_DISPLAY_SIZE,
+    )
     _facets_cache = (now + FACETS_CACHE_TTL_SECONDS, facets)
     return facets
+
+
+def _merge_case_insensitive_skill_buckets(
+    buckets: list[dict[str, Any]],
+    limit: int,
+) -> list[dict[str, Any]]:
+    merged: dict[str, dict[str, Any]] = {}
+    for bucket in buckets:
+        raw_key = str(bucket.get("key", "")).strip()
+        if not raw_key:
+            continue
+        key = _casefold_key(raw_key)
+        item = merged.setdefault(key, {"count": 0, "variants": []})
+        item["count"] += int(bucket.get("doc_count", bucket.get("count", 0)) or 0)
+        item["variants"].append(raw_key)
+
+    items = [
+        {"key": _display_skill_label(item["variants"]), "count": item["count"]}
+        for item in merged.values()
+    ]
+    return sorted(items, key=lambda item: (-item["count"], _casefold_key(item["key"])))[:limit]
+
+
+def _display_skill_label(variants: list[str]) -> str:
+    cleaned = [str(value).strip() for value in variants if str(value).strip()]
+    if not cleaned:
+        return ""
+    canonical = CANONICAL_SKILL_LABELS.get(_casefold_key(cleaned[0]))
+    if canonical:
+        return canonical
+    return sorted(set(cleaned), key=lambda value: (_skill_label_sort_key(value), value))[0]
 
 
 def _load_filter_vocab() -> dict[str, set[str]]:

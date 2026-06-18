@@ -10,6 +10,7 @@ from app import (
     _hybrid_total,
     _lexical_query,
     _lexical_total,
+    _merge_case_insensitive_skill_buckets,
     _normalize_limit,
     _parse_query_constraints,
     _rrf_merge,
@@ -299,6 +300,45 @@ class SearchLogicTests(unittest.TestCase):
             ],
         )
 
+    def test_skill_filter_matches_case_variants(self) -> None:
+        filters = _build_filters(
+            "",
+            [],
+            ["Java", "JAVA", "LINUX"],
+            0,
+            skill_vocab={"JAVA", "Java", "Linux", "LINUX"},
+        )
+
+        self.assertEqual(
+            filters,
+            [
+                {"terms": {"skills": ["Java", "JAVA"]}},
+                {"terms": {"skills": ["Linux", "LINUX"]}},
+            ],
+        )
+
+    def test_skill_facets_merge_case_variants(self) -> None:
+        facets = _merge_case_insensitive_skill_buckets(
+            [
+                {"key": "JAVA", "doc_count": 2},
+                {"key": "Java", "doc_count": 5},
+                {"key": "LINUX", "doc_count": 1},
+                {"key": "Linux", "doc_count": 3},
+                {"key": "c", "doc_count": 1},
+                {"key": "C", "doc_count": 2},
+            ],
+            30,
+        )
+
+        self.assertEqual(
+            facets,
+            [
+                {"key": "Java", "count": 7},
+                {"key": "Linux", "count": 4},
+                {"key": "C", "count": 3},
+            ],
+        )
+
     def test_mixed_query_constraints_are_parsed_from_facets(self) -> None:
         parsed = _parse_query_constraints(
             "0.5年以上 北京 本科 推荐系统",
@@ -320,6 +360,19 @@ class SearchLogicTests(unittest.TestCase):
             },
         )
         self.assertIn({"term": {"skills": "推荐系统"}}, parsed["filters"])
+
+    def test_mixed_query_skill_constraints_are_case_insensitive(self) -> None:
+        parsed = _parse_query_constraints(
+            "0.5年以上 北京 本科 java",
+            facets={
+                "degrees": [{"key": "本科"}],
+                "cities": [{"key": "北京"}],
+                "skills": [{"key": "Java"}],
+            },
+        )
+
+        self.assertEqual(parsed["constraints"]["skills"], ["Java"])
+        self.assertIn({"term": {"skills": "Java"}}, parsed["filters"])
 
     def test_plain_skill_query_stays_broad(self) -> None:
         parsed = _parse_query_constraints(
