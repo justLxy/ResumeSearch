@@ -24,7 +24,8 @@ logger = logging.getLogger(__name__)
 
 RRF_RANK_CONSTANT = 60
 RRF_RANK_WINDOW_SIZE = 100
-MAX_RESULT_SIZE = 50
+MAX_SEARCH_RESULT_SIZE = 50
+MAX_BROWSE_RESULT_SIZE = 10_000
 KNN_NUM_CANDIDATES = 300
 FACETS_CACHE_TTL_SECONDS = 60
 FILTER_VOCAB_CACHE_TTL_SECONDS = 300
@@ -124,7 +125,7 @@ def search(
         candidate_total = _hybrid_total(responses, allow_dense_only)
         results = _rrf_merge(responses, size, allow_dense_only)
     elif filters:
-        browse_size = MAX_RESULT_SIZE
+        browse_size = MAX_BROWSE_RESULT_SIZE
         body = _bm25_body(query_text, filters, browse_size)
         body.pop("highlight", None)
         body["sort"] = [
@@ -136,7 +137,7 @@ def search(
         candidate_total = matched_total
         results = [_format_hit(hit) for hit in es_result.get("hits", {}).get("hits", [])]
     else:
-        browse_size = MAX_RESULT_SIZE
+        browse_size = MAX_BROWSE_RESULT_SIZE
         body = {
             "size": browse_size,
             "query": {"match_all": {}},
@@ -189,7 +190,7 @@ def get_resume(resume_id: str) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 def _normalize_limit(limit: int) -> int:
-    return max(1, min(limit, MAX_RESULT_SIZE))
+    return max(1, min(limit, MAX_SEARCH_RESULT_SIZE))
 
 def _build_filters(
     degree: str,

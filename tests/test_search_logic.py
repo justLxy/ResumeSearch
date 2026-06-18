@@ -9,6 +9,7 @@ from app import (
     _hybrid_total,
     _lexical_query,
     _lexical_total,
+    _normalize_limit,
     _parse_query_constraints,
     _rrf_merge,
     _use_dense,
@@ -25,6 +26,11 @@ from import_to_es import (
 
 
 class SearchLogicTests(unittest.TestCase):
+    def test_search_limit_is_capped_for_ranked_queries(self) -> None:
+        self.assertEqual(_normalize_limit(0), 1)
+        self.assertEqual(_normalize_limit(20), 20)
+        self.assertEqual(_normalize_limit(500), 50)
+
     def test_experience_uses_apply_time_for_internships_only(self) -> None:
         doc = {
             "application": {"apply_time": "2019-09-11"},
