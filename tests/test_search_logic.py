@@ -6,6 +6,7 @@ from app import (
     DENSE_RETRIEVER,
     _build_filters,
     _default_snippet,
+    _format_hit,
     _hybrid_total,
     _lexical_query,
     _lexical_total,
@@ -86,6 +87,20 @@ class SearchLogicTests(unittest.TestCase):
         self.assertIn("医疗问答系统", snippet)
         self.assertIn("机器人智能导诊项目", snippet)
         self.assertNotIn("负责问句分析与结果排序。", snippet)
+
+    def test_format_hit_combines_highlights_from_multiple_fields(self) -> None:
+        hit = _hit("candidate-1", "候选人")
+        hit["highlight"] = {
+            "application.position_name": ["<mark>机器学习</mark>工程师"],
+            "section_text.internships": [
+                "企业名称: <mark>百度</mark>在线网络技术 职位名称: <mark>机器学习</mark>实习生"
+            ],
+        }
+
+        formatted = _format_hit(hit)
+
+        self.assertIn("<mark>机器学习</mark>", formatted["project_snippet"])
+        self.assertIn("<mark>百度</mark>", formatted["project_snippet"])
 
     def test_hybrid_merge_allows_dense_only_for_semantic_queries(self) -> None:
         vector_response = _response(

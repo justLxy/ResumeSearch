@@ -804,16 +804,7 @@ def _format_hit(hit: dict[str, Any], rrf_score: float | None = None) -> dict[str
     internships = source.get("internships") or []
     highlight = hit.get("highlight", {})
 
-    snippets = (
-        highlight.get("application.position_name")
-        or highlight.get("candidate.major")
-        or highlight.get("section_text.projects")
-        or highlight.get("section_text.internships")
-        or highlight.get("section_text.education")
-        or highlight.get("candidate.school")
-        or highlight.get("skills_text")
-        or [_default_snippet(projects, internships)]
-    )
+    snippets = _highlight_snippets(highlight) or [_default_snippet(projects, internships)]
     years_experience = candidate.get("years_experience")
 
     return {
@@ -829,6 +820,28 @@ def _format_hit(hit: dict[str, Any], rrf_score: float | None = None) -> dict[str
         "retrieval_debug": hit.get("_retrieval_debug", {}),
         "source": source,
     }
+
+
+def _highlight_snippets(highlight: dict[str, list[str]]) -> list[str]:
+    fields = (
+        "application.position_name",
+        "candidate.major",
+        "candidate.school",
+        "skills_text",
+        "section_text.internships",
+        "section_text.projects",
+        "section_text.education",
+    )
+    snippets: list[str] = []
+    seen: set[str] = set()
+    for field in fields:
+        for fragment in highlight.get(field, []):
+            text = str(fragment).strip()
+            if not text or text in seen:
+                continue
+            seen.add(text)
+            snippets.append(text)
+    return snippets
 
 
 def _education_summary(candidate: dict[str, Any], education: list[dict[str, Any]]) -> str:
