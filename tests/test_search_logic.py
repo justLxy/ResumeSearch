@@ -164,6 +164,34 @@ class SearchLogicTests(unittest.TestCase):
         self.assertEqual([item["id"] for item in results], ["lexical-2", "lexical-1", "vector-only"])
         self.assertEqual(results[0]["retrieval_debug"]["retrieval_sources"], [BM25_RETRIEVER, DENSE_RETRIEVER])
 
+    def test_multi_term_coverage_takes_priority_over_single_term_frequency(self) -> None:
+        bm25_response = _response(
+            BM25_RETRIEVER,
+            [
+                _hit("a-many", "A A A 0", matched_queries=["query_term:0"]),
+                _hit("b-many", "0 B B B", matched_queries=["query_term:1"]),
+                _hit("both", "A B 0 0", matched_queries=["query_term:0", "query_term:1"]),
+            ],
+        )
+        vector_response = _response(
+            DENSE_RETRIEVER,
+            [
+                _hit("a-many", "A A A 0", score=1.0),
+                _hit("zero", "0 0 0 0", score=0.99),
+            ],
+        )
+
+        results = _rrf_merge(
+            [bm25_response, vector_response],
+            10,
+            allow_dense_only=True,
+            query_text="A B",
+        )
+
+        self.assertEqual([item["id"] for item in results], ["both", "a-many", "b-many", "zero"])
+        self.assertEqual(results[0]["retrieval_debug"]["term_coverage"], 2)
+        self.assertEqual(results[1]["retrieval_debug"]["term_coverage"], 1)
+
     def test_dense_only_hits_need_similarity_gate(self) -> None:
         bm25_response = _response(
             BM25_RETRIEVER,
@@ -314,6 +342,15 @@ class SearchLogicTests(unittest.TestCase):
         self.assertIn("application.company", query_json)
         self.assertIn("application.wishes", query_json)
 
+    def test_lexical_query_adds_named_term_coverage_for_multi_term_queries(self) -> None:
+        single_term_json = json.dumps(_lexical_query("A"), ensure_ascii=False)
+        multi_term_json = json.dumps(_lexical_query("A B"), ensure_ascii=False)
+
+        self.assertNotIn("query_term:0", single_term_json)
+        self.assertIn("constant_score", multi_term_json)
+        self.assertIn("query_term:0", multi_term_json)
+        self.assertIn("query_term:1", multi_term_json)
+
     def test_lexical_total_uses_bm25_total_not_candidate_window(self) -> None:
         bm25_response = _response(
             BM25_RETRIEVER,
@@ -357,8 +394,13 @@ def _response(
     }
 
 
-def _hit(doc_id: str, name: str, score: float = 1.0) -> dict:
-    return {
+def _hit(
+    doc_id: str,
+    name: str,
+    score: float = 1.0,
+    matched_queries: list[str] | None = None,
+) -> dict:
+    hit = {
         "_id": doc_id,
         "_score": score,
         "_source": {
@@ -370,6 +412,9 @@ def _hit(doc_id: str, name: str, score: float = 1.0) -> dict:
             "skills": [],
         },
     }
+    if matched_queries is not None:
+        hit["matched_queries"] = matched_queries
+    return hit
 
 
 if __name__ == "__main__":

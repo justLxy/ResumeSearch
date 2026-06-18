@@ -37,6 +37,9 @@ DENSE_RRF_WEIGHT = 1.0
 DENSE_ONLY_MIN_SCORE = 0.84
 DENSE_ONLY_SCORE_BAND = 0.02
 DENSE_ONLY_MAX_RESULTS = 8
+QUERY_TERM_COVERAGE_BOOST = 1000
+MAX_QUERY_COVERAGE_TERMS = 8
+COVERAGE_QUERY_PREFIX = "query_term:"
 VECTOR_FIELDS = ("semantic_profile_vector",)
 LEGACY_VECTOR_FIELDS = (
     "search_text_vector",
@@ -123,7 +126,7 @@ def search(
         matched_total = _lexical_total(responses)
         allow_dense_only = use_dense and _allow_dense_only(query_text)
         candidate_total = _hybrid_total(responses, allow_dense_only)
-        results = _rrf_merge(responses, size, allow_dense_only)
+        results = _rrf_merge(responses, size, allow_dense_only, query_text=query_text)
     elif filters:
         browse_size = MAX_BROWSE_RESULT_SIZE
         body = _bm25_body(query_text, filters, browse_size)
@@ -307,6 +310,20 @@ def _query_tokens(query_text: str) -> list[str]:
     ]
 
 
+def _coverage_tokens(query_text: str) -> list[str]:
+    seen: set[str] = set()
+    tokens: list[str] = []
+    for token in _query_tokens(query_text):
+        key = token.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        tokens.append(token)
+        if len(tokens) >= MAX_QUERY_COVERAGE_TERMS:
+            break
+    return tokens
+
+
 def _facet_keys(facets: dict[str, Any], name: str) -> set[str]:
     return {
         str(item.get("key")).strip()
@@ -354,6 +371,7 @@ def _bm25_body(query_text: str, filters: list[dict[str, Any]], size: int) -> dic
 
 def _lexical_query(query_text: str) -> dict[str, Any]:
     should: list[dict[str, Any]] = [
+        *_term_coverage_queries(query_text),
         {"term": {"application.candidate_no": {"value": query_text.upper(), "boost": 40}}},
         {"term": {"application.position_code": {"value": query_text.upper(), "boost": 35}}},
         {"term": {"candidate.name.keyword": {"value": query_text, "boost": 30}}},
@@ -554,6 +572,139 @@ def _lexical_query(query_text: str) -> dict[str, Any]:
     return {"bool": {"should": should, "minimum_should_match": 1}}
 
 
+def _term_coverage_queries(query_text: str) -> list[dict[str, Any]]:
+    tokens = _coverage_tokens(query_text)
+    if len(tokens) < 2:
+        return []
+    return [
+        {
+            "constant_score": {
+                "_name": f"{COVERAGE_QUERY_PREFIX}{index}",
+                "filter": _term_coverage_filter(token),
+                "boost": QUERY_TERM_COVERAGE_BOOST,
+            }
+        }
+        for index, token in enumerate(tokens)
+    ]
+
+
+def _term_coverage_filter(token: str) -> dict[str, Any]:
+    return {
+        "bool": {
+            "should": [
+                {"term": {"application.candidate_no": token.upper()}},
+                {"term": {"application.position_code": token.upper()}},
+                {"term": {"candidate.name.keyword": token}},
+                {"term": {"candidate.phone": token}},
+                {"term": {"candidate.email": token}},
+                {"term": {"candidate.school.keyword": token}},
+                {"term": {"application.company": token}},
+                {"term": {"application.position_name.keyword": token}},
+                {"term": {"skills": token}},
+                {"term": {"candidate.highest_degree": _normalize_highest_degree(token)}},
+                {
+                    "multi_match": {
+                        "query": token,
+                        "fields": [
+                            "application.position_name",
+                            "candidate.name",
+                            "candidate.school",
+                            "candidate.major",
+                            "section_text.projects",
+                            "section_text.internships",
+                            "section_text.education",
+                            "skills_text",
+                        ],
+                        "type": "best_fields",
+                    }
+                },
+                {
+                    "nested": {
+                        "path": "application.wishes",
+                        "score_mode": "none",
+                        "query": {
+                            "bool": {
+                                "should": [
+                                    {"term": {"application.wishes.company": token}},
+                                    {
+                                        "match": {
+                                            "application.wishes.position_name": token
+                                        }
+                                    },
+                                ],
+                                "minimum_should_match": 1,
+                            }
+                        },
+                    }
+                },
+                {
+                    "nested": {
+                        "path": "education",
+                        "score_mode": "none",
+                        "query": {
+                            "bool": {
+                                "should": [
+                                    {"term": {"education.school.keyword": token}},
+                                    {
+                                        "term": {
+                                            "education.education_level": (
+                                                _normalize_highest_degree(token)
+                                            )
+                                        }
+                                    },
+                                    {"term": {"education.degree": token}},
+                                    {"match": {"education.school": token}},
+                                    {"match": {"education.college": token}},
+                                    {"match": {"education.major": token}},
+                                    {"match": {"education.research_direction": token}},
+                                    {"match": {"education.lab_name": token}},
+                                ],
+                                "minimum_should_match": 1,
+                            }
+                        },
+                    }
+                },
+                {
+                    "nested": {
+                        "path": "internships",
+                        "score_mode": "none",
+                        "query": {
+                            "bool": {
+                                "should": [
+                                    {"term": {"internships.company.keyword": token}},
+                                    {"term": {"internships.work_type": token}},
+                                    {"match": {"internships.company": token}},
+                                    {"match": {"internships.department": token}},
+                                    {"match": {"internships.title": token}},
+                                    {"match": {"internships.description": token}},
+                                ],
+                                "minimum_should_match": 1,
+                            }
+                        },
+                    }
+                },
+                {
+                    "nested": {
+                        "path": "projects",
+                        "score_mode": "none",
+                        "query": {
+                            "bool": {
+                                "should": [
+                                    {"match": {"projects.name": token}},
+                                    {"match": {"projects.description": token}},
+                                    {"match": {"projects.responsibility": token}},
+                                ],
+                                "minimum_should_match": 1,
+                            }
+                        },
+                    }
+                },
+            ],
+            "minimum_should_match": 1,
+        }
+    }
+
+
 def _knn_body(
     field: str,
     query_vector: list[float],
@@ -670,12 +821,15 @@ def _rrf_merge(
     responses: list[dict[str, Any]],
     limit: int,
     allow_dense_only: bool = True,
+    query_text: str = "",
 ) -> list[dict[str, Any]]:
     rrf_scores: dict[str, float] = {}
     hit_map: dict[str, dict[str, Any]] = {}
     best_rank: dict[str, int] = {}
+    term_coverage: dict[str, int] = {}
     retrieval_debug: dict[str, dict[str, Any]] = {}
     lexical_ids = _lexical_doc_ids(responses)
+    coverage_enabled = len(_coverage_tokens(query_text)) >= 2
 
     for response in responses:
         retriever_name = response.get("_retriever_name")
@@ -684,6 +838,11 @@ def _rrf_merge(
             doc_id = hit["_id"]
             rrf_scores[doc_id] = rrf_scores.get(doc_id, 0) + weight / (RRF_RANK_CONSTANT + rank)
             best_rank[doc_id] = min(best_rank.get(doc_id, rank), rank)
+            if coverage_enabled and retriever_name == BM25_RETRIEVER:
+                term_coverage[doc_id] = max(
+                    term_coverage.get(doc_id, 0),
+                    _matched_term_coverage(hit),
+                )
             if doc_id not in hit_map or hit.get("highlight"):
                 hit_map[doc_id] = hit
             debug = retrieval_debug.setdefault(
@@ -704,7 +863,12 @@ def _rrf_merge(
 
     sorted_ids = sorted(
         rrf_scores.keys(),
-        key=lambda k: (-rrf_scores[k], best_rank.get(k, 10**9), k),
+        key=lambda k: (
+            -term_coverage.get(k, 0),
+            -rrf_scores[k],
+            best_rank.get(k, 10**9),
+            k,
+        ),
     )[:limit]
 
     results = []
@@ -714,8 +878,21 @@ def _rrf_merge(
             **retrieval_debug.get(doc_id, {}),
             "rrf_score": round(rrf_scores[doc_id], 6),
         }
+        if coverage_enabled:
+            hit["_retrieval_debug"]["term_coverage"] = term_coverage.get(doc_id, 0)
         results.append(_format_hit(hit, rrf_scores[doc_id]))
     return results
+
+
+def _matched_term_coverage(hit: dict[str, Any]) -> int:
+    matched_queries = hit.get("matched_queries") or []
+    return len(
+        {
+            query_name
+            for query_name in matched_queries
+            if isinstance(query_name, str) and query_name.startswith(COVERAGE_QUERY_PREFIX)
+        }
+    )
 
 
 def _accepted_hits(
