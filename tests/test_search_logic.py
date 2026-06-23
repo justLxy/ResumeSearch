@@ -28,10 +28,12 @@ from import_to_es import (
 
 
 class SearchLogicTests(unittest.TestCase):
-    def test_search_limit_is_capped_for_ranked_queries(self) -> None:
-        self.assertEqual(_normalize_limit(0), 1)
+    def test_search_limit_defaults_to_full_result_window(self) -> None:
+        self.assertEqual(_normalize_limit(None), 10_000)
+        self.assertEqual(_normalize_limit(0), 10_000)
         self.assertEqual(_normalize_limit(20), 20)
-        self.assertEqual(_normalize_limit(500), 50)
+        self.assertEqual(_normalize_limit(500), 500)
+        self.assertEqual(_normalize_limit(50_000), 10_000)
 
     def test_experience_uses_apply_time_for_internships_only(self) -> None:
         doc = {

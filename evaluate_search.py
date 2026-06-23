@@ -57,6 +57,11 @@ def main() -> None:
         action="store_true",
         help="Print per-query result ids for each threshold.",
     )
+    parser.add_argument(
+        "--type-summary",
+        action="store_true",
+        help="Print metrics grouped by eval case type for the suggested threshold.",
+    )
     args = parser.parse_args()
 
     thresholds = _parse_thresholds(args.thresholds)
@@ -77,7 +82,9 @@ def main() -> None:
             all_results[threshold] = results
 
         print_summary_table(summaries)
-        print_best_threshold(summaries)
+        best_threshold = print_best_threshold(summaries)
+        if args.type_summary:
+            print_type_summary(best_threshold, all_results[best_threshold])
         if args.details:
             for threshold in thresholds:
                 print_details(threshold, all_results[threshold])
@@ -103,6 +110,10 @@ def load_cases(path: Path) -> list[EvalCase]:
         if relevant_ids & forbidden_ids:
             overlap = ", ".join(sorted(relevant_ids & forbidden_ids))
             raise ValueError(f"{path}:{line_no} has ids marked relevant and forbidden: {overlap}")
+        if raw.get("expect_empty") and relevant_ids:
+            raise ValueError(f"{path}:{line_no} expects empty results but has relevant ids")
+        if not raw.get("expect_empty") and not relevant_ids:
+            raise ValueError(f"{path}:{line_no} has no relevant ids")
 
         cases.append(
             EvalCase(
@@ -237,11 +248,11 @@ def print_summary_table(summaries: list[dict[str, Any]]) -> None:
         )
 
 
-def print_best_threshold(summaries: list[dict[str, Any]]) -> None:
+def print_best_threshold(summaries: list[dict[str, Any]]) -> float:
     def calibration_score(row: dict[str, Any]) -> tuple[float, float, float]:
         empty_accuracy = row["empty_accuracy"] if row["empty_accuracy"] is not None else 1.0
         return (
-            row["ndcg10"] + 0.25 * empty_accuracy - 0.02 * row["forbidden10"],
+            row["ndcg10"] + 0.10 * empty_accuracy - 0.005 * row["forbidden10"],
             row["r10"],
             -row["threshold"],
         )
@@ -254,6 +265,35 @@ def print_best_threshold(summaries: list[dict[str, Any]]) -> None:
         f"empty_acc={best['empty_accuracy'] if best['empty_accuracy'] is not None else '-'}, "
         f"forbidden@10={best['forbidden10']})"
     )
+    return float(best["threshold"])
+
+
+def print_type_summary(threshold: float, results: list[QueryResult]) -> None:
+    grouped: dict[str, list[QueryResult]] = {}
+    for result in results:
+        grouped.setdefault(result.case.case_type, []).append(result)
+
+    print(f"\nType summary for threshold={threshold:.3f}")
+    print("type                    queries judged P@5   R@10  NDCG@10 empty_acc forbidden@10")
+    for case_type in sorted(grouped):
+        rows = grouped[case_type]
+        judged = [row for row in rows if row.case.relevant_ids]
+        empty_cases = [row for row in rows if row.empty_success is not None]
+        empty = (
+            mean(1.0 if row.empty_success else 0.0 for row in empty_cases)
+            if empty_cases
+            else None
+        )
+        print(
+            f"{case_type:<23} "
+            f"{len(rows):>7} "
+            f"{len(judged):>6} "
+            f"{_mean_metric(judged, 'precision_at_5'):.3f} "
+            f"{_mean_metric(judged, 'recall_at_10'):.3f} "
+            f"{_mean_metric(judged, 'ndcg_at_10'):.3f} "
+            f"{'-' if empty is None else f'{empty:.3f}':>9} "
+            f"{sum(row.forbidden_at_10 for row in rows):>12}"
+        )
 
 
 def print_details(threshold: float, results: list[QueryResult]) -> None:

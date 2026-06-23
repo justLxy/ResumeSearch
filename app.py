@@ -24,7 +24,6 @@ logger = logging.getLogger(__name__)
 
 RRF_RANK_CONSTANT = 60
 RRF_RANK_WINDOW_SIZE = 100
-MAX_SEARCH_RESULT_SIZE = 50
 MAX_BROWSE_RESULT_SIZE = 10_000
 KNN_NUM_CANDIDATES = 300
 FACETS_CACHE_TTL_SECONDS = 60
@@ -116,7 +115,7 @@ def search(
     cities: list[str] = Query(default=[]),
     skills: list[str] = Query(default=[]),
     min_years: float = 0,
-    limit: int = 20,
+    limit: int = 0,
 ) -> dict[str, Any]:
     raw_query_text = q.strip()
     parsed_query = _parse_query_constraints(raw_query_text) if raw_query_text else _empty_parsed_query()
@@ -218,8 +217,10 @@ def get_resume(resume_id: str) -> dict[str, Any]:
 # query builders
 # ---------------------------------------------------------------------------
 
-def _normalize_limit(limit: int) -> int:
-    return max(1, min(limit, MAX_SEARCH_RESULT_SIZE))
+def _normalize_limit(limit: int | None) -> int:
+    if limit is None or limit <= 0:
+        return MAX_BROWSE_RESULT_SIZE
+    return max(1, min(limit, MAX_BROWSE_RESULT_SIZE))
 
 def _build_filters(
     degree: str,
