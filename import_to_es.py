@@ -97,7 +97,14 @@ INDEX_BODY: dict[str, Any] = {
                         "type": "text",
                         "analyzer": "resume_text",
                         "search_analyzer": "resume_search",
-                        "fields": {"keyword": {"type": "keyword"}},
+                        "fields": {
+                            "keyword": {"type": "keyword"},
+                            "phrase": {
+                                "type": "text",
+                                "analyzer": "resume_search",
+                                "search_analyzer": "resume_search",
+                            },
+                        },
                     },
                     "expected_work_cities": {"type": "keyword"},
                     "wishes": {
@@ -108,6 +115,13 @@ INDEX_BODY: dict[str, Any] = {
                                 "type": "text",
                                 "analyzer": "resume_text",
                                 "search_analyzer": "resume_search",
+                                "fields": {
+                                    "phrase": {
+                                        "type": "text",
+                                        "analyzer": "resume_search",
+                                        "search_analyzer": "resume_search",
+                                    },
+                                },
                             },
                             "company": {"type": "keyword"},
                         },
@@ -131,12 +145,27 @@ INDEX_BODY: dict[str, Any] = {
                         "type": "text",
                         "analyzer": "resume_text",
                         "search_analyzer": "resume_search",
-                        "fields": {"keyword": {"type": "keyword"}},
+                        "fields": {
+                            "keyword": {"type": "keyword"},
+                            "phrase": {
+                                "type": "text",
+                                "analyzer": "resume_search",
+                                "search_analyzer": "resume_search",
+                            },
+                        },
                     },
                     "major": {
                         "type": "text",
                         "analyzer": "resume_text",
                         "search_analyzer": "resume_search",
+                        "fields": {
+                            "keyword": {"type": "keyword"},
+                            "phrase": {
+                                "type": "text",
+                                "analyzer": "resume_search",
+                                "search_analyzer": "resume_search",
+                            },
+                        },
                     },
                     "phone": {"type": "keyword"},
                     "email": {"type": "keyword"},
@@ -155,17 +184,39 @@ INDEX_BODY: dict[str, Any] = {
                         "type": "text",
                         "analyzer": "resume_text",
                         "search_analyzer": "resume_search",
-                        "fields": {"keyword": {"type": "keyword"}},
+                        "fields": {
+                            "keyword": {"type": "keyword"},
+                            "phrase": {
+                                "type": "text",
+                                "analyzer": "resume_search",
+                                "search_analyzer": "resume_search",
+                            },
+                        },
                     },
                     "college": {
                         "type": "text",
                         "analyzer": "resume_text",
                         "search_analyzer": "resume_search",
+                        "fields": {
+                            "phrase": {
+                                "type": "text",
+                                "analyzer": "resume_search",
+                                "search_analyzer": "resume_search",
+                            },
+                        },
                     },
                     "major": {
                         "type": "text",
                         "analyzer": "resume_text",
                         "search_analyzer": "resume_search",
+                        "fields": {
+                            "keyword": {"type": "keyword"},
+                            "phrase": {
+                                "type": "text",
+                                "analyzer": "resume_search",
+                                "search_analyzer": "resume_search",
+                            },
+                        },
                     },
                     "education_level": {"type": "keyword"},
                     "degree": {"type": "keyword"},
@@ -173,11 +224,25 @@ INDEX_BODY: dict[str, Any] = {
                         "type": "text",
                         "analyzer": "resume_text",
                         "search_analyzer": "resume_search",
+                        "fields": {
+                            "phrase": {
+                                "type": "text",
+                                "analyzer": "resume_search",
+                                "search_analyzer": "resume_search",
+                            },
+                        },
                     },
                     "lab_name": {
                         "type": "text",
                         "analyzer": "resume_text",
                         "search_analyzer": "resume_search",
+                        "fields": {
+                            "phrase": {
+                                "type": "text",
+                                "analyzer": "resume_search",
+                                "search_analyzer": "resume_search",
+                            },
+                        },
                     },
                     "paper_level": {"type": "keyword"},
                 },
@@ -194,23 +259,51 @@ INDEX_BODY: dict[str, Any] = {
                         "type": "text",
                         "analyzer": "resume_text",
                         "search_analyzer": "resume_search",
-                        "fields": {"keyword": {"type": "keyword"}},
+                        "fields": {
+                            "keyword": {"type": "keyword"},
+                            "phrase": {
+                                "type": "text",
+                                "analyzer": "resume_search",
+                                "search_analyzer": "resume_search",
+                            },
+                        },
                     },
                     "department": {
                         "type": "text",
                         "analyzer": "resume_text",
                         "search_analyzer": "resume_search",
+                        "fields": {
+                            "phrase": {
+                                "type": "text",
+                                "analyzer": "resume_search",
+                                "search_analyzer": "resume_search",
+                            },
+                        },
                     },
                     "title": {
                         "type": "text",
                         "analyzer": "resume_text",
                         "search_analyzer": "resume_search",
+                        "fields": {
+                            "phrase": {
+                                "type": "text",
+                                "analyzer": "resume_search",
+                                "search_analyzer": "resume_search",
+                            },
+                        },
                     },
                     "work_type": {"type": "keyword"},
                     "description": {
                         "type": "text",
                         "analyzer": "resume_text",
                         "search_analyzer": "resume_search",
+                        "fields": {
+                            "phrase": {
+                                "type": "text",
+                                "analyzer": "resume_search",
+                                "search_analyzer": "resume_search",
+                            },
+                        },
                     },
                 },
             },
@@ -226,16 +319,38 @@ INDEX_BODY: dict[str, Any] = {
                         "type": "text",
                         "analyzer": "resume_text",
                         "search_analyzer": "resume_search",
+                        "fields": {
+                            "keyword": {"type": "keyword"},
+                            "phrase": {
+                                "type": "text",
+                                "analyzer": "resume_search",
+                                "search_analyzer": "resume_search",
+                            },
+                        },
                     },
                     "description": {
                         "type": "text",
                         "analyzer": "resume_text",
                         "search_analyzer": "resume_search",
+                        "fields": {
+                            "phrase": {
+                                "type": "text",
+                                "analyzer": "resume_search",
+                                "search_analyzer": "resume_search",
+                            },
+                        },
                     },
                     "responsibility": {
                         "type": "text",
                         "analyzer": "resume_text",
                         "search_analyzer": "resume_search",
+                        "fields": {
+                            "phrase": {
+                                "type": "text",
+                                "analyzer": "resume_search",
+                                "search_analyzer": "resume_search",
+                            },
+                        },
                     },
                 },
             },
@@ -257,16 +372,37 @@ INDEX_BODY: dict[str, Any] = {
                         "type": "text",
                         "analyzer": "resume_text",
                         "search_analyzer": "resume_search",
+                        "fields": {
+                            "phrase": {
+                                "type": "text",
+                                "analyzer": "resume_search",
+                                "search_analyzer": "resume_search",
+                            },
+                        },
                     },
                     "internships": {
                         "type": "text",
                         "analyzer": "resume_text",
                         "search_analyzer": "resume_search",
+                        "fields": {
+                            "phrase": {
+                                "type": "text",
+                                "analyzer": "resume_search",
+                                "search_analyzer": "resume_search",
+                            },
+                        },
                     },
                     "projects": {
                         "type": "text",
                         "analyzer": "resume_text",
                         "search_analyzer": "resume_search",
+                        "fields": {
+                            "phrase": {
+                                "type": "text",
+                                "analyzer": "resume_search",
+                                "search_analyzer": "resume_search",
+                            },
+                        },
                     },
                 }
             },

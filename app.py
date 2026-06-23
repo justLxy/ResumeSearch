@@ -28,7 +28,6 @@ MAX_BROWSE_RESULT_SIZE = 10_000
 KNN_NUM_CANDIDATES = 300
 FACETS_CACHE_TTL_SECONDS = 60
 FILTER_VOCAB_CACHE_TTL_SECONDS = 300
-VECTOR_FIELDS_CACHE_TTL_SECONDS = 300
 SKILL_FACET_AGG_SIZE = 200
 SKILL_FACET_DISPLAY_SIZE = 30
 BM25_RETRIEVER = "bm25"
@@ -41,21 +40,15 @@ DENSE_ONLY_MAX_RESULTS = 8
 QUERY_TERM_COVERAGE_BOOST = 0.001
 MAX_QUERY_COVERAGE_TERMS = 8
 COVERAGE_QUERY_PREFIX = "query_term:"
+LEXICAL_EXACT_QUERY_PREFIX = "lexical_exact:"
+LEXICAL_PHRASE_QUERY_PREFIX = "lexical_phrase:"
 VECTOR_FIELDS = ("semantic_profile_vector",)
-LEGACY_VECTOR_FIELDS = (
-    "search_text_vector",
-    "skills_vector",
-    "projects_vector",
-    "internships_vector",
-    "education_vector",
-)
 SOURCE_EXCLUDES = [
     "raw_text",
     "raw_sections",
     "search_text",
     "skills_text",
     *VECTOR_FIELDS,
-    *LEGACY_VECTOR_FIELDS,
 ]
 EXACT_LOOKUP_RE = re.compile(
     r"^(?:[A-Za-z]\d{3,}|M\d{6,}|\d{6,}|1[3-9]\d{9}|[^@\s]+@[^@\s]+\.[^@\s]+)$",
@@ -97,8 +90,6 @@ CANONICAL_SKILL_LABELS = {
 
 _facets_cache: tuple[float, dict[str, Any]] | None = None
 _filter_vocab_cache: tuple[float, dict[str, set[str]]] | None = None
-_vector_fields_cache: tuple[float, tuple[str, ...]] | None = None
-
 app = FastAPI(title="Resume Search Prototype")
 app.mount("/static", StaticFiles(directory=WEB_DIR), name="static")
 
@@ -474,204 +465,10 @@ def _bm25_body(query_text: str, filters: list[dict[str, Any]], size: int) -> dic
 
 
 def _lexical_query(query_text: str) -> dict[str, Any]:
-    scoring_should: list[dict[str, Any]] = [
-        {"term": {"application.candidate_no": {"value": query_text.upper(), "boost": 40}}},
-        {"term": {"application.position_code": {"value": query_text.upper(), "boost": 35}}},
-        {"term": {"candidate.name.keyword": {"value": query_text, "boost": 30}}},
-        {"term": {"candidate.phone": {"value": query_text, "boost": 28}}},
-        {"term": {"candidate.email": {"value": query_text, "boost": 28}}},
-        {"term": {"candidate.school.keyword": {"value": query_text, "boost": 24}}},
-        {"term": {"application.company": {"value": query_text, "boost": 20}}},
-        {"term": {"application.position_name.keyword": {"value": query_text, "boost": 16}}},
-        {"term": {"skills": {"value": query_text, "boost": 14}}},
-        {"term": {"candidate.highest_degree": {"value": _normalize_highest_degree(query_text), "boost": 8}}},
-        {"match_phrase": {"candidate.school": {"query": query_text, "boost": 12}}},
-        {"match_phrase": {"section_text.education": {"query": query_text, "boost": 8}}},
-        {"match_phrase": {"application.position_name": {"query": query_text, "boost": 8}}},
-        {"match_phrase": {"section_text.projects": {"query": query_text, "boost": 6}}},
-        {"match_phrase": {"section_text.internships": {"query": query_text, "boost": 6}}},
-        {
-            "nested": {
-                "path": "application.wishes",
-                "score_mode": "max",
-                "query": {
-                    "bool": {
-                        "should": [
-                            {
-                                "term": {
-                                    "application.wishes.company": {
-                                        "value": query_text,
-                                        "boost": 16,
-                                    }
-                                }
-                            },
-                            {
-                                "match_phrase": {
-                                    "application.wishes.position_name": {
-                                        "query": query_text,
-                                        "boost": 8,
-                                    }
-                                }
-                            },
-                        ],
-                        "minimum_should_match": 1,
-                    }
-                },
-            }
-        },
-        {
-            "nested": {
-                "path": "education",
-                "score_mode": "max",
-                "query": {
-                    "bool": {
-                        "should": [
-                            {
-                                "term": {
-                                    "education.school.keyword": {
-                                        "value": query_text,
-                                        "boost": 24,
-                                    }
-                                }
-                            },
-                            {
-                                "match_phrase": {
-                                    "education.school": {
-                                        "query": query_text,
-                                        "boost": 12,
-                                    }
-                                }
-                            },
-                            {
-                                "term": {
-                                    "education.education_level": {
-                                        "value": _normalize_highest_degree(query_text),
-                                        "boost": 5,
-                                    }
-                                }
-                            },
-                            {
-                                "term": {
-                                    "education.degree": {
-                                        "value": query_text,
-                                        "boost": 5,
-                                    }
-                                }
-                            },
-                            {
-                                "match_phrase": {
-                                    "education.major": {
-                                        "query": query_text,
-                                        "boost": 5,
-                                    }
-                                }
-                            },
-                            {
-                                "match_phrase": {
-                                    "education.research_direction": {
-                                        "query": query_text,
-                                        "boost": 5,
-                                    }
-                                }
-                            },
-                        ],
-                        "minimum_should_match": 1,
-                    }
-                },
-            }
-        },
-        {
-            "nested": {
-                "path": "internships",
-                "score_mode": "max",
-                "query": {
-                    "bool": {
-                        "should": [
-                            {
-                                "term": {
-                                    "internships.company.keyword": {
-                                        "value": query_text,
-                                        "boost": 14,
-                                    }
-                                }
-                            },
-                            {
-                                "match_phrase": {
-                                    "internships.company": {
-                                        "query": query_text,
-                                        "boost": 7,
-                                    }
-                                }
-                            },
-                            {
-                                "match_phrase": {
-                                    "internships.title": {
-                                        "query": query_text,
-                                        "boost": 5,
-                                    }
-                                }
-                            },
-                        ],
-                        "minimum_should_match": 1,
-                    }
-                },
-            }
-        },
-        {
-            "nested": {
-                "path": "projects",
-                "score_mode": "max",
-                "query": {
-                    "bool": {
-                        "should": [
-                            {
-                                "match_phrase": {
-                                    "projects.name": {
-                                        "query": query_text,
-                                        "boost": 7,
-                                    }
-                                }
-                            },
-                            {
-                                "match_phrase": {
-                                    "projects.description": {
-                                        "query": query_text,
-                                        "boost": 5,
-                                    }
-                                }
-                            },
-                            {
-                                "match_phrase": {
-                                    "projects.responsibility": {
-                                        "query": query_text,
-                                        "boost": 5,
-                                    }
-                                }
-                            },
-                        ],
-                        "minimum_should_match": 1,
-                    }
-                },
-            }
-        },
-        {
-            "multi_match": {
-                "query": query_text,
-                "fields": [
-                    "application.position_name^4",
-                    "candidate.name^4",
-                    "candidate.major^2",
-                    "section_text.projects^3",
-                    "section_text.internships^3",
-                    "section_text.education^2",
-                    "skills_text^6",
-                ],
-                "type": "best_fields",
-                "operator": "or",
-                "minimum_should_match": "2<70%",
-            }
-        },
-    ]
+    exact_should = _lexical_exact_queries(query_text)
+    phrase_should = _lexical_phrase_queries(query_text)
+    term_should = _lexical_term_queries(query_text)
+    scoring_should = [*exact_should, *phrase_should, *term_should]
     coverage_should = _term_coverage_queries(query_text)
     if not coverage_should:
         return {"bool": {"should": scoring_should, "minimum_should_match": 1}}
@@ -688,6 +485,333 @@ def _lexical_query(query_text: str) -> dict[str, Any]:
             "should": coverage_should,
         }
     }
+
+
+def _lexical_exact_queries(query_text: str) -> list[dict[str, Any]]:
+    normalized_degree = _normalize_highest_degree(query_text)
+    return [
+        _term_query("application.candidate_no", query_text.upper(), 60, _exact_name("candidate_no")),
+        _term_query("application.position_code", query_text.upper(), 55, _exact_name("position_code")),
+        _term_query("candidate.name.keyword", query_text, 45, _exact_name("candidate_name")),
+        _term_query("candidate.phone", query_text, 45, _exact_name("candidate_phone")),
+        _term_query("candidate.email", query_text, 45, _exact_name("candidate_email")),
+        _term_query("candidate.school.keyword", query_text, 36, _exact_name("candidate_school")),
+        _term_query("candidate.major.keyword", query_text, 34, _exact_name("candidate_major")),
+        _term_query("application.company", query_text, 30, _exact_name("application_company")),
+        _term_query("application.position_name.keyword", query_text, 30, _exact_name("position_name")),
+        _term_query("skills", query_text, 28, _exact_name("skills")),
+        _term_query("candidate.highest_degree", normalized_degree, 10, _exact_name("highest_degree")),
+        _nested_query(
+            "application.wishes",
+            [
+                _term_query(
+                    "application.wishes.company",
+                    query_text,
+                    30,
+                    _exact_name("wish_company"),
+                ),
+            ],
+            _exact_name("wishes"),
+        ),
+        _nested_query(
+            "education",
+            [
+                _term_query(
+                    "education.school.keyword",
+                    query_text,
+                    36,
+                    _exact_name("education_school"),
+                ),
+                _term_query(
+                    "education.major.keyword",
+                    query_text,
+                    34,
+                    _exact_name("education_major"),
+                ),
+                _term_query(
+                    "education.education_level",
+                    normalized_degree,
+                    10,
+                    _exact_name("education_level"),
+                ),
+                _term_query("education.degree", query_text, 8, _exact_name("education_degree")),
+            ],
+            _exact_name("education"),
+        ),
+        _nested_query(
+            "internships",
+            [
+                _term_query(
+                    "internships.company.keyword",
+                    query_text,
+                    24,
+                    _exact_name("internship_company"),
+                ),
+                _term_query(
+                    "internships.work_type",
+                    query_text,
+                    8,
+                    _exact_name("internship_work_type"),
+                ),
+            ],
+            _exact_name("internships"),
+        ),
+        _nested_query(
+            "projects",
+            [
+                _term_query(
+                    "projects.name.keyword",
+                    query_text,
+                    26,
+                    _exact_name("project_name"),
+                ),
+            ],
+            _exact_name("projects"),
+        ),
+    ]
+
+
+def _lexical_phrase_queries(query_text: str) -> list[dict[str, Any]]:
+    return [
+        _match_phrase_query("candidate.major.phrase", query_text, 24, _phrase_name("candidate_major")),
+        _match_phrase_query("candidate.school.phrase", query_text, 18, _phrase_name("candidate_school")),
+        _match_phrase_query(
+            "application.position_name.phrase",
+            query_text,
+            18,
+            _phrase_name("position_name"),
+        ),
+        _match_phrase_query(
+            "section_text.education.phrase",
+            query_text,
+            12,
+            _phrase_name("section_education"),
+        ),
+        _match_phrase_query("section_text.projects.phrase", query_text, 9, _phrase_name("section_projects")),
+        _match_phrase_query(
+            "section_text.internships.phrase",
+            query_text,
+            9,
+            _phrase_name("section_internships"),
+        ),
+        _nested_query(
+            "application.wishes",
+            [
+                _match_phrase_query(
+                    "application.wishes.position_name.phrase",
+                    query_text,
+                    18,
+                    _phrase_name("wish_position"),
+                ),
+            ],
+            _phrase_name("wishes"),
+        ),
+        _nested_query(
+            "education",
+            [
+                _match_phrase_query(
+                    "education.major.phrase",
+                    query_text,
+                    24,
+                    _phrase_name("education_major"),
+                ),
+                _match_phrase_query(
+                    "education.school.phrase",
+                    query_text,
+                    18,
+                    _phrase_name("education_school"),
+                ),
+                _match_phrase_query(
+                    "education.college.phrase",
+                    query_text,
+                    14,
+                    _phrase_name("education_college"),
+                ),
+                _match_phrase_query(
+                    "education.research_direction.phrase",
+                    query_text,
+                    10,
+                    _phrase_name("education_research"),
+                ),
+                _match_phrase_query(
+                    "education.lab_name.phrase",
+                    query_text,
+                    8,
+                    _phrase_name("education_lab"),
+                ),
+            ],
+            _phrase_name("education"),
+        ),
+        _nested_query(
+            "internships",
+            [
+                _match_phrase_query(
+                    "internships.company.phrase",
+                    query_text,
+                    14,
+                    _phrase_name("internship_company"),
+                ),
+                _match_phrase_query(
+                    "internships.title.phrase",
+                    query_text,
+                    12,
+                    _phrase_name("internship_title"),
+                ),
+                _match_phrase_query(
+                    "internships.department.phrase",
+                    query_text,
+                    8,
+                    _phrase_name("internship_department"),
+                ),
+                _match_phrase_query(
+                    "internships.description.phrase",
+                    query_text,
+                    6,
+                    _phrase_name("internship_description"),
+                ),
+            ],
+            _phrase_name("internships"),
+        ),
+        _nested_query(
+            "projects",
+            [
+                _match_phrase_query(
+                    "projects.name.phrase",
+                    query_text,
+                    18,
+                    _phrase_name("project_name"),
+                ),
+                _match_phrase_query(
+                    "projects.description.phrase",
+                    query_text,
+                    7,
+                    _phrase_name("project_description"),
+                ),
+                _match_phrase_query(
+                    "projects.responsibility.phrase",
+                    query_text,
+                    7,
+                    _phrase_name("project_responsibility"),
+                ),
+            ],
+            _phrase_name("projects"),
+        ),
+    ]
+
+
+def _lexical_term_queries(query_text: str) -> list[dict[str, Any]]:
+    fields = [
+        "application.position_name^4",
+        "candidate.name^4",
+        "candidate.school^3",
+        "candidate.major^4",
+        "section_text.projects^3",
+        "section_text.internships^3",
+        "section_text.education^3",
+        "skills_text^6",
+    ]
+    return [
+        {
+            "multi_match": {
+                "query": query_text,
+                "fields": fields,
+                "type": "best_fields",
+                "operator": "and",
+                "boost": 4,
+            }
+        },
+        {
+            "multi_match": {
+                "query": query_text,
+                "fields": fields,
+                "type": "best_fields",
+                "operator": "or",
+                "minimum_should_match": "2<70%",
+                "boost": 1,
+            }
+        },
+        _nested_query(
+            "education",
+            [
+                {"match": {"education.school": {"query": query_text, "operator": "and", "boost": 4}}},
+                {"match": {"education.college": {"query": query_text, "operator": "and", "boost": 4}}},
+                {"match": {"education.major": {"query": query_text, "operator": "and", "boost": 5}}},
+                {
+                    "match": {
+                        "education.research_direction": {
+                            "query": query_text,
+                            "operator": "and",
+                            "boost": 3,
+                        }
+                    }
+                },
+                {"match": {"education.lab_name": {"query": query_text, "operator": "and", "boost": 2}}},
+            ],
+        ),
+        _nested_query(
+            "projects",
+            [
+                {"match": {"projects.name": {"query": query_text, "operator": "and", "boost": 4}}},
+                {"match": {"projects.description": {"query": query_text, "operator": "and", "boost": 2}}},
+                {"match": {"projects.responsibility": {"query": query_text, "operator": "and", "boost": 2}}},
+            ],
+        ),
+        _nested_query(
+            "internships",
+            [
+                {"match": {"internships.title": {"query": query_text, "operator": "and", "boost": 3}}},
+                {"match": {"internships.department": {"query": query_text, "operator": "and", "boost": 2}}},
+                {"match": {"internships.description": {"query": query_text, "operator": "and", "boost": 2}}},
+            ],
+        ),
+    ]
+
+
+def _term_query(field: str, value: str, boost: float, name: str | None = None) -> dict[str, Any]:
+    params: dict[str, Any] = {"value": value, "boost": boost}
+    if name:
+        params["_name"] = name
+    return {"term": {field: params}}
+
+
+def _match_phrase_query(
+    field: str,
+    query_text: str,
+    boost: float,
+    name: str | None = None,
+) -> dict[str, Any]:
+    params: dict[str, Any] = {"query": query_text, "slop": 0, "boost": boost}
+    if name:
+        params["_name"] = name
+    return {"match_phrase": {field: params}}
+
+
+def _nested_query(
+    path: str,
+    should: list[dict[str, Any]],
+    name: str | None = None,
+) -> dict[str, Any]:
+    nested: dict[str, Any] = {
+        "path": path,
+        "score_mode": "max",
+        "query": {
+            "bool": {
+                "should": should,
+                "minimum_should_match": 1,
+            }
+        },
+    }
+    if name:
+        nested["_name"] = name
+    return {"nested": nested}
+
+
+def _exact_name(label: str) -> str:
+    return f"{LEXICAL_EXACT_QUERY_PREFIX}{label}"
+
+
+def _phrase_name(label: str) -> str:
+    return f"{LEXICAL_PHRASE_QUERY_PREFIX}{label}"
 
 
 def _term_coverage_queries(query_text: str) -> list[dict[str, Any]]:
@@ -716,6 +840,7 @@ def _term_coverage_filter(token: str) -> dict[str, Any]:
                 {"term": {"candidate.phone": token}},
                 {"term": {"candidate.email": token}},
                 {"term": {"candidate.school.keyword": token}},
+                {"term": {"candidate.major.keyword": token}},
                 {"term": {"application.company": token}},
                 {"term": {"application.position_name.keyword": token}},
                 {"term": {"skills": token}},
@@ -763,6 +888,7 @@ def _term_coverage_filter(token: str) -> dict[str, Any]:
                             "bool": {
                                 "should": [
                                     {"term": {"education.school.keyword": token}},
+                                    {"term": {"education.major.keyword": token}},
                                     {
                                         "term": {
                                             "education.education_level": (
@@ -808,6 +934,7 @@ def _term_coverage_filter(token: str) -> dict[str, Any]:
                         "query": {
                             "bool": {
                                 "should": [
+                                    {"term": {"projects.name.keyword": token}},
                                     {"match": {"projects.name": token}},
                                     {"match": {"projects.description": token}},
                                     {"match": {"projects.responsibility": token}},
@@ -856,7 +983,7 @@ def _run_hybrid_search(
     requests_to_run = [
         (BM25_RETRIEVER, BM25_RRF_WEIGHT, _bm25_body(query_text, filters, rank_window_size)),
     ]
-    vector_fields = _available_vector_fields() if use_dense else ()
+    vector_fields = VECTOR_FIELDS if use_dense else ()
     if vector_fields:
         requests_to_run.append(
             (
@@ -887,27 +1014,6 @@ def _run_hybrid_search(
             response["_rrf_weight"] = weight
             responses.append(response)
     return responses, warnings
-
-
-def _available_vector_fields() -> tuple[str, ...]:
-    global _vector_fields_cache
-    now = time.monotonic()
-    if _vector_fields_cache and _vector_fields_cache[0] > now:
-        return _vector_fields_cache[1]
-
-    mapping = _es("GET", f"/{INDEX_ALIAS}/_mapping")
-    properties: dict[str, Any] = {}
-    for index_mapping in mapping.values():
-        properties.update(index_mapping.get("mappings", {}).get("properties", {}))
-
-    fields = tuple(
-        field
-        for field in VECTOR_FIELDS
-        if properties.get(field, {}).get("type") == "dense_vector"
-    )
-    _vector_fields_cache = (now + VECTOR_FIELDS_CACHE_TTL_SECONDS, fields)
-    return fields
-
 
 # ---------------------------------------------------------------------------
 # manual RRF merge  (ES Basic license does not include built-in RRF)
@@ -944,7 +1050,9 @@ def _rrf_merge(
     rrf_scores: dict[str, float] = {}
     hit_map: dict[str, dict[str, Any]] = {}
     best_rank: dict[str, int] = {}
+    bm25_rank: dict[str, int] = {}
     term_coverage: dict[str, int] = {}
+    lexical_tier: dict[str, int] = {}
     retrieval_debug: dict[str, dict[str, Any]] = {}
     lexical_ids = _lexical_doc_ids(responses)
     coverage_enabled = len(_coverage_tokens(query_text)) >= 2
@@ -960,6 +1068,12 @@ def _rrf_merge(
                 term_coverage[doc_id] = max(
                     term_coverage.get(doc_id, 0),
                     _matched_term_coverage(hit),
+                )
+            if retriever_name == BM25_RETRIEVER:
+                bm25_rank[doc_id] = rank
+                lexical_tier[doc_id] = max(
+                    lexical_tier.get(doc_id, 0),
+                    _matched_lexical_tier(hit),
                 )
             if doc_id not in hit_map or hit.get("highlight"):
                 hit_map[doc_id] = hit
@@ -982,7 +1096,9 @@ def _rrf_merge(
     sorted_ids = sorted(
         rrf_scores.keys(),
         key=lambda k: (
+            -lexical_tier.get(k, 0),
             -term_coverage.get(k, 0),
+            bm25_rank.get(k, 10**9) if lexical_tier.get(k, 0) >= 2 else 10**9,
             -rrf_scores[k],
             best_rank.get(k, 10**9),
             k,
@@ -995,6 +1111,7 @@ def _rrf_merge(
         hit["_retrieval_debug"] = {
             **retrieval_debug.get(doc_id, {}),
             "rrf_score": round(rrf_scores[doc_id], 6),
+            "lexical_tier": lexical_tier.get(doc_id, 0),
         }
         if coverage_enabled:
             hit["_retrieval_debug"]["term_coverage"] = term_coverage.get(doc_id, 0)
@@ -1011,6 +1128,21 @@ def _matched_term_coverage(hit: dict[str, Any]) -> int:
             if isinstance(query_name, str) and query_name.startswith(COVERAGE_QUERY_PREFIX)
         }
     )
+
+
+def _matched_lexical_tier(hit: dict[str, Any]) -> int:
+    matched_queries = hit.get("matched_queries") or []
+    if any(
+        isinstance(query_name, str) and query_name.startswith(LEXICAL_EXACT_QUERY_PREFIX)
+        for query_name in matched_queries
+    ):
+        return 3
+    if any(
+        isinstance(query_name, str) and query_name.startswith(LEXICAL_PHRASE_QUERY_PREFIX)
+        for query_name in matched_queries
+    ):
+        return 2
+    return 1 if matched_queries else 0
 
 
 def _accepted_hits(

@@ -195,6 +195,55 @@ class SearchLogicTests(unittest.TestCase):
         self.assertEqual(results[0]["retrieval_debug"]["term_coverage"], 2)
         self.assertEqual(results[1]["retrieval_debug"]["term_coverage"], 1)
 
+    def test_phrase_evidence_takes_priority_over_split_terms_and_dense_rank(self) -> None:
+        bm25_response = _response(
+            BM25_RETRIEVER,
+            [
+                _hit("split-and-dense", "计算机 与 科学", matched_queries=["query_term:0"]),
+                _hit("phrase", "计算机科学", matched_queries=["lexical_phrase:candidate_major"]),
+            ],
+        )
+        vector_response = _response(
+            DENSE_RETRIEVER,
+            [
+                _hit("split-and-dense", "计算机 与 科学", score=0.9),
+            ],
+        )
+
+        results = _rrf_merge(
+            [bm25_response, vector_response],
+            10,
+            allow_dense_only=True,
+            query_text="计算机科学",
+        )
+
+        self.assertEqual([item["id"] for item in results], ["phrase", "split-and-dense"])
+        self.assertEqual(results[0]["retrieval_debug"]["lexical_tier"], 2)
+
+    def test_phrase_tier_uses_bm25_rank_before_dense_rrf_boost(self) -> None:
+        bm25_response = _response(
+            BM25_RETRIEVER,
+            [
+                _hit("major-phrase", "专业短语", matched_queries=["lexical_phrase:candidate_major"]),
+                _hit("weak-field-phrase", "弱字段短语", matched_queries=["lexical_phrase:section_education"]),
+            ],
+        )
+        vector_response = _response(
+            DENSE_RETRIEVER,
+            [
+                _hit("weak-field-phrase", "弱字段短语", score=0.9),
+            ],
+        )
+
+        results = _rrf_merge(
+            [bm25_response, vector_response],
+            10,
+            allow_dense_only=True,
+            query_text="计算机科学",
+        )
+
+        self.assertEqual([item["id"] for item in results], ["major-phrase", "weak-field-phrase"])
+
     def test_dense_only_hits_need_similarity_gate(self) -> None:
         bm25_response = _response(
             BM25_RETRIEVER,
@@ -397,6 +446,19 @@ class SearchLogicTests(unittest.TestCase):
         self.assertIn("application.company", query_json)
         self.assertIn("application.wishes", query_json)
 
+    def test_lexical_query_prioritizes_exact_major_and_phrase_evidence(self) -> None:
+        query_json = json.dumps(_lexical_query("计算机科学"), ensure_ascii=False)
+
+        self.assertIn("candidate.major.keyword", query_json)
+        self.assertIn("education.major.keyword", query_json)
+        self.assertIn("projects.name.keyword", query_json)
+        self.assertIn("candidate.major.phrase", query_json)
+        self.assertIn("education.major.phrase", query_json)
+        self.assertIn("lexical_exact:candidate_major", query_json)
+        self.assertIn("lexical_phrase:candidate_major", query_json)
+        self.assertIn("lexical_phrase:education_major", query_json)
+        self.assertIn('"operator": "and"', query_json)
+
     def test_lexical_query_adds_named_term_coverage_for_multi_term_queries(self) -> None:
         single_term_json = json.dumps(_lexical_query("A"), ensure_ascii=False)
         multi_term_json = json.dumps(_lexical_query("A B"), ensure_ascii=False)
@@ -443,6 +505,13 @@ class SearchLogicTests(unittest.TestCase):
         self.assertEqual(meta["semantic_profile_version"], SEMANTIC_PROFILE_VERSION)
         self.assertEqual(meta["embedding_normalized"], EMBEDDING_NORMALIZED)
         self.assertIn("embedding", INDEX_BODY["mappings"]["properties"])
+        props = INDEX_BODY["mappings"]["properties"]
+        self.assertIn("keyword", props["candidate"]["properties"]["major"]["fields"])
+        self.assertIn("phrase", props["candidate"]["properties"]["major"]["fields"])
+        self.assertIn("keyword", props["education"]["properties"]["major"]["fields"])
+        self.assertIn("phrase", props["education"]["properties"]["major"]["fields"])
+        self.assertIn("keyword", props["projects"]["properties"]["name"]["fields"])
+        self.assertIn("phrase", props["projects"]["properties"]["name"]["fields"])
 
 
 def _response(

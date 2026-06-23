@@ -1,8 +1,8 @@
 # 简历检索系统
 
-这是一个基于 FastAPI 和 Elasticsearch 的简历检索原型，用于验证简历场景下的关键词检索、结构化过滤、向量检索和 RRF 混合排序。
+这是一个基于 FastAPI 和 Elasticsearch 的简历检索原型，用于验证简历场景下的关键词检索、连续短语匹配、结构化过滤、向量检索和 RRF 混合排序。
 
-本文重点说明检索字段如何分工，以及 BM25、keyword/filter、dense vector、应用层手写 RRF 在完整 use case 中分别解决什么问题。开发过程中的踩坑、错误决策和复盘见 [PROJECT_REVIEW.md](./PROJECT_REVIEW.md)。
+本文重点说明检索字段如何分工，以及 exact keyword、phrase、BM25、filter、dense vector、应用层手写 RRF 在完整 use case 中分别解决什么问题。开发过程中的踩坑、错误决策和复盘见 [PROJECT_REVIEW.md](./PROJECT_REVIEW.md)。
 
 ## 检索设计原则
 
@@ -16,7 +16,7 @@
 核心原则：
 
 ```text
-BM25 / keyword 检索“字段上写了什么”。
+keyword / phrase / BM25 检索“字段上写了什么”。
 向量检索“这个人做过什么、能力像什么”。
 RRF 把精确匹配和语义匹配结合起来。
 ```
@@ -27,19 +27,21 @@ RRF 把精确匹配和语义匹配结合起来。
 用户查询
   ├─ 轻量结构化解析
   │    └─ 从自然语言中识别明确年限、城市、学历、技能筛选
-  ├─ BM25 / keyword / filter 检索
-  │    └─ 负责实体、关键词、结构化条件，并统计多词覆盖度
+  ├─ BM25 / keyword / phrase / filter 检索
+  │    └─ 负责实体、连续短语、关键词、结构化条件，并统计多词覆盖度
   ├─ dense vector 检索
   │    └─ 负责能力、职责、项目、经历语义
   └─ RRF 融合排序
-       └─ 先按查询词覆盖度分档，再融合 BM25 / dense 名次
+       └─ 先按 exact/phrase 词面证据分层，再融合 BM25 / dense 名次
 ```
 
 当前实现有几个边界：
 
 - 当前只有一个主语义向量字段：`semantic_profile_vector`。表格里的“是否进入向量”表示字段内容是否会参与这个语义 profile 的文本拼接，不表示每个字段都有独立向量。
+- 当前代码只支持最新 mapping，不兼容缺少 `semantic_profile_vector`、`.keyword` 或 `.phrase` 子字段的旧索引。mapping 变化后必须重建新索引。
 - RRF 在应用层手写实现：后端并发请求 BM25 和 kNN，再按 `weight / (rank_constant + rank)` 合并名次，不依赖 Elasticsearch 内置 `retriever.rrf`。
 - 候选人编号、岗位编号、手机号、邮箱、学校、公司等精确查询优先走 keyword/BM25，不触发 dense vector。
+- 关键 text 字段同时保留 `ik_max_word` 的宽召回字段和 `ik_smart` 的 `.phrase` 子字段。连续短语查询走 `.phrase`，避免 `ik_max_word` 的重叠 token 破坏 `match_phrase` 位置匹配。
 - `自然语言处理`、`深度学习`、`推荐召回`、`模型落地` 这类短能力表达会触发 dense vector，不再要求必须是长句。
 - 前端技能筛选是 AND 语义，选择 `Python` 和 `NLP` 表示候选人必须同时具备两个技能。
 - 用户直接输入 `0.5年以上 北京 本科 推荐系统` 时，会基于索引里的城市、学历、技能词表和明确年限模式解析成 filter + 剩余 query；普通 `推荐系统 NLP SQL` 仍作为宽召回文本查询，不强行拆成多个硬过滤。
@@ -64,10 +66,10 @@ RRF 把精确匹配和语义匹配结合起来。
 | 投递信息 | `application.apply_time` | date 排序/过滤 | 否 | 按投递时间排序 |
 | 投递信息 | `application.company` | keyword 精确查 | 否 | 投递公司过滤 |
 | 投递信息 | `application.position_code` | keyword 精确查 | 否 | 岗位编号查询 |
-| 投递信息 | `application.position_name` | BM25 + keyword | 是，末尾补充 | 岗位名称搜索、岗位语义 |
+| 投递信息 | `application.position_name` | keyword + phrase + BM25 | 是，末尾补充 | 岗位名称搜索、岗位语义 |
 | 投递信息 | `application.expected_work_cities` | keyword filter | 否 | 期望城市筛选 |
 | 投递志愿 | `application.wishes.rank` | integer | 否 | 志愿排序 |
-| 投递志愿 | `application.wishes.position_name` | nested BM25 | 否 | 志愿岗位搜索 |
+| 投递志愿 | `application.wishes.position_name` | nested phrase + BM25 | 否 | 志愿岗位搜索 |
 | 投递志愿 | `application.wishes.company` | nested keyword | 否 | 志愿公司过滤 |
 | 候选人 | `candidate.name` | keyword + BM25 | 否 | 姓名精确查询 |
 | 候选人 | `candidate.gender` | keyword filter | 否 | 性别筛选 |
@@ -75,36 +77,36 @@ RRF 把精确匹配和语义匹配结合起来。
 | 候选人 | `candidate.current_city` | keyword filter | 否 | 当前城市筛选 |
 | 候选人 | `candidate.highest_degree` | keyword filter | 否 | 最高学历筛选 |
 | 候选人 | `candidate.graduation_date` | date filter | 否 | 毕业时间筛选 |
-| 候选人 | `candidate.school` | keyword + BM25 phrase | 否 | 毕业院校精确查询 |
-| 候选人 | `candidate.major` | BM25 | 是，末尾补充 | 专业搜索、专业语义 |
+| 候选人 | `candidate.school` | keyword + phrase + BM25 | 否 | 毕业院校精确查询 |
+| 候选人 | `candidate.major` | keyword + phrase + BM25 | 是，末尾补充 | 专业搜索、专业语义 |
 | 候选人 | `candidate.phone` | keyword 精确查 | 否 | 联系方式查询 |
 | 候选人 | `candidate.email` | keyword 精确查 | 否 | 联系方式查询 |
 | 候选人 | `candidate.years_experience` | range filter | 否 | 工作/实习年限筛选 |
 | 教育经历 | `education.start_date` | nested date | 否 | 教育时间过滤 |
 | 教育经历 | `education.end_date` | nested date | 否 | 教育时间过滤 |
-| 教育经历 | `education.school` | nested keyword + BM25 phrase | 否 | 学校精确查询 |
-| 教育经历 | `education.college` | nested BM25 | 否 | 学院查询 |
-| 教育经历 | `education.major` | nested BM25 | 是 | 专业语义 |
+| 教育经历 | `education.school` | nested keyword + phrase + BM25 | 否 | 学校精确查询 |
+| 教育经历 | `education.college` | nested phrase + BM25 | 否 | 学院查询 |
+| 教育经历 | `education.major` | nested keyword + phrase + BM25 | 是 | 专业语义 |
 | 教育经历 | `education.education_level` | nested keyword/filter | 否 | 本科、硕士等背景 |
 | 教育经历 | `education.degree` | nested keyword/filter | 否 | 学士、硕士等背景 |
-| 教育经历 | `education.research_direction` | nested BM25 | 是 | 研究方向语义 |
-| 教育经历 | `education.lab_name` | nested BM25 | 是，但清理学校/学院实体 | 实验室方向语义 |
+| 教育经历 | `education.research_direction` | nested phrase + BM25 | 是 | 研究方向语义 |
+| 教育经历 | `education.lab_name` | nested phrase + BM25 | 是，但清理学校/学院实体 | 实验室方向语义 |
 | 教育经历 | `education.paper_level` | keyword/filter | 否 | 科研背景参考 |
-| 实习经历 | `internships.company` | nested keyword + BM25 phrase | 否 | 实习公司精确查询 |
-| 实习经历 | `internships.department` | nested BM25 | 是 | 部门方向语义 |
-| 实习经历 | `internships.title` | nested BM25 | 是 | 实习职位语义 |
+| 实习经历 | `internships.company` | nested keyword + phrase + BM25 | 否 | 实习公司精确查询 |
+| 实习经历 | `internships.department` | nested phrase + BM25 | 是 | 部门方向语义 |
+| 实习经历 | `internships.title` | nested phrase + BM25 | 是 | 实习职位语义 |
 | 实习经历 | `internships.work_type` | keyword/filter | 否 | 实习性质 |
-| 实习经历 | `internships.description` | nested BM25 | 是 | 工作内容和职责语义 |
-| 项目经历 | `projects.name` | nested BM25 | 是 | 项目名称、项目主题 |
-| 项目经历 | `projects.description` | nested BM25 | 是 | 项目背景和业务场景 |
-| 项目经历 | `projects.responsibility` | nested BM25 | 是 | 项目职责和能力语义 |
+| 实习经历 | `internships.description` | nested phrase + BM25 | 是 | 工作内容和职责语义 |
+| 项目经历 | `projects.name` | nested keyword + phrase + BM25 | 是 | 项目名称、项目主题 |
+| 项目经历 | `projects.description` | nested phrase + BM25 | 是 | 项目背景和业务场景 |
+| 项目经历 | `projects.responsibility` | nested phrase + BM25 | 是 | 项目职责和能力语义 |
 | 技能 | `skills` | keyword 精确查/filter | 是 | 技能标签精确过滤和语义 |
 | 技能 | `skills_text` | BM25 | 是 | 多技能组合检索 |
 | 语言能力 | `languages.english_exam_score` | keyword/filter | 否 | 英语等级筛选 |
 | 语言能力 | `languages.english_spoken_level` | keyword/filter | 否 | 英语口语筛选 |
-| 分段文本 | `section_text.education` | BM25 / highlight | 否 | 教育片段高亮 |
-| 分段文本 | `section_text.internships` | BM25 / highlight | 否 | 实习片段高亮 |
-| 分段文本 | `section_text.projects` | BM25 / highlight | 否 | 项目片段高亮 |
+| 分段文本 | `section_text.education` | phrase + BM25 / highlight | 否 | 教育片段高亮 |
+| 分段文本 | `section_text.internships` | phrase + BM25 / highlight | 否 | 实习片段高亮 |
+| 分段文本 | `section_text.projects` | phrase + BM25 / highlight | 否 | 项目片段高亮 |
 | 原始文本 | `raw_text` | 不索引，仅详情/调试 | 否 | 调试和详情回溯 |
 
 ## 完整候选人样例
@@ -175,7 +177,7 @@ languages:
   english_spoken_level: 可技术面试
 ```
 
-## BM25 / keyword / filter Use Case
+## BM25 / keyword / phrase / filter Use Case
 
 ### 查询：`M20260001`
 
@@ -201,13 +203,28 @@ section_text.education: 学校: 北京交通大学
 
 ```text
 candidate.school.keyword 精确命中
-candidate.school phrase 命中
+candidate.school.phrase 连续短语命中
 nested education.school.keyword 精确命中
-nested education.school phrase 命中
+nested education.school.phrase 连续短语命中
 section_text.education BM25 命中
 ```
 
 这种查询不应该主要靠向量判断，因为用户要找的是“这个学校”本身。
+
+### 查询：`计算机科学`
+
+这是连续短语查询，不应该只按 `计算机` 和 `科学` 两个拆开的词排序。系统把 lexical 证据分为四层：
+
+```text
+1. exact field：字段整体等于 query，例如 candidate.major.keyword = 计算机科学与技术
+2. phrase：query 作为连续短语出现，例如 candidate.major.phrase 命中 计算机科学
+3. all terms：query 分词后的所有词都命中同一个字段
+4. broad terms：普通 BM25 宽召回
+```
+
+其中 `.phrase` 子字段使用 `ik_smart` 建索引，专门服务 `match_phrase`。主字段仍使用 `ik_max_word`，保证普通 BM25 召回足够宽。
+
+因此搜索 `计算机科学` 时，`计算机科学与技术` 会优先于只分散命中 `计算机` 和 `科学` 的候选人；搜索 `计算机科学与技术` 时，`candidate.major.keyword` 或 `education.major.keyword` 完整命中的候选人会进入最高 exact tier。
 
 ### 查询：`百度在线网络技术`
 
@@ -226,7 +243,7 @@ section_text.internships: 企业名称: 百度在线网络技术
 application.company keyword 精确命中
 application.wishes.company nested keyword 精确命中
 nested internships.company.keyword 精确命中
-nested internships.company phrase 命中
+nested internships.company.phrase 连续短语命中
 section_text.internships BM25 命中
 ```
 
@@ -434,22 +451,23 @@ BM25 retriever:
   查 application.candidate_no
   查 application.position_code
   查 application.company
-  查 application.position_name
+  查 application.position_name.keyword / application.position_name.phrase / application.position_name
   查 application.wishes.position_name
   查 application.wishes.company
   查 candidate.name
   查 candidate.phone / candidate.email
-  查 candidate.school
+  查 candidate.school.keyword / candidate.school.phrase / candidate.school
+  查 candidate.major.keyword / candidate.major.phrase / candidate.major
   查 skills_text
   查 skills
   查 section_text.projects
   查 section_text.internships
-  查 nested projects.name
+  查 nested projects.name.keyword / projects.name.phrase / projects.name
   查 nested projects.description
   查 nested projects.responsibility
   查 nested internships.title
   查 nested internships.description
-  查 nested education.major
+  查 nested education.major.keyword / education.major.phrase / education.major
   查 nested education.research_direction
 
 Dense retriever:
@@ -575,13 +593,19 @@ dense-only 候选 _score 必须 >= max(0.855, dense_top1_score - 0.02)
 
 这意味着向量召回只补充“高置信、并且接近 dense top1”的候选，避免语义 top-k 自动填满结果页。当前 `0.855` 是用仓库内评估集校准得到的：它相比 `0.845` 去掉了 dense-only 负例误召回，同时比 `0.875` 保留更多语义召回。
 
-最终排序时，系统先按多词覆盖度排序，再按 RRF 排序：
+最终排序时，系统先按强词面证据分层，再按多词覆盖度和 RRF 排序：
 
 ```text
-1. term_coverage 越大越靠前
-2. term_coverage 相同，再按 rrf_score 越大越靠前
-3. rrf_score 相同，再按最好的单路 rank 越小越靠前
-4. 仍然相同，用文档 id 做稳定排序
+1. lexical_tier 越大越靠前
+   3 = exact field，例如 major.keyword 完整等于 query
+   2 = phrase，例如 major.phrase 连续短语命中 query
+   1 = 其他 BM25 named evidence
+   0 = 没有强词面标记
+2. term_coverage 越大越靠前
+3. exact / phrase tier 内先按 BM25 rank 排，保留字段权重和 phrase 权重的作用
+4. 再按 rrf_score 越大越靠前
+5. rrf_score 相同，再按最好的单路 rank 越小越靠前
+6. 仍然相同，用文档 id 做稳定排序
 ```
 
 因此 dense 的作用是：
@@ -589,7 +613,7 @@ dense-only 候选 _score 必须 >= max(0.855, dense_top1_score - 0.02)
 ```text
 1. 给 BM25 已命中的候选增加一份 Dense rank 的 RRF 加分
 2. 在高置信时补充 BM25 没命中的语义候选
-3. 不会压过多词查询中词面覆盖更完整的候选
+3. 不会压过 exact、phrase 或多词覆盖更完整的强词面候选
 ```
 
 ### 多词覆盖度优先排序
@@ -619,10 +643,12 @@ ES 返回每个 hit 的 matched_queries:
 覆盖度查询不负责主召回，也不应该用高 boost 改写 BM25 原始排序。当前实现先要求候选人命中正常的 keyword、phrase、nested 或 multi_match 查询；coverage query 只在这些候选上统计命中了几个 query token。只命中一个词的候选人仍然可以返回，只是会排在同时命中多个词的候选人后面。最终排序规则是：
 
 ```text
-1. term_coverage 越大越靠前
-2. term_coverage 相同，再按 rrf_score 越大越靠前
-3. rrf_score 相同，再按最好的单路 rank 越小越靠前
-4. 仍然相同，用文档 id 做稳定排序
+1. exact / phrase 词面证据优先
+2. term_coverage 越大越靠前
+3. exact / phrase tier 内先按 BM25 rank 排
+4. 再按 rrf_score 越大越靠前
+5. rrf_score 相同，再按最好的单路 rank 越小越靠前
+6. 仍然相同，用文档 id 做稳定排序
 ```
 
 因此搜索 `A B` 时，期望顺序是：
@@ -662,7 +688,7 @@ returned_count:
   当前响应实际返回的结果数
 
 matched_total:
-  BM25 / keyword / filter 侧的真实命中总数
+  BM25 / keyword / phrase / filter 侧的真实命中总数
 
 candidate_total:
   参与 RRF 融合后被接受的候选数量
@@ -743,7 +769,7 @@ embedding 模型或 pooling / dense 层变化
 VECTOR_DIMS 变化
 semantic_profile_vector 输入字段或顺序变化
 dense_vector mapping / HNSW 参数变化
-analyzer 或 keyword 字段 mapping 变化
+analyzer、keyword 或 phrase 子字段 mapping 变化
 ```
 
 重建索引时使用导入脚本。`data_path` 可以是单个 HTML `.doc` 简历文件，也可以是简历目录：
@@ -829,6 +855,29 @@ for index, body in mapping.items():
 PY
 ```
 
+验证关键 exact / phrase 子字段：
+
+```bash
+python - <<'PY'
+import requests
+
+mapping = requests.get(
+    'http://localhost:9200/resumes_current/_mapping',
+    timeout=10,
+).json()
+props = next(iter(mapping.values()))['mappings']['properties']
+
+checks = {
+    'candidate.major': props['candidate']['properties']['major'],
+    'education.major': props['education']['properties']['major'],
+    'projects.name': props['projects']['properties']['name'],
+}
+
+for field, spec in checks.items():
+    print(field, spec.get('fields'))
+PY
+```
+
 验证主向量覆盖率：
 
 ```bash
@@ -875,6 +924,8 @@ queries = [
     '北京大学',
     '北京交通大学',
     'A0009',
+    '计算机科学',
+    '计算机科学与技术',
     '自然语言处理',
     '做过推荐系统召回和 NLP 模型落地的人',
     '0.5年以上 北京 本科 推荐系统',
@@ -899,7 +950,7 @@ PY
 
 单元测试只能证明检索策略没有明显回归，不能证明线上排序真的有效。实际效果需要维护一份小型标注集，按查询类型覆盖实体查询、能力语义查询、组合过滤查询和负例查询。
 
-仓库里已经提供了一份 100+ 条的评估集 [eval_queries.jsonl](./eval_queries.jsonl)，覆盖实体查询、编号查询、结构化过滤、技能组合、岗位+技能、自然语言语义查询和负例查询。标注项支持两种方式：
+仓库里已经提供了一份 126 条的评估集 [eval_queries.jsonl](./eval_queries.jsonl)，覆盖实体查询、专业 exact/phrase 查询、编号查询、结构化过滤、技能组合、岗位+技能、自然语言语义查询和负例查询。标注项支持两种方式：
 
 - `relevant_ids` / `forbidden_ids`：人工指定相关或不应出现的简历 ID。
 - `relevant_es_query` / `forbidden_es_query`：用 ES DSL 从结构化字段动态生成相关集合，适合学校、岗位、技能、学历、城市这类明确条件。
@@ -947,17 +998,24 @@ NDCG@10
 p50 / p95 latency
 ```
 
-同时保存每条结果的 `bm25_rank`、`dense_rank`、`dense_score`、`rrf_score`、`term_coverage`。这样可以区分问题来自 BM25 召回不足、向量相似度误召回、RRF 融合异常，还是结构化 filter 过严。
+同时保存每条结果的 `lexical_tier`、`bm25_rank`、`dense_rank`、`dense_score`、`rrf_score`、`term_coverage`。这样可以区分问题来自 exact/phrase 证据缺失、BM25 召回不足、向量相似度误召回、RRF 融合异常，还是结构化 filter 过严。
 
 当前这份扩展评估集的 dense-only 阈值扫描结论是：
 
 ```text
 0.820-0.845: NDCG@10 最高，但负例 empty_acc 下降，dense-only 误召回偏多
-0.855: empty_acc 达到 1.0，同时保持更高的 NDCG@10 和 Recall@10
+0.855: empty_acc 达到 1.0，同时保持较高的 NDCG@10=0.928 和 Recall@10=0.492
 0.875+: forbidden 命中更少，但开始明显损伤自然语言语义查询召回
 ```
 
 所以当前默认值使用 `DENSE_ONLY_MIN_SCORE = 0.855`。
+
+当前专业 exact/phrase 回归结果：
+
+```text
+entity_major: P@5=1.000, R@10=1.000, NDCG@10=1.000
+phrase_major: P@5=1.000, R@10=0.900, NDCG@10=0.927
+```
 
 ## 开发复盘
 

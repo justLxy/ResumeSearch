@@ -122,3 +122,5 @@
 {"id":"negative_aero_engine","type":"negative_semantic","query":"航空发动机结构设计","relevant_ids":[],"expect_empty":true}
 {"id":"negative_legal","type":"negative_semantic","query":"法务合同审查诉讼仲裁","relevant_ids":[],"expect_empty":true}
 {"id":"negative_drug_registration","type":"negative_semantic","query":"临床试验药物注册申报","relevant_ids":[],"expect_empty":true}
+{"id":"entity_major_cs_full","type":"entity_major","query":"计算机科学与技术","relevant_es_query":{"bool":{"should":[{"term":{"candidate.major.keyword":"计算机科学与技术"}},{"nested":{"path":"education","query":{"term":{"education.major.keyword":"计算机科学与技术"}}}}],"minimum_should_match":1}}}
+{"id":"phrase_major_cs","type":"phrase_major","query":"计算机科学","relevant_es_query":{"bool":{"should":[{"match_phrase":{"candidate.major.phrase":"计算机科学"}},{"nested":{"path":"education","query":{"match_phrase":{"education.major.phrase":"计算机科学"}}}}],"minimum_should_match":1}}}
