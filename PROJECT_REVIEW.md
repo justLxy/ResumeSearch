@@ -29,22 +29,20 @@
 当前系统是一个基于 FastAPI 和 Elasticsearch 的简历检索原型，核心链路如下：
 
 1. 解析简历或生成 mock 简历，抽取候选人、教育经历、实习经历、项目经历、技能、投递信息等结构化字段。
-2. 在导入阶段生成多路向量：
-   - `search_text_vector`：岗位、专业、技能、教育语义、实习语义、项目语义的综合向量。
-   - `skills_vector`：技能标签向量。
-   - `projects_vector`：项目名称、项目描述、项目职责向量。
-   - `internships_vector`：部门、岗位、工作性质、工作描述向量。
-   - `education_vector`：学历、学位、专业、研究方向、实验室、论文等级向量。
+2. 在导入阶段生成一路主语义向量：
+   - `semantic_profile_vector`：项目、实习、技能、教育方向、目标岗位和专业背景组成的抽取式 profile。
+   - 姓名、学校、城市、公司、联系方式、候选人编号、岗位编号等实体字段不进入向量，避免实体查询被语义泛化污染。
 3. Elasticsearch mapping 同时保留：
    - `text` 字段用于 IK 分词和 BM25。
    - `keyword` 字段用于精确过滤和实体匹配。
    - `nested` 字段用于教育、实习、项目等一对多结构。
    - `dense_vector` 字段用于 kNN 向量检索。
-4. 查询阶段并行执行 BM25 和多路 kNN。
-5. 使用手写加权 RRF 融合排序：
+4. 查询阶段并行执行 BM25 和 `semantic_profile_vector` kNN。
+5. 使用应用层手写加权 RRF 融合排序：
    - BM25 负责候选池和词面证据。
-   - 向量检索只参与有词面证据候选人的重排。
-   - 避免纯语义向量把弱相关候选人召回到最终结果。
+   - 向量检索给 BM25 已命中的候选增加 dense rank 贡献。
+   - BM25 没命中的 dense-only 候选只有在高置信阈值内才会少量补充。
+   - 避免纯语义向量把弱相关候选人自动填满最终结果。
 
 当前设计的核心原则是：实体型查询要尊重精确性，能力型查询要利用语义泛化，混合检索不能让向量泛化破坏实体匹配。
 
@@ -56,7 +54,8 @@
 | `import_to_es.py` | 定义 ES mapping、生成 embedding、批量写入、alias 切换 | dense_vector 维度、向量字段设计、versioned index、delete missing |
 | `embedding_service.py` | 下载和加载 embedding 模型，统一编码和归一化 | 模型目录结构、1792 维输出、查询和写入一致性 |
 | `app.py` | FastAPI 服务、BM25/kNN 查询、手写 RRF、结果格式化 | 混合检索职责划分、RRF 权重、BM25 候选门控、返回计数 |
-| `generate_mock_resumes.py` | 生成并导入 mock 简历 | 数据区分度、岗位画像、多字段向量覆盖 |
+| `eval_queries.jsonl` | 小型检索效果评估集 | 实体、技能、过滤、语义和负例 query 的相关性标注 |
+| `evaluate_search.py` | 批量运行评估并扫描 dense-only 阈值 | P@K、R@K、MRR@10、NDCG@10、空结果和 forbidden 命中 |
 | `tests/test_search_logic.py` | 检索策略和数据处理的行为测试 | 防止向量单独召回、实体进入向量文本、经验年限误算 |
 | `web/app.js`、`web/index.html` | 前端搜索、筛选、结果展示 | 返回数量与匹配数量区分、空查询浏览、筛选交互 |
 
@@ -794,7 +793,7 @@ mock 数据不是随便造字段。用于检索评估的 mock 数据必须有可
 
 **问题背景**
 
-为了提升语义召回，系统使用 5 个向量字段，并行执行 5 路 kNN 加 1 路 BM25。
+历史版本为了提升语义召回，曾使用 5 个向量字段，并行执行 5 路 kNN 加 1 路 BM25。当前实现已经收敛为 1 路 `semantic_profile_vector`。
 
 **错误表现**
 
@@ -812,14 +811,14 @@ mock 数据不是随便造字段。用于检索评估的 mock 数据必须有可
 
 当前开发环境采用：
 
-- 并行执行多个 ES 请求，降低串行等待时间。
+- 并行执行 BM25 和 1 路 kNN，降低串行等待时间。
 - `_source` 排除大字段和向量字段，减少网络传输。
 - `rank_window_size` 和 `KNN_NUM_CANDIDATES` 设置上限。
 - facets 和向量字段列表做缓存。
 
 后续生产优化方向：
 
-- 做离线评估，保留贡献最大的向量字段。
+- 做离线评估，决定是否继续保留单一 profile，还是拆分出少量高收益向量字段。
 - 对短 query、实体 query 降低向量参与度。
 - 引入 reranker 时减少初召窗口。
 - 使用 pagination/search_after，避免大窗口深翻页。
@@ -832,13 +831,13 @@ mock 数据不是随便造字段。用于检索评估的 mock 数据必须有可
 
 可以这样说：
 
-> 我用了多路向量来表达技能、项目、实习、教育等不同语义面，但也意识到每路 kNN 都有成本。所以查询侧并行执行，source 排除向量字段，并控制 rank window 和 num_candidates。后续要通过评估集决定哪些向量字段值得保留。
+> 我早期尝试过多路向量表达技能、项目、实习、教育等不同语义面，但每路 kNN 都有成本。后来收敛成一路抽取式 `semantic_profile_vector`，查询侧只并行 BM25 和 1 路 kNN，同时排除大字段和向量字段，并控制 rank window 和 num_candidates。后续是否拆分向量字段要由评估集决定。
 
 ### 20. `_source` 返回大字段和向量会浪费网络与内存
 
 **问题背景**
 
-ES 文档中包含原始文本、分段文本、搜索拼接文本和多个 1792 维向量。
+ES 文档中包含原始文本、分段文本、搜索拼接文本和 1792 维语义向量。
 
 **错误表现**
 
@@ -939,7 +938,7 @@ ES 文档中包含原始文本、分段文本、搜索拼接文本和多个 1792
 
 **解决方案**
 
-在 `tests/test_search_logic.py` 中增加行为测试，当前测试为 `6 passed`。
+在 `tests/test_search_logic.py` 中增加行为测试，当前测试为 `23 passed`。
 
 **经验教训**
 
@@ -1058,11 +1057,7 @@ python - <<'PY'
 import requests
 
 fields = [
-    'search_text_vector',
-    'skills_vector',
-    'projects_vector',
-    'internships_vector',
-    'education_vector',
+    'semantic_profile_vector',
 ]
 
 for field in fields:

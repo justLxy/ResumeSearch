@@ -404,6 +404,18 @@ class SearchLogicTests(unittest.TestCase):
         self.assertIn("query_term:0", multi_term_json)
         self.assertIn("query_term:1", multi_term_json)
 
+    def test_term_coverage_does_not_act_as_primary_recall_clause(self) -> None:
+        query = _lexical_query("A B")
+        bool_query = query["bool"]
+
+        self.assertIn("must", bool_query)
+        self.assertIn("should", bool_query)
+        scoring_query_json = json.dumps(bool_query["must"], ensure_ascii=False)
+        coverage_query_json = json.dumps(bool_query["should"], ensure_ascii=False)
+
+        self.assertNotIn("query_term:0", scoring_query_json)
+        self.assertIn("query_term:0", coverage_query_json)
+
     def test_lexical_total_uses_bm25_total_not_candidate_window(self) -> None:
         bm25_response = _response(
             BM25_RETRIEVER,

@@ -2,7 +2,7 @@
 
 这是一个基于 FastAPI 和 Elasticsearch 的简历检索原型，用于验证简历场景下的关键词检索、结构化过滤、向量检索和 RRF 混合排序。
 
-本文重点说明检索字段如何分工，以及 BM25、keyword/filter、dense vector、RRF 在完整 use case 中分别解决什么问题。开发过程中的踩坑、错误决策和复盘见 [PROJECT_REVIEW.md](./PROJECT_REVIEW.md)。
+本文重点说明检索字段如何分工，以及 BM25、keyword/filter、dense vector、应用层手写 RRF 在完整 use case 中分别解决什么问题。开发过程中的踩坑、错误决策和复盘见 [PROJECT_REVIEW.md](./PROJECT_REVIEW.md)。
 
 ## 检索设计原则
 
@@ -37,16 +37,18 @@ RRF 把精确匹配和语义匹配结合起来。
 
 当前实现有几个边界：
 
+- 当前只有一个主语义向量字段：`semantic_profile_vector`。表格里的“是否进入向量”表示字段内容是否会参与这个语义 profile 的文本拼接，不表示每个字段都有独立向量。
+- RRF 在应用层手写实现：后端并发请求 BM25 和 kNN，再按 `weight / (rank_constant + rank)` 合并名次，不依赖 Elasticsearch 内置 `retriever.rrf`。
 - 候选人编号、岗位编号、手机号、邮箱、学校、公司等精确查询优先走 keyword/BM25，不触发 dense vector。
 - `自然语言处理`、`深度学习`、`推荐召回`、`模型落地` 这类短能力表达会触发 dense vector，不再要求必须是长句。
 - 前端技能筛选是 AND 语义，选择 `Python` 和 `NLP` 表示候选人必须同时具备两个技能。
 - 用户直接输入 `0.5年以上 北京 本科 推荐系统` 时，会基于索引里的城市、学历、技能词表和明确年限模式解析成 filter + 剩余 query；普通 `推荐系统 NLP SQL` 仍作为宽召回文本查询，不强行拆成多个硬过滤。
 - 多词文本查询会优先排序“覆盖更多查询词”的候选人。例如搜索 `A B` 时，同时命中 `A` 和 `B` 的候选人会排在只高频命中 `A` 或只高频命中 `B` 的候选人前面。
-- 空查询和只有筛选条件的浏览场景会返回 ES 默认窗口内的全部候选人；有关键词的混合检索仍保留单次返回上限，因为 RRF/kNN 是排序候选窗口，不适合一次拉无限结果。
+- 空查询和只有筛选条件的浏览场景按投递时间浏览候选人，最多返回 `MAX_BROWSE_RESULT_SIZE` 条；有关键词的混合检索仍保留单次返回上限，因为 RRF/kNN 是排序候选窗口，不适合一次拉无限结果。
 
 ## 检索字段分工
 
-下表按当前简历结构和 Elasticsearch mapping 组织。当前未索引的字段不代表业务上永远不能搜索，只表示当前 mapping 尚未把它纳入可检索字段。后续如果有业务需求，可以补 mapping、导入逻辑和查询逻辑。
+下表按当前简历结构和 Elasticsearch mapping 组织。当前未索引的字段不代表业务上永远不能搜索，只表示当前 mapping 尚未把它纳入可检索字段。后续如果有业务需求，可以补 mapping、导入逻辑和查询逻辑。“是否进入向量”指是否进入 `semantic_profile_vector` 的抽取式语义文本。
 
 | 模块 | 字段 | 检索方式 | 是否进入向量 | 典型用途 |
 | --- | --- | --- | --- | --- |
@@ -497,6 +499,99 @@ rrf_score = 1 / (rank_constant + bm25_rank)
 
 这样可以避免 BM25 分数和 cosine similarity 分数尺度不同导致的排序异常。
 
+### 向量排名如何进入最终排序
+
+向量检索的 `_score` 不会直接和 BM25 `_score` 相加。两者分数尺度不同，直接相加会让排序不可控。当前实现只使用向量结果的两个信息：
+
+```text
+1. dense _score:
+   只用于 dense 内部排序，以及判断 BM25 没命中的 dense-only 候选是否足够可信。
+
+2. dense rank:
+   dense 候选通过高置信门槛后，用 rank 参与 RRF 融合。
+```
+
+完整链路如下：
+
+```text
+query
+  ├─ BM25 retriever 返回按词面相关性排序的 top-k
+  └─ Dense retriever 返回按 semantic_profile_vector 相似度排序的 top-k
+
+对每个候选：
+  如果同时出现在 BM25 和 Dense：
+    最终 rrf_score = BM25 rank 贡献 + Dense rank 贡献
+
+  如果只出现在 Dense：
+    先判断 dense-only gate
+    通过后才获得 Dense rank 的 RRF 贡献
+```
+
+RRF 贡献只和 rank 有关：
+
+```text
+单路贡献 = weight / (rank_constant + rank)
+
+当前配置：
+  BM25 weight = 1.0
+  Dense weight = 1.0
+  rank_constant = 60
+```
+
+例如：
+
+```text
+BM25 rank = 1  -> 1 / (60 + 1)  = 0.01639
+Dense rank = 1 -> 1 / (60 + 1)  = 0.01639
+Dense rank = 5 -> 1 / (60 + 5)  = 0.01538
+```
+
+如果候选人 A 同时被 BM25 和 Dense 找到：
+
+```text
+A:
+  BM25 rank = 3
+  Dense rank = 5
+  rrf_score = 1 / 63 + 1 / 65 = 0.03126
+```
+
+如果候选人 B 只被 BM25 找到：
+
+```text
+B:
+  BM25 rank = 1
+  rrf_score = 1 / 61 = 0.01639
+```
+
+所以“两路都支持”的候选会明显上升。
+
+对于 BM25 没命中的 dense-only 候选，不能只因为进入 dense top-k 就进入最终结果。当前门槛是：
+
+```text
+dense top1 _score 必须 >= 0.855
+dense-only 候选 _score 必须 >= max(0.855, dense_top1_score - 0.02)
+每次最多补 8 个 dense-only 候选
+```
+
+这意味着向量召回只补充“高置信、并且接近 dense top1”的候选，避免语义 top-k 自动填满结果页。当前 `0.855` 是用仓库内的小评估集校准得到的：它相比 `0.845` 去掉了一个 dense-only 负例误召回，同时没有降低这批语义正例的 NDCG@10 和 Recall@10。
+
+最终排序时，系统先按多词覆盖度排序，再按 RRF 排序：
+
+```text
+1. term_coverage 越大越靠前
+2. term_coverage 相同，再按 rrf_score 越大越靠前
+3. rrf_score 相同，再按最好的单路 rank 越小越靠前
+4. 仍然相同，用文档 id 做稳定排序
+```
+
+因此 dense 的作用是：
+
+```text
+1. 给 BM25 已命中的候选增加一份 Dense rank 的 RRF 加分
+2. 在高置信时补充 BM25 没命中的语义候选
+3. 不会压过多词查询中词面覆盖更完整的候选
+```
+
 ### 多词覆盖度优先排序
 
 普通 BM25 会受词频、字段长度、字段权重影响。也就是说，搜索 `A B` 时，一个候选人如果只写了很多次 `A`，可能会比另一个同时写了 `A` 和 `B`、但词频较低的候选人分数更高。简历检索里这通常不是用户想要的结果：多词查询更像是在表达多个条件或多个能力点，优先级应该是“覆盖了几个查询词”，然后才是“每个词出现得多不多”。
@@ -510,7 +605,7 @@ query tokens:
   A
   B
 
-BM25 侧额外加入 named constant_score 查询：
+BM25 侧额外加入 named constant_score 查询，用于打 `matched_queries` 标记：
   query_term:0 -> 判断候选人是否命中 A
   query_term:1 -> 判断候选人是否命中 B
 
@@ -518,10 +613,10 @@ ES 返回每个 hit 的 matched_queries:
   A B 0 0   -> ["query_term:0", "query_term:1"] -> term_coverage = 2
   A A A 0   -> ["query_term:0"]                 -> term_coverage = 1
   0 B B B   -> ["query_term:1"]                 -> term_coverage = 1
-  0 0 0 0   -> []                               -> term_coverage = 0
+  0 0 0 0   -> []                               -> term_coverage = 0，如果没有其他召回证据通常不会进入结果
 ```
 
-覆盖度查询不是硬过滤。只命中一个词的候选人仍然可以返回，只是会排在同时命中多个词的候选人后面。最终排序规则是：
+覆盖度查询不负责主召回，也不应该用高 boost 改写 BM25 原始排序。当前实现先要求候选人命中正常的 keyword、phrase、nested 或 multi_match 查询；coverage query 只在这些候选上统计命中了几个 query token。只命中一个词的候选人仍然可以返回，只是会排在同时命中多个词的候选人后面。最终排序规则是：
 
 ```text
 1. term_coverage 越大越靠前
@@ -544,6 +639,7 @@ A A A 0
 - 只有有效 query token 至少 2 个时才启用覆盖度排序，单词查询不受影响。
 - query token 会去重，并最多取前 8 个，避免用户输入很长时生成过大的 Elasticsearch DSL。
 - 覆盖度查询会覆盖主要可检索字段，包括编号、姓名、学校、岗位、技能、分段文本，以及 education / internships / projects 等 nested 字段。
+- coverage query 的 boost 很小，只用于保留 `matched_queries` 标记，避免它自己把弱相关文档召回或压过 BM25 字段权重。
 - dense-only 候选没有 BM25 `matched_queries`，所以 `term_coverage = 0`。它们仍可在高置信语义匹配时进入结果，但不会压过有明确多词词面证据的候选。
 
 实际实现中，dense retriever 虽然会向 ES 请求 top-k 最近邻，但这些最近邻不会无条件进入最终结果。规则是：
@@ -650,10 +746,16 @@ dense_vector mapping / HNSW 参数变化
 analyzer 或 keyword 字段 mapping 变化
 ```
 
-本地 mock 数据重建命令：
+重建索引时使用导入脚本。`data_path` 可以是单个 HTML `.doc` 简历文件，也可以是简历目录：
 
 ```bash
-python generate_mock_resumes.py --count 50 --seed 20260616 --recreate --no-output
+python import_to_es.py data_path --es-url http://localhost:9200 --index resumes_v1 --alias resumes_current
+```
+
+如果是增量导入到当前 alias：
+
+```bash
+python import_to_es.py data_path --no-recreate
 ```
 
 ### 为什么不把整份简历直接向量化？
@@ -685,6 +787,171 @@ python generate_mock_resumes.py --count 50 --seed 20260616 --recreate --no-outpu
 ### 未索引字段是不是不能搜？
 
 当前不能直接搜，不代表业务上永远不能搜。比如民族、政治面貌、招聘来源、奖励经历、offer 后实习信息等字段，如果业务需要，可以后续加入 mapping、导入和查询 DSL。
+
+## 本地验证命令
+
+运行单元测试：
+
+```bash
+python -m pytest -q
+```
+
+查看 ES 健康状态和 alias：
+
+```bash
+curl -s 'http://localhost:9200/_cluster/health?pretty'
+curl -s 'http://localhost:9200/_cat/aliases/resumes_current?h=alias,index,is_write_index'
+curl -s 'http://localhost:9200/resumes_current/_count?pretty'
+```
+
+验证当前 mapping 里的 embedding 契约和向量字段：
+
+```bash
+python - <<'PY'
+import requests
+
+mapping = requests.get(
+    'http://localhost:9200/resumes_current/_mapping',
+    timeout=10,
+).json()
+
+for index, body in mapping.items():
+    props = body['mappings']['properties']
+    meta = body['mappings'].get('_meta', {})
+    vector_fields = [
+        name
+        for name, field in props.items()
+        if isinstance(field, dict) and field.get('type') == 'dense_vector'
+    ]
+    print(index)
+    print(meta)
+    print(vector_fields)
+PY
+```
+
+验证主向量覆盖率：
+
+```bash
+python - <<'PY'
+import requests
+
+for field in ['semantic_profile_vector']:
+    result = requests.post(
+        'http://localhost:9200/resumes_current/_count',
+        json={'query': {'exists': {'field': field}}},
+        timeout=10,
+    ).json()
+    print(field, result['count'])
+PY
+```
+
+验证 IK analyzer：
+
+```bash
+python - <<'PY'
+import requests
+
+text = '自然语言处理 推荐系统 北京大学'
+for analyzer in ['resume_text', 'resume_search']:
+    result = requests.post(
+        'http://localhost:9200/resumes_current/_analyze',
+        json={'analyzer': analyzer, 'text': text},
+        timeout=10,
+    ).json()
+    print(analyzer, [item['token'] for item in result['tokens']])
+PY
+```
+
+验证接口级检索行为：
+
+```bash
+python - <<'PY'
+from fastapi.testclient import TestClient
+from app import app
+
+client = TestClient(app)
+
+queries = [
+    '北京大学',
+    '北京交通大学',
+    'A0009',
+    '自然语言处理',
+    '做过推荐系统召回和 NLP 模型落地的人',
+    '0.5年以上 北京 本科 推荐系统',
+]
+
+for query in queries:
+    data = client.get('/api/search', params={'q': query, 'limit': 5}).json()
+    print(query, {
+        'effective_query': data['effective_query'],
+        'matched_total': data['matched_total'],
+        'candidate_total': data['candidate_total'],
+        'returned_count': data['returned_count'],
+        'parsed_constraints': data['parsed_constraints'],
+        'warnings': data['retrieval_warnings'],
+    })
+    for item in data['results'][:3]:
+        print(' ', item['id'], item['candidate'].get('name'), item['retrieval_debug'])
+PY
+```
+
+## 检索效果评估
+
+单元测试只能证明检索策略没有明显回归，不能证明线上排序真的有效。实际效果需要维护一份小型标注集，按查询类型覆盖实体查询、能力语义查询、组合过滤查询和负例查询。
+
+仓库里已经提供了一份小评估集 [eval_queries.jsonl](./eval_queries.jsonl)，覆盖实体查询、编号查询、结构化过滤、技能组合、语义查询和负例查询。标注项支持两种方式：
+
+- `relevant_ids` / `forbidden_ids`：人工指定相关或不应出现的简历 ID。
+- `relevant_es_query` / `forbidden_es_query`：用 ES DSL 从结构化字段动态生成相关集合，适合学校、岗位、技能、学历、城市这类明确条件。
+
+示例：
+
+```json
+{"id":"entity_school_bjtu","type":"entity","query":"北京交通大学","relevant_es_query":{"term":{"candidate.school.keyword":"北京交通大学"}}}
+{"id":"negative_school_peking","type":"negative_entity","query":"北京大学","relevant_ids":[],"expect_empty":true}
+{"id":"sem_recsys_nlp_model","type":"semantic","query":"做过推荐系统召回和 NLP 模型落地的人","relevant_ids":["M20260061","M20260121","M20260101","M20260221","M20260011"],"forbidden_ids":["M20260138"]}
+```
+
+运行评估并扫描 dense-only 阈值：
+
+```bash
+python evaluate_search.py
+```
+
+查看每条 query 的 Top10、命中 ID 和 forbidden ID：
+
+```bash
+python evaluate_search.py --details
+```
+
+也可以指定阈值范围：
+
+```bash
+python evaluate_search.py --thresholds 0.84,0.845,0.855,0.86,0.875
+```
+
+每次调整字段 boost、`RRF_RANK_WINDOW_SIZE`、`KNN_NUM_CANDIDATES`、dense-only 阈值或 embedding profile 后，固定跑同一批 query，至少看这些指标：
+
+```text
+Recall@5 / Recall@10
+Precision@5 / Precision@10
+MRR@10
+NDCG@10
+负例误召回率
+p50 / p95 latency
+```
+
+同时保存每条结果的 `bm25_rank`、`dense_rank`、`dense_score`、`rrf_score`、`term_coverage`。这样可以区分问题来自 BM25 召回不足、向量相似度误召回、RRF 融合异常，还是结构化 filter 过严。
+
+当前这份小评估集的 dense-only 阈值扫描结论是：
+
+```text
+0.845: 语义正例指标好，但负例 query 仍有 dense-only 误召回
+0.855: 保持正例指标，同时消除该负例误召回
+0.875+: 开始损伤语义召回，其中“推荐系统召回和 NLP 模型落地”这类 query 会被过度过滤
+```
+
+所以当前默认值使用 `DENSE_ONLY_MIN_SCORE = 0.855`。
 
 ## 开发复盘
 

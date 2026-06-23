@@ -36,10 +36,10 @@ BM25_RETRIEVER = "bm25"
 DENSE_RETRIEVER = "dense"
 BM25_RRF_WEIGHT = 1.0
 DENSE_RRF_WEIGHT = 1.0
-DENSE_ONLY_MIN_SCORE = 0.845
+DENSE_ONLY_MIN_SCORE = 0.855
 DENSE_ONLY_SCORE_BAND = 0.02
 DENSE_ONLY_MAX_RESULTS = 8
-QUERY_TERM_COVERAGE_BOOST = 1000
+QUERY_TERM_COVERAGE_BOOST = 0.001
 MAX_QUERY_COVERAGE_TERMS = 8
 COVERAGE_QUERY_PREFIX = "query_term:"
 VECTOR_FIELDS = ("semantic_profile_vector",)
@@ -473,8 +473,7 @@ def _bm25_body(query_text: str, filters: list[dict[str, Any]], size: int) -> dic
 
 
 def _lexical_query(query_text: str) -> dict[str, Any]:
-    should: list[dict[str, Any]] = [
-        *_term_coverage_queries(query_text),
+    scoring_should: list[dict[str, Any]] = [
         {"term": {"application.candidate_no": {"value": query_text.upper(), "boost": 40}}},
         {"term": {"application.position_code": {"value": query_text.upper(), "boost": 35}}},
         {"term": {"candidate.name.keyword": {"value": query_text, "boost": 30}}},
@@ -672,7 +671,22 @@ def _lexical_query(query_text: str) -> dict[str, Any]:
             }
         },
     ]
-    return {"bool": {"should": should, "minimum_should_match": 1}}
+    coverage_should = _term_coverage_queries(query_text)
+    if not coverage_should:
+        return {"bool": {"should": scoring_should, "minimum_should_match": 1}}
+    return {
+        "bool": {
+            "must": [
+                {
+                    "bool": {
+                        "should": scoring_should,
+                        "minimum_should_match": 1,
+                    }
+                }
+            ],
+            "should": coverage_should,
+        }
+    }
 
 
 def _term_coverage_queries(query_text: str) -> list[dict[str, Any]]:
