@@ -470,18 +470,19 @@ def _lexical_query(query_text: str) -> dict[str, Any]:
     term_should = _lexical_term_queries(query_text)
     scoring_should = [*exact_should, *phrase_should, *term_should]
     coverage_should = _term_coverage_queries(query_text)
+    scoring_query = {
+        "dis_max": {
+            "queries": scoring_should,
+            "tie_breaker": 0.0
+        }
+    }
+    
     if not coverage_should:
-        return {"bool": {"should": scoring_should, "minimum_should_match": 1}}
+        return scoring_query
+        
     return {
         "bool": {
-            "must": [
-                {
-                    "bool": {
-                        "should": scoring_should,
-                        "minimum_should_match": 1,
-                    }
-                }
-            ],
+            "must": [scoring_query],
             "should": coverage_should,
         }
     }
@@ -511,7 +512,6 @@ def _lexical_exact_queries(query_text: str) -> list[dict[str, Any]]:
                     _exact_name("wish_company"),
                 ),
             ],
-            _exact_name("wishes"),
         ),
         _nested_query(
             "education",
@@ -536,7 +536,6 @@ def _lexical_exact_queries(query_text: str) -> list[dict[str, Any]]:
                 ),
                 _term_query("education.degree", query_text, 8, _exact_name("education_degree")),
             ],
-            _exact_name("education"),
         ),
         _nested_query(
             "internships",
@@ -554,7 +553,6 @@ def _lexical_exact_queries(query_text: str) -> list[dict[str, Any]]:
                     _exact_name("internship_work_type"),
                 ),
             ],
-            _exact_name("internships"),
         ),
         _nested_query(
             "projects",
@@ -566,7 +564,6 @@ def _lexical_exact_queries(query_text: str) -> list[dict[str, Any]]:
                     _exact_name("project_name"),
                 ),
             ],
-            _exact_name("projects"),
         ),
     ]
 
@@ -604,7 +601,6 @@ def _lexical_phrase_queries(query_text: str) -> list[dict[str, Any]]:
                     _phrase_name("wish_position"),
                 ),
             ],
-            _phrase_name("wishes"),
         ),
         _nested_query(
             "education",
@@ -640,7 +636,6 @@ def _lexical_phrase_queries(query_text: str) -> list[dict[str, Any]]:
                     _phrase_name("education_lab"),
                 ),
             ],
-            _phrase_name("education"),
         ),
         _nested_query(
             "internships",
@@ -670,7 +665,6 @@ def _lexical_phrase_queries(query_text: str) -> list[dict[str, Any]]:
                     _phrase_name("internship_description"),
                 ),
             ],
-            _phrase_name("internships"),
         ),
         _nested_query(
             "projects",
@@ -694,7 +688,6 @@ def _lexical_phrase_queries(query_text: str) -> list[dict[str, Any]]:
                     _phrase_name("project_responsibility"),
                 ),
             ],
-            _phrase_name("projects"),
         ),
     ]
 
@@ -713,7 +706,7 @@ def _lexical_term_queries(query_text: str) -> list[dict[str, Any]]:
     return [
         {
             "multi_match": {
-                "_name": "lexical_term:基础信息多字段命中",
+                "_name": "lexical_term:基础信息多字段命中:W4",
                 "query": query_text,
                 "fields": fields,
                 "type": "best_fields",
@@ -723,7 +716,7 @@ def _lexical_term_queries(query_text: str) -> list[dict[str, Any]]:
         },
         {
             "multi_match": {
-                "_name": "lexical_term:基础信息部分命中",
+                "_name": "lexical_term:基础信息部分命中:W1",
                 "query": query_text,
                 "fields": fields,
                 "type": "best_fields",
@@ -735,47 +728,45 @@ def _lexical_term_queries(query_text: str) -> list[dict[str, Any]]:
         _nested_query(
             "education",
             [
-                {"match": {"education.school": {"query": query_text, "operator": "and", "boost": 4}}},
-                {"match": {"education.college": {"query": query_text, "operator": "and", "boost": 4}}},
-                {"match": {"education.major": {"query": query_text, "operator": "and", "boost": 5}}},
+                {"match": {"education.school": {"query": query_text, "operator": "and", "boost": 4, "_name": "lexical_term:教育经历-学校:W4"}}},
+                {"match": {"education.college": {"query": query_text, "operator": "and", "boost": 4, "_name": "lexical_term:教育经历-学院:W4"}}},
+                {"match": {"education.major": {"query": query_text, "operator": "and", "boost": 5, "_name": "lexical_term:教育经历-专业:W5"}}},
                 {
                     "match": {
                         "education.research_direction": {
                             "query": query_text,
                             "operator": "and",
                             "boost": 3,
+                            "_name": "lexical_term:教育经历-研究方向:W3"
                         }
                     }
                 },
-                {"match": {"education.lab_name": {"query": query_text, "operator": "and", "boost": 2}}},
+                {"match": {"education.lab_name": {"query": query_text, "operator": "and", "boost": 2, "_name": "lexical_term:教育经历-实验室:W2"}}},
             ],
-            name="lexical_term:教育经历",
         ),
         _nested_query(
             "projects",
             [
-                {"match": {"projects.name": {"query": query_text, "operator": "and", "boost": 4}}},
-                {"match": {"projects.description": {"query": query_text, "operator": "and", "boost": 2}}},
-                {"match": {"projects.responsibility": {"query": query_text, "operator": "and", "boost": 2}}},
+                {"match": {"projects.name": {"query": query_text, "operator": "and", "boost": 4, "_name": "lexical_term:项目经历-名称:W4"}}},
+                {"match": {"projects.description": {"query": query_text, "operator": "and", "boost": 2, "_name": "lexical_term:项目经历-描述:W2"}}},
+                {"match": {"projects.responsibility": {"query": query_text, "operator": "and", "boost": 2, "_name": "lexical_term:项目经历-职责:W2"}}},
             ],
-            name="lexical_term:项目经历",
         ),
         _nested_query(
             "internships",
             [
-                {"match": {"internships.title": {"query": query_text, "operator": "and", "boost": 3}}},
-                {"match": {"internships.department": {"query": query_text, "operator": "and", "boost": 2}}},
-                {"match": {"internships.description": {"query": query_text, "operator": "and", "boost": 2}}},
+                {"match": {"internships.title": {"query": query_text, "operator": "and", "boost": 3, "_name": "lexical_term:实习经历-职位:W3"}}},
+                {"match": {"internships.department": {"query": query_text, "operator": "and", "boost": 2, "_name": "lexical_term:实习经历-部门:W2"}}},
+                {"match": {"internships.description": {"query": query_text, "operator": "and", "boost": 2, "_name": "lexical_term:实习经历-描述:W2"}}},
             ],
-            name="lexical_term:实习经历",
         ),
     ]
 
 
-def _term_query(field: str, value: str, boost: float, name: str | None = None) -> dict[str, Any]:
+def _term_query(field: str, value: str | int, boost: float, name: str | None = None) -> dict[str, Any]:
     params: dict[str, Any] = {"value": value, "boost": boost}
     if name:
-        params["_name"] = name
+        params["_name"] = f"{name}:W{boost}"
     return {"term": {field: params}}
 
 
@@ -787,7 +778,7 @@ def _match_phrase_query(
 ) -> dict[str, Any]:
     params: dict[str, Any] = {"query": query_text, "slop": 0, "boost": boost}
     if name:
-        params["_name"] = name
+        params["_name"] = f"{name}:W{boost}"
     return {"match_phrase": {field: params}}
 
 

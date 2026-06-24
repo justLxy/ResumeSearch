@@ -163,22 +163,31 @@ function formatMatchedQuery(q) {
   let type = "";
   let key = q;
   let typeClass = "";
-  if (q.startsWith("lexical_exact:")) {
+  let weight = "";
+
+  const wMatch = key.match(/:W([0-9.]+)$/);
+  if (wMatch) {
+    weight = wMatch[1];
+    key = key.replace(wMatch[0], "");
+  }
+
+  if (key.startsWith("lexical_exact:")) {
     type = "[精确匹配]";
     typeClass = "exact";
-    key = q.replace("lexical_exact:", "");
-  } else if (q.startsWith("lexical_phrase:")) {
+    key = key.replace("lexical_exact:", "");
+  } else if (key.startsWith("lexical_phrase:")) {
     type = "[短语匹配]";
     typeClass = "phrase";
-    key = q.replace("lexical_phrase:", "");
-  } else if (q.startsWith("lexical_term:")) {
+    key = key.replace("lexical_phrase:", "");
+  } else if (key.startsWith("lexical_term:")) {
     type = "[普通匹配]";
     typeClass = "term";
-    key = q.replace("lexical_term:", "");
+    key = key.replace("lexical_term:", "");
   }
   
   const fieldName = queryNameMap[key] || key;
-  return { typeClass, text: `${type} ${fieldName}` };
+  const text = weight ? `${type} ${fieldName} (权重:${weight})` : `${type} ${fieldName}`;
+  return { typeClass, text, fieldName };
 }
 
 function renderResults() {
@@ -203,16 +212,27 @@ function renderResults() {
       const rrfScore = debug.rrf_score ?? 0;
 
       const bm25Html = hasBm25 
-        ? `<div class="debug-item"><span class="debug-label">BM25 排名：</span> <span class="debug-value">${debug.bm25_rank} <span class="tier-desc">(分数: ${debug.bm25_score || 0})</span></span></div>` 
+        ? `<div class="debug-item"><span class="debug-label" title="Elasticsearch BM25 原生打分&#10;计算公式: ∑ (词频TF × 逆文档频率IDF × 字段权重Boost)&#10;此分数为下方命中详情中所有匹配特征的得分总和" style="cursor: help; text-decoration: underline dotted var(--muted); text-underline-offset: 4px;">BM25 排名：</span> <span class="debug-value">${debug.bm25_rank} <span class="tier-desc">(分数: ${debug.bm25_score || 0})</span></span></div>` 
         : `<div class="debug-item warning"><span class="debug-label">BM25 命中：</span> <span class="debug-value">否 (未召回)</span></div>`;
         
       const denseHtml = hasDense 
         ? `<div class="debug-item"><span class="debug-label">Dense 排名：</span> <span class="debug-value">${debug.dense_rank} <span class="tier-desc">(分数: ${debug.dense_score || 0})</span></span></div>` 
         : `<div class="debug-item warning"><span class="debug-label">Dense 命中：</span> <span class="debug-value">否 (未召回)</span></div>`;
 
-      const validQueries = (debug.matched_queries || [])
+      const rawQueries = (debug.matched_queries || [])
         .map(q => formatMatchedQuery(q))
         .filter(Boolean);
+        
+      const tierRank = { "exact": 3, "phrase": 2, "term": 1 };
+      const uniqueMap = new Map();
+      rawQueries.forEach(q => {
+        const existing = uniqueMap.get(q.fieldName);
+        if (!existing || tierRank[q.typeClass] > tierRank[existing.typeClass]) {
+          uniqueMap.set(q.fieldName, q);
+        }
+      });
+      
+      const validQueries = Array.from(uniqueMap.values()).sort((a, b) => tierRank[b.typeClass] - tierRank[a.typeClass]);
 
       const matchedQueriesHtml = validQueries.length 
         ? `<div class="debug-item"><span class="debug-label">命中详情：</span>
