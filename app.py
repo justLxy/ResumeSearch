@@ -499,8 +499,8 @@ def _lexical_exact_queries(query_text: str) -> list[dict[str, Any]]:
         _term_query("candidate.major.keyword", query_text, 34, _exact_name("candidate_major")),
         _term_query("application.company", query_text, 30, _exact_name("application_company")),
         _term_query("application.position_name.keyword", query_text, 30, _exact_name("position_name")),
-        _term_query("skills", query_text, 28, _exact_name("skills")),
-        _term_query("candidate.highest_degree", normalized_degree, 10, _exact_name("highest_degree")),
+        _term_query("skills", query_text, 40, _exact_name("skills")),
+        _term_query("candidate.highest_degree", normalized_degree, 15, _exact_name("highest_degree")),
         _nested_query(
             "application.wishes",
             [
@@ -544,7 +544,7 @@ def _lexical_exact_queries(query_text: str) -> list[dict[str, Any]]:
                 _term_query(
                     "internships.company.keyword",
                     query_text,
-                    24,
+                    28,
                     _exact_name("internship_company"),
                 ),
                 _term_query(
@@ -562,7 +562,7 @@ def _lexical_exact_queries(query_text: str) -> list[dict[str, Any]]:
                 _term_query(
                     "projects.name.keyword",
                     query_text,
-                    26,
+                    28,
                     _exact_name("project_name"),
                 ),
             ],
@@ -648,13 +648,13 @@ def _lexical_phrase_queries(query_text: str) -> list[dict[str, Any]]:
                 _match_phrase_query(
                     "internships.company.phrase",
                     query_text,
-                    14,
+                    18,
                     _phrase_name("internship_company"),
                 ),
                 _match_phrase_query(
                     "internships.title.phrase",
                     query_text,
-                    12,
+                    20,
                     _phrase_name("internship_title"),
                 ),
                 _match_phrase_query(
@@ -666,7 +666,7 @@ def _lexical_phrase_queries(query_text: str) -> list[dict[str, Any]]:
                 _match_phrase_query(
                     "internships.description.phrase",
                     query_text,
-                    6,
+                    8,
                     _phrase_name("internship_description"),
                 ),
             ],
@@ -678,19 +678,19 @@ def _lexical_phrase_queries(query_text: str) -> list[dict[str, Any]]:
                 _match_phrase_query(
                     "projects.name.phrase",
                     query_text,
-                    18,
+                    20,
                     _phrase_name("project_name"),
                 ),
                 _match_phrase_query(
                     "projects.description.phrase",
                     query_text,
-                    7,
+                    9,
                     _phrase_name("project_description"),
                 ),
                 _match_phrase_query(
                     "projects.responsibility.phrase",
                     query_text,
-                    7,
+                    9,
                     _phrase_name("project_responsibility"),
                 ),
             ],
@@ -705,10 +705,10 @@ def _lexical_term_queries(query_text: str) -> list[dict[str, Any]]:
         "candidate.name^4",
         "candidate.school^3",
         "candidate.major^4",
-        "section_text.projects^3",
-        "section_text.internships^3",
+        "section_text.projects^4",
+        "section_text.internships^4",
         "section_text.education^3",
-        "skills_text^6",
+        "skills_text^7",
     ]
     return [
         {
@@ -1089,6 +1089,8 @@ def _rrf_merge(
                 debug["retrieval_sources"].append(retriever_name)
             if retriever_name == BM25_RETRIEVER:
                 debug["bm25_rank"] = rank
+                debug["bm25_score"] = round(float(hit.get("_score") or 0), 4)
+                debug["matched_queries"] = hit.get("matched_queries") or []
             elif retriever_name == DENSE_RETRIEVER:
                 debug["dense_rank"] = rank
                 debug.update(dense_debug)

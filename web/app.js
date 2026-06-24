@@ -119,6 +119,61 @@ function renderChipGroup(root, items, selectedSet, onChange) {
   });
 }
 
+const queryNameMap = {
+  "candidate_no": "候选人编号",
+  "position_code": "岗位编号",
+  "candidate_name": "候选人姓名",
+  "candidate_phone": "手机号",
+  "candidate_email": "邮箱",
+  "candidate_school": "学校",
+  "candidate_major": "专业",
+  "application_company": "应聘公司",
+  "position_name": "岗位名称",
+  "skills": "技能标签",
+  "highest_degree": "最高学历",
+  "wishes": "求职意向",
+  "wish_company": "意向公司",
+  "wish_position": "意向岗位",
+  "education": "教育经历",
+  "education_school": "教育-学校",
+  "education_major": "教育-专业",
+  "education_level": "教育-学历",
+  "education_degree": "教育-学位",
+  "education_college": "教育-学院",
+  "education_research": "教育-研究方向",
+  "education_lab": "教育-实验室",
+  "internships": "实习经历",
+  "internship_company": "实习-公司",
+  "internship_work_type": "实习-性质",
+  "internship_title": "实习-职位",
+  "internship_department": "实习-部门",
+  "internship_description": "实习-描述",
+  "projects": "项目经历",
+  "project_name": "项目-名称",
+  "project_description": "项目-描述",
+  "project_responsibility": "项目-职责",
+  "section_education": "简历正文-教育",
+  "section_projects": "简历正文-项目",
+  "section_internships": "简历正文-实习"
+};
+
+function formatMatchedQuery(q) {
+  if (q.startsWith("query_term:")) return null; // 隐藏由于覆盖率计算产生的底层 term 查询
+  
+  let type = "";
+  let key = q;
+  if (q.startsWith("lexical_exact:")) {
+    type = "[精确匹配]";
+    key = q.replace("lexical_exact:", "");
+  } else if (q.startsWith("lexical_phrase:")) {
+    type = "[短语匹配]";
+    key = q.replace("lexical_phrase:", "");
+  }
+  
+  const fieldName = queryNameMap[key] || key;
+  return `${type} ${fieldName}`;
+}
+
 function renderResults() {
   if (!state.results.length) {
     els.results.innerHTML = `<div class="empty-state">没有匹配的候选人</div>`;
@@ -126,13 +181,85 @@ function renderResults() {
   }
 
   els.results.innerHTML = state.results
-    .map((item) => {
+    .map((item, index) => {
       const candidate = item.candidate || {};
       const application = item.application || {};
       const skills = (item.skills || [])
         .slice(0, 6)
         .map((skill) => `<span class="skill-tag">${escapeHtml(skill)}</span>`)
         .join("");
+        
+      const debug = item.retrieval_debug || {};
+      const sources = debug.retrieval_sources || [];
+      const hasBm25 = sources.includes("bm25");
+      const hasDense = sources.includes("dense");
+      const rrfScore = debug.rrf_score ?? 0;
+
+      const bm25Html = hasBm25 
+        ? `<div class="debug-item"><span class="debug-label">BM25 排名：</span> ${debug.bm25_rank} (分数: ${debug.bm25_score || 0})</div>` 
+        : `<div class="debug-item warning"><span class="debug-label">BM25 命中：</span> 否 (未召回)</div>`;
+        
+      const denseHtml = hasDense 
+        ? `<div class="debug-item"><span class="debug-label">Dense 排名：</span> ${debug.dense_rank} (分数: ${debug.dense_score || 0})</div>` 
+        : `<div class="debug-item warning"><span class="debug-label">Dense 命中：</span> 否 (未召回)</div>`;
+
+      const validQueries = (debug.matched_queries || [])
+        .map(q => formatMatchedQuery(q))
+        .filter(Boolean);
+
+      const matchedQueriesHtml = validQueries.length 
+        ? `<div class="debug-item"><span class="debug-label">命中详情：</span>
+             <div class="debug-queries">
+               ${validQueries.map(q => `<span class="debug-tag">${escapeHtml(q)}</span>`).join('')}
+             </div>
+           </div>`
+        : '';
+
+      const bm25Contrib = hasBm25 ? (1 / (60 + debug.bm25_rank)).toFixed(6) : "0";
+      const denseContrib = hasDense ? (1 / (60 + debug.dense_rank)).toFixed(6) : "0";
+
+      const debugPanelHtml = `
+        <div class="debug-panel" style="display: none;">
+          <div class="debug-header">Debug 排名信息 (最终排名: ${index + 1})</div>
+          <div class="debug-content">
+            <div class="debug-group">
+              <div class="debug-title">召回状态与分数</div>
+              ${bm25Html}
+              ${denseHtml}
+              <div class="debug-item"><span class="debug-label">双路均覆盖：</span> ${hasBm25 && hasDense ? '是' : '否'}</div>
+            </div>
+            
+            <div class="debug-group">
+              <div class="debug-title">RRF 融合分数计算过程</div>
+              <div class="debug-item">
+                <div class="debug-formula-box" style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; padding: 10px; font-family: monospace; font-size: 13px; color: #475569; line-height: 1.8;">
+                  <div style="display: flex; justify-content: space-between;">
+                    <span>BM25 RRF 贡献：</span>
+                    <span>${hasBm25 ? `1 / (60 + ${debug.bm25_rank}) = ${bm25Contrib}` : '0 (未命中)'}</span>
+                  </div>
+                  <div style="display: flex; justify-content: space-between;">
+                    <span>Dense RRF 贡献：</span>
+                    <span>${hasDense ? `1 / (60 + ${debug.dense_rank}) = ${denseContrib}` : '0 (未命中)'}</span>
+                  </div>
+                  <div style="margin-top: 6px; padding-top: 6px; border-top: 1px dashed #cbd5e1; display: flex; justify-content: space-between; color: var(--primary); font-weight: 650;">
+                    <span>最终 RRF 分数：</span>
+                    <span>${bm25Contrib} + ${denseContrib} = ${rrfScore}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            ${debug.matched_queries && debug.matched_queries.length ? `
+            <div class="debug-group">
+              <div class="debug-title">关键词与字段命中详情</div>
+              ${debug.term_coverage !== undefined ? `<div class="debug-item"><span class="debug-label">Term 覆盖数量：</span> ${debug.term_coverage}</div>` : ''}
+              <div class="debug-item"><span class="debug-label">匹配层级：</span> ${debug.lexical_tier || 0} (3:完全匹配, 2:短语部分匹配, 1:普通匹配)</div>
+              ${matchedQueriesHtml}
+            </div>` : ''}
+          </div>
+        </div>
+      `;
+
       return `
         <article class="result-card" data-id="${escapeHtml(item.id)}">
           <div class="result-main">
@@ -145,8 +272,10 @@ function renderResults() {
             <div class="skill-row">${skills || `<span class="skill-tag">技能待补充</span>`}</div>
           </div>
           <div class="result-actions">
-            <button class="quick-action" type="button">查看详情</button>
+            ${sources.length > 0 ? `<button class="quick-action debug-action" type="button" style="margin-right: 8px;">Debug 排名</button>` : ''}
+            <button class="quick-action details-action" type="button">查看详情</button>
           </div>
+          ${sources.length > 0 ? debugPanelHtml : ''}
         </article>
       `;
     })
@@ -157,9 +286,19 @@ function renderResults() {
       const item = state.results.find((result) => result.id === card.dataset.id);
       if (item) openDrawer(item);
     });
-    card.querySelector(".quick-action")?.addEventListener("click", () => {
+    card.querySelector(".details-action")?.addEventListener("click", () => {
       const item = state.results.find((result) => result.id === card.dataset.id);
       if (item) openDrawer(item);
+    });
+    card.querySelector(".debug-action")?.addEventListener("click", (e) => {
+      const debugPanel = card.querySelector(".debug-panel");
+      if (debugPanel.style.display === "none") {
+        debugPanel.style.display = "block";
+        e.target.textContent = "收起 Debug";
+      } else {
+        debugPanel.style.display = "none";
+        e.target.textContent = "Debug 排名";
+      }
     });
   });
 }

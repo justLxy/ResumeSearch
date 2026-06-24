@@ -840,6 +840,90 @@ mark {
   overflow-wrap: anywhere;
 }
 
+/* Debug Panel Styles */
+.debug-panel {
+  grid-column: 1 / -1;
+  margin-top: 16px;
+  padding: 16px;
+  border-top: 1px dashed var(--line);
+  background: var(--surface-muted);
+  border-radius: 0 0 var(--radius) var(--radius);
+  font-size: 13px;
+  color: var(--subtext);
+}
+
+.debug-header {
+  font-weight: 700;
+  color: var(--text);
+  margin-bottom: 12px;
+  font-size: 14px;
+}
+
+.debug-content {
+  display: grid;
+  gap: 16px;
+}
+
+@media (min-width: 800px) {
+  .debug-content {
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  }
+}
+
+.debug-group {
+  background: var(--surface);
+  border: 1px solid var(--line-soft);
+  border-radius: 6px;
+  padding: 12px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.02);
+}
+
+.debug-title {
+  font-weight: 650;
+  color: var(--text);
+  margin-bottom: 8px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.debug-item {
+  margin-bottom: 6px;
+  line-height: 1.5;
+}
+
+.debug-item:last-child {
+  margin-bottom: 0;
+}
+
+.debug-label {
+  color: var(--muted);
+  display: inline-block;
+  min-width: 80px;
+}
+
+.debug-item.warning {
+  color: var(--warning);
+}
+
+.debug-queries {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.debug-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 6px;
+  background: #f1f5f9;
+  border: 1px solid #e2e8f0;
+  border-radius: 4px;
+  color: #475569;
+  font-size: 12px;
+  font-family: monospace;
+}
+
 @media (max-width: 1080px) {
   .search-header {
     grid-template-columns: 1fr;
