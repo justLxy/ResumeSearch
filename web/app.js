@@ -222,14 +222,14 @@ function renderResults() {
         <div class="debug-panel" style="display: none;">
           <div class="debug-header">Debug 排名信息 (最终排名: ${index + 1})</div>
           <div class="debug-content">
-            <div class="debug-group">
+            <div class="debug-group status-group">
               <div class="debug-title">召回状态与分数</div>
               ${bm25Html}
               ${denseHtml}
               <div class="debug-item"><span class="debug-label">双路均覆盖：</span> ${hasBm25 && hasDense ? '是' : '否'}</div>
             </div>
             
-            <div class="debug-group">
+            <div class="debug-group rrf-group">
               <div class="debug-title">RRF 融合分数计算过程</div>
               <div class="debug-item">
                 <div class="debug-formula-box" style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; padding: 10px; font-family: monospace; font-size: 13px; color: #475569; line-height: 1.8;">
@@ -242,15 +242,24 @@ function renderResults() {
                     <span>${hasDense ? `1 / (60 + ${debug.dense_rank}) = ${denseContrib}` : '0 (未命中)'}</span>
                   </div>
                   <div style="margin-top: 6px; padding-top: 6px; border-top: 1px dashed #cbd5e1; display: flex; justify-content: space-between; color: var(--primary); font-weight: 650;">
-                    <span>最终 RRF 分数：</span>
-                    <span>${bm25Contrib} + ${denseContrib} = ${rrfScore}</span>
+                    <span>基础 RRF 分数：</span>
+                    <span>${bm25Contrib} + ${denseContrib} = ${debug.raw_rrf_score !== undefined ? debug.raw_rrf_score : rrfScore}</span>
                   </div>
+                  ${debug.score_multiplier !== undefined ? `
+                  <div style="margin-top: 6px; padding-top: 6px; border-top: 1px dashed #cbd5e1; display: flex; justify-content: space-between;">
+                    <span>层级与覆盖度奖励系数：</span>
+                    <span>x ${debug.score_multiplier.toFixed(2)}</span>
+                  </div>
+                  <div style="margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--line); display: flex; justify-content: space-between; color: var(--text); font-weight: 700; font-size: 14px;">
+                    <span>最终加权得分：</span>
+                    <span>${rrfScore}</span>
+                  </div>` : ''}
                 </div>
               </div>
             </div>
 
             ${debug.matched_queries && debug.matched_queries.length ? `
-            <div class="debug-group">
+            <div class="debug-group queries-group">
               <div class="debug-title">关键词与字段命中详情</div>
               ${debug.term_coverage !== undefined ? `<div class="debug-item"><span class="debug-label">Term 覆盖数量：</span> ${debug.term_coverage}</div>` : ''}
               <div class="debug-item"><span class="debug-label">匹配层级：</span> ${debug.lexical_tier || 0} (3:完全匹配, 2:短语部分匹配, 1:普通匹配)</div>

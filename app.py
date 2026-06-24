@@ -1095,13 +1095,19 @@ def _rrf_merge(
                 debug["dense_rank"] = rank
                 debug.update(dense_debug)
 
+    final_scores: dict[str, float] = {}
+    score_multipliers: dict[str, float] = {}
+    for doc_id in rrf_scores:
+        tier = lexical_tier.get(doc_id, 0)
+        coverage = term_coverage.get(doc_id, 0)
+        multiplier = 1.0 + (0.15 * tier) + (0.05 * coverage)
+        score_multipliers[doc_id] = round(multiplier, 2)
+        final_scores[doc_id] = rrf_scores[doc_id] * multiplier
+
     sorted_ids = sorted(
-        rrf_scores.keys(),
+        final_scores.keys(),
         key=lambda k: (
-            -lexical_tier.get(k, 0),
-            -term_coverage.get(k, 0),
-            bm25_rank.get(k, 10**9) if lexical_tier.get(k, 0) >= 2 else 10**9,
-            -rrf_scores[k],
+            -final_scores[k],
             best_rank.get(k, 10**9),
             k,
         ),
@@ -1112,12 +1118,14 @@ def _rrf_merge(
         hit = dict(hit_map[doc_id])
         hit["_retrieval_debug"] = {
             **retrieval_debug.get(doc_id, {}),
-            "rrf_score": round(rrf_scores[doc_id], 6),
+            "raw_rrf_score": round(rrf_scores[doc_id], 6),
+            "score_multiplier": score_multipliers[doc_id],
+            "rrf_score": round(final_scores[doc_id], 6),
             "lexical_tier": lexical_tier.get(doc_id, 0),
         }
         if coverage_enabled:
             hit["_retrieval_debug"]["term_coverage"] = term_coverage.get(doc_id, 0)
-        results.append(_format_hit(hit, rrf_scores[doc_id]))
+        results.append(_format_hit(hit, final_scores[doc_id]))
     return results
 
 

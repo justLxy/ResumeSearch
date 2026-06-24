@@ -866,7 +866,21 @@ mark {
 
 @media (min-width: 800px) {
   .debug-content {
-    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    grid-template-columns: 1fr 1.2fr;
+    grid-template-rows: auto auto;
+    align-items: start;
+  }
+  .status-group {
+    grid-column: 1;
+    grid-row: 1;
+  }
+  .queries-group {
+    grid-column: 1;
+    grid-row: 2;
+  }
+  .rrf-group {
+    grid-column: 2;
+    grid-row: 1 / span 2;
   }
 }
 
