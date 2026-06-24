@@ -844,19 +844,38 @@ mark {
 .debug-panel {
   grid-column: 1 / -1;
   margin-top: 16px;
-  padding: 16px;
-  border-top: 1px dashed var(--line);
-  background: var(--surface-muted);
+  padding: 20px;
+  border-top: 1px solid var(--line-soft);
+  background: #f8f9fa; /* Light grayish-white */
   border-radius: 0 0 var(--radius) var(--radius);
   font-size: 13px;
   color: var(--subtext);
 }
 
 .debug-header {
-  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.debug-header-title {
+  font-weight: 750;
   color: var(--text);
-  margin-bottom: 12px;
+  font-size: 15px;
+}
+
+.debug-header-rank {
+  color: var(--subtext);
   font-size: 14px;
+}
+
+.highlight-number {
+  color: var(--primary);
+  font-size: 18px;
+  margin-left: 4px;
 }
 
 .debug-content {
@@ -887,55 +906,176 @@ mark {
 .debug-group {
   background: var(--surface);
   border: 1px solid var(--line-soft);
-  border-radius: 6px;
-  padding: 12px;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.02);
+  border-radius: 8px; /* slight rounded corners */
+  padding: 16px;
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.04); /* lightweight shadow */
 }
 
 .debug-title {
-  font-weight: 650;
+  font-weight: 700;
   color: var(--text);
-  margin-bottom: 8px;
-  padding-bottom: 6px;
-  border-bottom: 1px solid var(--line-soft);
+  font-size: 14px;
+  margin-bottom: 12px;
+}
+
+.debug-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 
 .debug-item {
-  margin-bottom: 6px;
+  display: flex;
   line-height: 1.5;
-}
-
-.debug-item:last-child {
-  margin-bottom: 0;
+  align-items: flex-start;
 }
 
 .debug-label {
   color: var(--muted);
-  display: inline-block;
-  min-width: 80px;
+  min-width: 90px;
+  flex-shrink: 0;
 }
 
-.debug-item.warning {
+.debug-value {
+  color: var(--text);
+  word-break: break-all;
+}
+
+.debug-item.warning .debug-value {
   color: var(--warning);
+}
+
+/* Matching tier colors */
+.tier-3 {
+  color: #15803d; /* green for exact */
+  font-weight: 600;
+}
+.tier-2 {
+  color: #c2410c; /* orange for partial */
+  font-weight: 600;
+}
+.tier-1 {
+  color: var(--muted); /* gray for normal */
+}
+.tier-desc {
+  font-weight: normal;
+  color: var(--muted);
+  font-size: 12px;
+  margin-left: 4px;
 }
 
 .debug-queries {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
-  margin-top: 6px;
+  margin-top: -2px; /* align with label text */
 }
 
 .debug-tag {
   display: inline-flex;
   align-items: center;
-  padding: 2px 6px;
-  background: #f1f5f9;
-  border: 1px solid #e2e8f0;
-  border-radius: 4px;
-  color: #475569;
+  padding: 3px 8px;
+  border-radius: 6px;
   font-size: 12px;
-  font-family: monospace;
+  background: #f1f5f9;
+  color: #475569;
+  border: 1px solid transparent;
+}
+.tag-exact {
+  background: #ecfdf5;
+  color: #065f46;
+}
+.tag-phrase {
+  background: #fff7ed;
+  color: #9a3412;
+}
+.tag-term {
+  background: #f8fafc;
+  color: #475569;
+  border-color: #e2e8f0;
+}
+
+/* Formula box */
+.debug-formula-box {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  padding: 14px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 13px;
+  color: #475569;
+}
+
+.formula-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+  gap: 12px;
+}
+.formula-row:last-child {
+  margin-bottom: 0;
+}
+
+.formula-label {
+  color: var(--muted);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.formula-calc {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+  text-align: right;
+}
+
+.formula-eq {
+  color: #94a3b8;
+}
+
+.formula-val {
+  min-width: 70px;
+  display: inline-block;
+  color: var(--text);
+  font-weight: 500;
+}
+
+.formula-divider {
+  height: 1px;
+  background: #e2e8f0;
+  margin: 10px 0;
+}
+.formula-divider.strong {
+  background: var(--line);
+}
+
+.highlight-row {
+  color: var(--primary);
+  font-weight: 650;
+}
+.highlight-row .formula-label {
+  color: var(--primary);
+}
+.primary-val {
+  color: var(--primary);
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.final-row {
+  color: var(--text);
+}
+.final-row .formula-label {
+  font-weight: 700;
+  color: var(--text);
+}
+.final-val {
+  color: var(--primary);
+  font-size: 16px;
+  font-weight: 750;
 }
 
 @media (max-width: 1080px) {

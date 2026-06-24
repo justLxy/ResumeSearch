@@ -162,19 +162,23 @@ function formatMatchedQuery(q) {
   
   let type = "";
   let key = q;
+  let typeClass = "";
   if (q.startsWith("lexical_exact:")) {
     type = "[精确匹配]";
+    typeClass = "exact";
     key = q.replace("lexical_exact:", "");
   } else if (q.startsWith("lexical_phrase:")) {
     type = "[短语匹配]";
+    typeClass = "phrase";
     key = q.replace("lexical_phrase:", "");
   } else if (q.startsWith("lexical_term:")) {
     type = "[普通匹配]";
+    typeClass = "term";
     key = q.replace("lexical_term:", "");
   }
   
   const fieldName = queryNameMap[key] || key;
-  return `${type} ${fieldName}`;
+  return { typeClass, text: `${type} ${fieldName}` };
 }
 
 function renderResults() {
@@ -199,12 +203,12 @@ function renderResults() {
       const rrfScore = debug.rrf_score ?? 0;
 
       const bm25Html = hasBm25 
-        ? `<div class="debug-item"><span class="debug-label">BM25 排名：</span> ${debug.bm25_rank} (分数: ${debug.bm25_score || 0})</div>` 
-        : `<div class="debug-item warning"><span class="debug-label">BM25 命中：</span> 否 (未召回)</div>`;
+        ? `<div class="debug-item"><span class="debug-label">BM25 排名：</span> <span class="debug-value">${debug.bm25_rank} <span class="tier-desc">(分数: ${debug.bm25_score || 0})</span></span></div>` 
+        : `<div class="debug-item warning"><span class="debug-label">BM25 命中：</span> <span class="debug-value">否 (未召回)</span></div>`;
         
       const denseHtml = hasDense 
-        ? `<div class="debug-item"><span class="debug-label">Dense 排名：</span> ${debug.dense_rank} (分数: ${debug.dense_score || 0})</div>` 
-        : `<div class="debug-item warning"><span class="debug-label">Dense 命中：</span> 否 (未召回)</div>`;
+        ? `<div class="debug-item"><span class="debug-label">Dense 排名：</span> <span class="debug-value">${debug.dense_rank} <span class="tier-desc">(分数: ${debug.dense_score || 0})</span></span></div>` 
+        : `<div class="debug-item warning"><span class="debug-label">Dense 命中：</span> <span class="debug-value">否 (未召回)</span></div>`;
 
       const validQueries = (debug.matched_queries || [])
         .map(q => formatMatchedQuery(q))
@@ -213,7 +217,7 @@ function renderResults() {
       const matchedQueriesHtml = validQueries.length 
         ? `<div class="debug-item"><span class="debug-label">命中详情：</span>
              <div class="debug-queries">
-               ${validQueries.map(q => `<span class="debug-tag">${escapeHtml(q)}</span>`).join('')}
+               ${validQueries.map(q => `<span class="debug-tag tag-${q.typeClass}">${escapeHtml(q.text)}</span>`).join('')}
              </div>
            </div>`
         : '';
@@ -223,50 +227,60 @@ function renderResults() {
 
       const debugPanelHtml = `
         <div class="debug-panel" style="display: none;">
-          <div class="debug-header">Debug 排名信息 (最终排名: ${index + 1})</div>
+          <div class="debug-header">
+            <span class="debug-header-title">Debug 排名信息</span>
+            <span class="debug-header-rank">最终排名 <strong class="highlight-number">${index + 1}</strong></span>
+          </div>
           <div class="debug-content">
             <div class="debug-group status-group">
               <div class="debug-title">召回状态与分数</div>
-              ${bm25Html}
-              ${denseHtml}
-              <div class="debug-item"><span class="debug-label">双路均覆盖：</span> ${hasBm25 && hasDense ? '是' : '否'}</div>
+              <div class="debug-list">
+                ${bm25Html}
+                ${denseHtml}
+                <div class="debug-item"><span class="debug-label">双路均覆盖：</span> <span class="debug-value">${hasBm25 && hasDense ? '是' : '否'}</span></div>
+              </div>
             </div>
             
             <div class="debug-group rrf-group">
               <div class="debug-title">RRF 融合分数计算过程</div>
-              <div class="debug-item">
-                <div class="debug-formula-box" style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; padding: 10px; font-family: monospace; font-size: 13px; color: #475569; line-height: 1.8;">
-                  <div style="display: flex; justify-content: space-between;">
-                    <span>BM25 RRF 贡献：</span>
-                    <span>${hasBm25 ? `1.5 / (60 + ${debug.bm25_rank}) = ${bm25Contrib}` : '0 (未命中)'}</span>
-                  </div>
-                  <div style="display: flex; justify-content: space-between;">
-                    <span>Dense RRF 贡献：</span>
-                    <span>${hasDense ? `1 / (60 + ${debug.dense_rank}) = ${denseContrib}` : '0 (未命中)'}</span>
-                  </div>
-                  <div style="margin-top: 6px; padding-top: 6px; border-top: 1px dashed #cbd5e1; display: flex; justify-content: space-between; color: var(--primary); font-weight: 650;">
-                    <span>基础 RRF 分数：</span>
-                    <span>${bm25Contrib} + ${denseContrib} = ${debug.raw_rrf_score !== undefined ? debug.raw_rrf_score : rrfScore}</span>
-                  </div>
-                  ${debug.score_multiplier !== undefined ? `
-                  <div style="margin-top: 6px; padding-top: 6px; border-top: 1px dashed #cbd5e1; display: flex; justify-content: space-between;">
-                    <span>层级与覆盖度奖励系数：</span>
-                    <span>x ${debug.score_multiplier.toFixed(2)}</span>
-                  </div>
-                  <div style="margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--line); display: flex; justify-content: space-between; color: var(--text); font-weight: 700; font-size: 14px;">
-                    <span>最终加权得分：</span>
-                    <span>${rrfScore}</span>
-                  </div>` : ''}
+              <div class="debug-formula-box">
+                <div class="formula-row">
+                  <span class="formula-label">BM25 贡献：</span>
+                  <span class="formula-calc">${hasBm25 ? "1.5 / (60 + " + debug.bm25_rank + ")" : '0 (未命中)'} <span class="formula-eq">=</span> <span class="formula-val">${bm25Contrib}</span></span>
                 </div>
+                <div class="formula-row">
+                  <span class="formula-label">Dense 贡献：</span>
+                  <span class="formula-calc">${hasDense ? "1 / (60 + " + debug.dense_rank + ")" : '0 (未命中)'} <span class="formula-eq">=</span> <span class="formula-val">${denseContrib}</span></span>
+                </div>
+                <div class="formula-divider"></div>
+                <div class="formula-row highlight-row">
+                  <span class="formula-label">基础 RRF 分数：</span>
+                  <span class="formula-calc"><span class="formula-val primary-val">${debug.raw_rrf_score !== undefined ? debug.raw_rrf_score : rrfScore}</span></span>
+                </div>
+                ${debug.score_multiplier !== undefined ? `
+                <div class="formula-row" style="margin-bottom: 4px;">
+                  <span class="formula-label">层级与覆盖度奖励系数：</span>
+                  <span class="formula-calc"><span class="formula-val" style="color: var(--text);">x${debug.score_multiplier.toFixed(2)}</span></span>
+                </div>
+                <div style="text-align: right; color: #94a3b8; font-size: 12px; margin-bottom: 8px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace; letter-spacing: 0.5px;">
+                  1.0(基础) + 0.15×${debug.lexical_tier || 0}(层级) + 0.05×${debug.term_coverage || 0}(覆盖数)
+                </div>
+                <div class="formula-divider strong"></div>
+                <div class="formula-row final-row">
+                  <span class="formula-label">最终加权得分：</span>
+                  <span class="formula-calc"><span class="formula-val final-val">${rrfScore}</span></span>
+                </div>` : ''}
               </div>
             </div>
 
             ${debug.matched_queries && debug.matched_queries.length ? `
             <div class="debug-group queries-group">
               <div class="debug-title">关键词与字段命中详情</div>
-              ${debug.term_coverage !== undefined ? `<div class="debug-item"><span class="debug-label">Term 覆盖数量：</span> ${debug.term_coverage}</div>` : ''}
-              <div class="debug-item"><span class="debug-label">匹配层级：</span> ${debug.lexical_tier || 0} (3:完全匹配, 2:短语部分匹配, 1:普通匹配)</div>
-              ${matchedQueriesHtml}
+              <div class="debug-list">
+                ${debug.term_coverage !== undefined ? `<div class="debug-item"><span class="debug-label">Term 覆盖：</span> <span class="debug-value">${debug.term_coverage}</span></div>` : ''}
+                <div class="debug-item"><span class="debug-label">匹配层级：</span> <span class="debug-value tier-${debug.lexical_tier || 0}">${debug.lexical_tier || 0} <span class="tier-desc">(${debug.lexical_tier === 3 ? '完全匹配' : debug.lexical_tier === 2 ? '短语部分匹配' : '普通匹配'})</span></span></div>
+                ${matchedQueriesHtml}
+              </div>
             </div>` : ''}
           </div>
         </div>
