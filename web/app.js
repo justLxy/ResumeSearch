@@ -168,6 +168,9 @@ function formatMatchedQuery(q) {
   } else if (q.startsWith("lexical_phrase:")) {
     type = "[短语匹配]";
     key = q.replace("lexical_phrase:", "");
+  } else if (q.startsWith("lexical_term:")) {
+    type = "[普通匹配]";
+    key = q.replace("lexical_term:", "");
   }
   
   const fieldName = queryNameMap[key] || key;
@@ -215,7 +218,7 @@ function renderResults() {
            </div>`
         : '';
 
-      const bm25Contrib = hasBm25 ? (1 / (60 + debug.bm25_rank)).toFixed(6) : "0";
+      const bm25Contrib = hasBm25 ? (1.5 / (60 + debug.bm25_rank)).toFixed(6) : "0";
       const denseContrib = hasDense ? (1 / (60 + debug.dense_rank)).toFixed(6) : "0";
 
       const debugPanelHtml = `
@@ -235,7 +238,7 @@ function renderResults() {
                 <div class="debug-formula-box" style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; padding: 10px; font-family: monospace; font-size: 13px; color: #475569; line-height: 1.8;">
                   <div style="display: flex; justify-content: space-between;">
                     <span>BM25 RRF 贡献：</span>
-                    <span>${hasBm25 ? `1 / (60 + ${debug.bm25_rank}) = ${bm25Contrib}` : '0 (未命中)'}</span>
+                    <span>${hasBm25 ? `1.5 / (60 + ${debug.bm25_rank}) = ${bm25Contrib}` : '0 (未命中)'}</span>
                   </div>
                   <div style="display: flex; justify-content: space-between;">
                     <span>Dense RRF 贡献：</span>

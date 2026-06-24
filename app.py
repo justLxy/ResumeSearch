@@ -32,7 +32,7 @@ SKILL_FACET_AGG_SIZE = 200
 SKILL_FACET_DISPLAY_SIZE = 30
 BM25_RETRIEVER = "bm25"
 DENSE_RETRIEVER = "dense"
-BM25_RRF_WEIGHT = 1.0
+BM25_RRF_WEIGHT = 1.5
 DENSE_RRF_WEIGHT = 1.0
 DENSE_ONLY_MIN_SCORE = 0.855
 DENSE_ONLY_SCORE_BAND = 0.02
@@ -713,6 +713,7 @@ def _lexical_term_queries(query_text: str) -> list[dict[str, Any]]:
     return [
         {
             "multi_match": {
+                "_name": "lexical_term:基础信息多字段命中",
                 "query": query_text,
                 "fields": fields,
                 "type": "best_fields",
@@ -722,6 +723,7 @@ def _lexical_term_queries(query_text: str) -> list[dict[str, Any]]:
         },
         {
             "multi_match": {
+                "_name": "lexical_term:基础信息部分命中",
                 "query": query_text,
                 "fields": fields,
                 "type": "best_fields",
@@ -747,6 +749,7 @@ def _lexical_term_queries(query_text: str) -> list[dict[str, Any]]:
                 },
                 {"match": {"education.lab_name": {"query": query_text, "operator": "and", "boost": 2}}},
             ],
+            name="lexical_term:教育经历",
         ),
         _nested_query(
             "projects",
@@ -755,6 +758,7 @@ def _lexical_term_queries(query_text: str) -> list[dict[str, Any]]:
                 {"match": {"projects.description": {"query": query_text, "operator": "and", "boost": 2}}},
                 {"match": {"projects.responsibility": {"query": query_text, "operator": "and", "boost": 2}}},
             ],
+            name="lexical_term:项目经历",
         ),
         _nested_query(
             "internships",
@@ -763,6 +767,7 @@ def _lexical_term_queries(query_text: str) -> list[dict[str, Any]]:
                 {"match": {"internships.department": {"query": query_text, "operator": "and", "boost": 2}}},
                 {"match": {"internships.description": {"query": query_text, "operator": "and", "boost": 2}}},
             ],
+            name="lexical_term:实习经历",
         ),
     ]
 
