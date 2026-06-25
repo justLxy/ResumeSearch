@@ -588,8 +588,11 @@ def import_resumes(
             json_body=EVIDENCE_INDEX_BODY,
             ok_statuses={200},
         )
+        _wait_for_index_ready(es_url, target_index)
+        _wait_for_index_ready(es_url, target_evidence_index)
     elif not _target_exists(es_url, target_index):
         _request("PUT", f"{es_url}/{target_index}", json_body=INDEX_BODY, ok_statuses={200})
+        _wait_for_index_ready(es_url, target_index)
     if not recreate and not _target_exists(es_url, target_evidence_index):
         _request(
             "PUT",
@@ -597,6 +600,7 @@ def import_resumes(
             json_body=EVIDENCE_INDEX_BODY,
             ok_statuses={200},
         )
+        _wait_for_index_ready(es_url, target_evidence_index)
 
     if docs:
         _bulk_index(es_url, target_index, docs, id_field="resume_id")
@@ -1070,6 +1074,14 @@ def _write_target(es_url: str, index: str, alias: str) -> str:
 def _target_exists(es_url: str, target: str) -> bool:
     response = requests.head(f"{es_url}/{target}", timeout=10)
     return response.status_code == 200
+
+
+def _wait_for_index_ready(es_url: str, index: str) -> None:
+    _request(
+        "GET",
+        f"{es_url}/_cluster/health/{index}?wait_for_status=yellow&timeout=90s",
+        ok_statuses={200},
+    )
 
 
 def _bulk_index(

@@ -3,7 +3,6 @@ import unittest
 from unittest.mock import patch
 
 from app import (
-    BM25_RETRIEVER,
     DENSE_RETRIEVER,
     EVIDENCE_DENSE_RETRIEVER,
     EVIDENCE_RETRIEVER,
@@ -146,8 +145,8 @@ class SearchLogicTests(unittest.TestCase):
         self.assertTrue(all("resume_evidence_current" in path for path in calls))
 
     def test_exact_entity_queries_skip_dense_before_merge(self) -> None:
-        bm25_response = _response(
-            BM25_RETRIEVER,
+        lexical_response = _response(
+            EVIDENCE_RETRIEVER,
             [
                 _hit("lexical-1", "词面第一"),
             ],
@@ -160,7 +159,7 @@ class SearchLogicTests(unittest.TestCase):
             ],
         )
 
-        results = _rrf_merge([bm25_response, vector_response], 10)
+        results = _rrf_merge([lexical_response, vector_response], 10)
 
         self.assertFalse(_use_dense("北京大学"))
         self.assertFalse(_use_dense("奇安信集团"))
@@ -169,12 +168,12 @@ class SearchLogicTests(unittest.TestCase):
         self.assertTrue(_use_dense("自然语言处理"))
         self.assertTrue(_use_dense("推荐召回"))
         self.assertTrue(_use_dense("做过推荐系统召回和 NLP 模型落地的人"))
-        self.assertEqual(_hybrid_total([bm25_response, vector_response]), 2)
+        self.assertEqual(_hybrid_total([lexical_response, vector_response]), 2)
         self.assertEqual([item["id"] for item in results], ["lexical-1", "vector-only"])
 
-    def test_hybrid_merge_combines_bm25_and_dense_with_rrf(self) -> None:
-        bm25_response = _response(
-            BM25_RETRIEVER,
+    def test_hybrid_merge_combines_evidence_lexical_and_dense_with_rrf(self) -> None:
+        lexical_response = _response(
+            EVIDENCE_RETRIEVER,
             [
                 _hit("lexical-1", "词面第一"),
                 _hit("lexical-2", "词面第二"),
@@ -190,11 +189,11 @@ class SearchLogicTests(unittest.TestCase):
             ],
         )
 
-        results = _rrf_merge([bm25_response, vector_response], 10)
+        results = _rrf_merge([lexical_response, vector_response], 10)
 
-        self.assertEqual(_hybrid_total([bm25_response, vector_response]), 3)
+        self.assertEqual(_hybrid_total([lexical_response, vector_response]), 3)
         self.assertEqual([item["id"] for item in results], ["lexical-2", "lexical-1", "vector-only"])
-        self.assertEqual(results[0]["retrieval_debug"]["retrieval_sources"], [BM25_RETRIEVER, DENSE_RETRIEVER])
+        self.assertEqual(results[0]["retrieval_debug"]["retrieval_sources"], [EVIDENCE_RETRIEVER, DENSE_RETRIEVER])
 
     def test_evidence_hits_are_collapsed_to_resume_results(self) -> None:
         evidence_response = _response(
@@ -229,8 +228,8 @@ class SearchLogicTests(unittest.TestCase):
         self.assertIn("召回", results[0]["project_snippet"])
 
     def test_multi_term_coverage_boost_is_reflected_in_final_score(self) -> None:
-        bm25_response = _response(
-            BM25_RETRIEVER,
+        lexical_response = _response(
+            EVIDENCE_RETRIEVER,
             [
                 _hit("a-many", "A A A 0", matched_queries=["query_term:0"]),
                 _hit("b-many", "0 B B B", matched_queries=["query_term:1"]),
@@ -246,7 +245,7 @@ class SearchLogicTests(unittest.TestCase):
         )
 
         results = _rrf_merge(
-            [bm25_response, vector_response],
+            [lexical_response, vector_response],
             10,
             query_text="A B",
         )
@@ -257,8 +256,8 @@ class SearchLogicTests(unittest.TestCase):
         self.assertEqual(results[1]["retrieval_debug"]["term_coverage"], 2)
 
     def test_final_score_orders_phrase_against_dense_rank(self) -> None:
-        bm25_response = _response(
-            BM25_RETRIEVER,
+        lexical_response = _response(
+            EVIDENCE_RETRIEVER,
             [
                 _hit("split-and-dense", "计算机 与 科学", matched_queries=["query_term:0"]),
                 _hit("phrase", "计算机科学", matched_queries=["lexical_phrase:candidate_major"]),
@@ -272,7 +271,7 @@ class SearchLogicTests(unittest.TestCase):
         )
 
         results = _rrf_merge(
-            [bm25_response, vector_response],
+            [lexical_response, vector_response],
             10,
             query_text="计算机科学",
         )
@@ -282,8 +281,8 @@ class SearchLogicTests(unittest.TestCase):
         self.assertEqual(results[1]["retrieval_debug"]["lexical_tier"], 2)
 
     def test_final_score_can_include_dense_support_for_phrase_hits(self) -> None:
-        bm25_response = _response(
-            BM25_RETRIEVER,
+        lexical_response = _response(
+            EVIDENCE_RETRIEVER,
             [
                 _hit("major-phrase", "专业短语", matched_queries=["lexical_phrase:candidate_major"]),
                 _hit("weak-field-phrase", "弱字段短语", matched_queries=["lexical_phrase:section_education"]),
@@ -297,7 +296,7 @@ class SearchLogicTests(unittest.TestCase):
         )
 
         results = _rrf_merge(
-            [bm25_response, vector_response],
+            [lexical_response, vector_response],
             10,
             query_text="计算机科学",
         )
@@ -306,8 +305,8 @@ class SearchLogicTests(unittest.TestCase):
         self.assertGreaterEqual(results[0]["retrieval_debug"]["rrf_score"], results[1]["retrieval_debug"]["rrf_score"])
 
     def test_dense_hits_do_not_need_lexical_support_or_similarity_gate(self) -> None:
-        bm25_response = _response(
-            BM25_RETRIEVER,
+        lexical_response = _response(
+            EVIDENCE_RETRIEVER,
             [
                 _hit("lexical-1", "词面第一"),
             ],
@@ -321,9 +320,9 @@ class SearchLogicTests(unittest.TestCase):
             ],
         )
 
-        results = _rrf_merge([bm25_response, vector_response], 10)
+        results = _rrf_merge([lexical_response, vector_response], 10)
 
-        self.assertEqual(_hybrid_total([bm25_response, vector_response]), 2)
+        self.assertEqual(_hybrid_total([lexical_response, vector_response]), 2)
         self.assertEqual([item["id"] for item in results], ["lexical-1", "weak-vector-only"])
         self.assertEqual(results[0]["retrieval_debug"]["dense_rank"], 2)
         self.assertEqual(results[0]["retrieval_debug"]["dense_route_rank"], 2)
@@ -729,9 +728,9 @@ class SearchLogicTests(unittest.TestCase):
         self.assertNotIn("query_term:0", scoring_query_json)
         self.assertIn("query_term:0", coverage_query_json)
 
-    def test_lexical_total_uses_bm25_total_not_candidate_window(self) -> None:
-        bm25_response = _response(
-            BM25_RETRIEVER,
+    def test_lexical_total_counts_evidence_candidate_window(self) -> None:
+        evidence_response = _response(
+            EVIDENCE_RETRIEVER,
             [
                 _hit("lexical-1", "词面第一"),
             ],
@@ -744,12 +743,12 @@ class SearchLogicTests(unittest.TestCase):
             ],
         )
 
-        self.assertEqual(_lexical_total([bm25_response, vector_response]), 125)
-        self.assertEqual(_hybrid_total([bm25_response, vector_response]), 2)
+        self.assertEqual(_lexical_total([evidence_response, vector_response]), 1)
+        self.assertEqual(_hybrid_total([evidence_response, vector_response]), 2)
 
-    def test_lexical_total_deduplicates_candidate_and_evidence_sources(self) -> None:
-        bm25_response = _response(
-            BM25_RETRIEVER,
+    def test_lexical_total_deduplicates_multiple_evidence_sources(self) -> None:
+        first_response = _response(
+            EVIDENCE_RETRIEVER,
             [
                 _hit("candidate-1", "候选人一"),
                 _hit("candidate-2", "候选人二"),
@@ -775,7 +774,7 @@ class SearchLogicTests(unittest.TestCase):
             total=80,
         )
 
-        self.assertEqual(_lexical_total([bm25_response, evidence_response]), 3)
+        self.assertEqual(_lexical_total([first_response, evidence_response]), 3)
 
     def test_index_mapping_records_embedding_contract(self) -> None:
         meta = INDEX_BODY["mappings"]["_meta"]

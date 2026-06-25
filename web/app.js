@@ -337,7 +337,7 @@ function renderResults() {
           ? `<div class="debug-item"><span class="debug-label" title="证据索引中的 BM25 / phrase 词面召回&#10;先命中候选人档案、项目、实习、教育或技能证据片段，再按候选人聚合排名" style="cursor: help; text-decoration: underline dotted var(--muted); text-underline-offset: 4px;">词面证据排名：</span> <span class="debug-value">${evidenceGroupRank} <span class="tier-desc">(最佳片段 #${debug.evidence_rank}，分数: ${formatScore(debug.evidence_score || 0, 4)})</span></span></div>`
           : "",
       ].filter(Boolean).join("");
-      const bm25Html = hasLexical
+      const lexicalHtml = hasLexical
         ? lexicalStatusRows
         : `<div class="debug-item warning"><span class="debug-label">词面证据命中：</span> <span class="debug-value">否 (未召回)</span></div>`;
         
@@ -415,7 +415,7 @@ function renderResults() {
             <div class="debug-group status-group">
               <div class="debug-title">召回状态与分数</div>
               <div class="debug-list">
-                ${bm25Html}
+                ${lexicalHtml}
                 ${denseHtml}
                 ${denseMatchesHtml}
               </div>
