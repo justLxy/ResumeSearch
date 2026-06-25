@@ -190,6 +190,67 @@ function formatMatchedQuery(q) {
   return { typeClass, text, fieldName };
 }
 
+const denseFieldNameMap = {
+  semantic_profile_vector: "整体向量",
+  skills_vector: "技能向量",
+  projects_vector: "项目向量",
+  internships_vector: "实习向量",
+  education_vector: "教育向量",
+  role_vector: "岗位向量",
+};
+
+function isDenseSource(source) {
+  return source === "dense" || String(source || "").startsWith("dense:");
+}
+
+function denseFieldLabel(field, retriever) {
+  if (field && denseFieldNameMap[field]) return denseFieldNameMap[field];
+  const name = String(retriever || "").replace("dense:", "");
+  if (name && name !== retriever) return `${name} 向量`;
+  return "Dense 向量";
+}
+
+function formatScore(value, digits = 6) {
+  return Number.isFinite(Number(value)) ? Number(value).toFixed(digits) : "0";
+}
+
+function denseContribution(match) {
+  const contribution = Number(match.contribution);
+  if (Number.isFinite(contribution)) return contribution;
+  const weight = Number(match.weight ?? 1);
+  const rank = Number(match.rank);
+  if (!Number.isFinite(rank) || rank <= 0) return 0;
+  return weight / (60 + rank);
+}
+
+function denseOuterContribution(debug) {
+  const contribution = Number(debug.dense_rrf_contribution);
+  if (Number.isFinite(contribution)) return contribution;
+  const weight = Number(debug.dense_outer_weight ?? 1);
+  const rank = Number(debug.dense_group_rank ?? debug.dense_rank);
+  if (!Number.isFinite(rank) || rank <= 0) return 0;
+  return weight / (60 + rank);
+}
+
+function denseMatchesForDebug(debug) {
+  const matches = Array.isArray(debug.dense_matches) ? debug.dense_matches : [];
+  if (matches.length) {
+    return matches
+      .filter((match) => match && match.rank)
+      .sort((a, b) => denseContribution(b) - denseContribution(a));
+  }
+  if (debug.dense_rank) {
+    return [{
+      retriever: "dense",
+      field: debug.dense_field,
+      rank: debug.dense_rank,
+      score: debug.dense_score,
+      weight: 1,
+    }];
+  }
+  return [];
+}
+
 function renderResults() {
   if (!state.results.length) {
     els.results.innerHTML = `<div class="empty-state">没有匹配的候选人</div>`;
@@ -208,16 +269,34 @@ function renderResults() {
       const debug = item.retrieval_debug || {};
       const sources = debug.retrieval_sources || [];
       const hasBm25 = sources.includes("bm25");
-      const hasDense = sources.includes("dense");
+      const hasDense = sources.some(isDenseSource);
       const rrfScore = debug.rrf_score ?? 0;
+      const denseMatches = denseMatchesForDebug(debug);
+      const denseOuterWeight = Number(debug.dense_outer_weight ?? 1);
+      const denseGroupRank = debug.dense_group_rank ?? debug.dense_rank;
+      const bm25Weight = Number(debug.bm25_weight ?? 1.5);
+      const bestDenseRouteRank = debug.dense_route_rank ?? denseMatches[0]?.rank ?? debug.dense_rank;
 
       const bm25Html = hasBm25 
         ? `<div class="debug-item"><span class="debug-label" title="Elasticsearch BM25 原生打分&#10;计算公式: ∑ (词频TF × 逆文档频率IDF × 字段权重Boost)&#10;此分数为下方命中详情中所有匹配特征的得分总和" style="cursor: help; text-decoration: underline dotted var(--muted); text-underline-offset: 4px;">BM25 排名：</span> <span class="debug-value">${debug.bm25_rank} <span class="tier-desc">(分数: ${debug.bm25_score || 0})</span></span></div>` 
         : `<div class="debug-item warning"><span class="debug-label">BM25 命中：</span> <span class="debug-value">否 (未召回)</span></div>`;
         
       const denseHtml = hasDense 
-        ? `<div class="debug-item"><span class="debug-label">Dense 排名：</span> <span class="debug-value">${debug.dense_rank} <span class="tier-desc">(分数: ${debug.dense_score || 0})</span></span></div>` 
+        ? `<div class="debug-item"><span class="debug-label">Dense 排名：</span> <span class="debug-value">${denseGroupRank} <span class="tier-desc">(最佳 ${denseFieldLabel(debug.dense_field, denseMatches[0]?.retriever)} #${bestDenseRouteRank}，分数: ${debug.dense_score || 0})</span></span></div>` 
         : `<div class="debug-item warning"><span class="debug-label">Dense 命中：</span> <span class="debug-value">否 (未召回)</span></div>`;
+
+      const denseMatchesHtml = denseMatches.length
+        ? `<div class="debug-item dense-match-row"><span class="debug-label">向量详情：</span>
+             <div class="dense-match-list">
+               ${denseMatches.map((match) => `
+                 <div class="dense-match-item">
+                   <span class="dense-match-name">${escapeHtml(denseFieldLabel(match.field, match.retriever))} #${escapeHtml(match.rank)}</span>
+                   <span>分数 ${escapeHtml(formatScore(match.score, 4))}</span>
+                 </div>
+               `).join("")}
+             </div>
+           </div>`
+        : "";
 
       const rawQueries = (debug.matched_queries || [])
         .map(q => formatMatchedQuery(q))
@@ -242,8 +321,17 @@ function renderResults() {
            </div>`
         : '';
 
-      const bm25Contrib = hasBm25 ? (1.5 / (60 + debug.bm25_rank)).toFixed(6) : "0";
-      const denseContrib = hasDense ? (1 / (60 + debug.dense_rank)).toFixed(6) : "0";
+      const bm25Contrib = hasBm25 ? (bm25Weight / (60 + debug.bm25_rank)).toFixed(6) : "0";
+      const denseContrib = hasDense ? denseOuterContribution(debug).toFixed(6) : "0";
+      const denseFormulaHtml = hasDense
+        ? `<div class="formula-row">
+             <span class="formula-label">Dense 贡献：</span>
+             <span class="formula-calc">${escapeHtml(formatScore(denseOuterWeight, 2))} / (60 + ${escapeHtml(denseGroupRank)}) <span class="formula-eq">=</span> <span class="formula-val">${denseContrib}</span></span>
+           </div>`
+        : `<div class="formula-row">
+             <span class="formula-label">Dense 贡献：</span>
+             <span class="formula-calc">0 (未命中) <span class="formula-eq">=</span> <span class="formula-val">0</span></span>
+           </div>`;
 
       const debugPanelHtml = `
         <div class="debug-panel" style="display: none;">
@@ -257,7 +345,7 @@ function renderResults() {
               <div class="debug-list">
                 ${bm25Html}
                 ${denseHtml}
-                <div class="debug-item"><span class="debug-label">双路均覆盖：</span> <span class="debug-value">${hasBm25 && hasDense ? '是' : '否'}</span></div>
+                ${denseMatchesHtml}
               </div>
             </div>
             
@@ -266,12 +354,9 @@ function renderResults() {
               <div class="debug-formula-box">
                 <div class="formula-row">
                   <span class="formula-label">BM25 贡献：</span>
-                  <span class="formula-calc">${hasBm25 ? "1.5 / (60 + " + debug.bm25_rank + ")" : '0 (未命中)'} <span class="formula-eq">=</span> <span class="formula-val">${bm25Contrib}</span></span>
+                  <span class="formula-calc">${hasBm25 ? formatScore(bm25Weight, 2) + " / (60 + " + debug.bm25_rank + ")" : '0 (未命中)'} <span class="formula-eq">=</span> <span class="formula-val">${bm25Contrib}</span></span>
                 </div>
-                <div class="formula-row">
-                  <span class="formula-label">Dense 贡献：</span>
-                  <span class="formula-calc">${hasDense ? "1 / (60 + " + debug.dense_rank + ")" : '0 (未命中)'} <span class="formula-eq">=</span> <span class="formula-val">${denseContrib}</span></span>
-                </div>
+                ${denseFormulaHtml}
                 <div class="formula-divider"></div>
                 <div class="formula-row highlight-row">
                   <span class="formula-label">基础 RRF 分数：</span>

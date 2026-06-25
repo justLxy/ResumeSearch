@@ -126,8 +126,11 @@ filters:
   "retrieval_debug": {
     "retrieval_sources": ["bm25", "dense"],
     "bm25_rank": 3,
-    "dense_rank": 27,
-    "dense_score": 0.827574,
+    "dense_rank": 12,
+    "dense_route_rank": 4,
+    "dense_field": "projects_vector",
+    "dense_inner_score": 0.052104,
+    "dense_rrf_contribution": 0.013889,
     "rrf_score": 0.027367,
     "lexical_tier": 2,
     "term_coverage": 2
@@ -182,7 +185,7 @@ flowchart TD
 本地简历文件
   -> resume_parser.py 解析成结构化 JSON
   -> import_to_es.py 补充工作年限、skills_text、search_text、embedding 元信息
-  -> embedding_service.py 生成 semantic_profile_vector
+  -> embedding_service.py 生成整体、技能、项目、实习、教育、岗位多路画像向量
   -> Elasticsearch 建索引并 bulk 写入
   -> resumes_current alias 指向最新索引
 ```
@@ -215,7 +218,7 @@ alias: resumes_current
 
 重建索引时先写入新 index，校验成功后再切换 alias。这样查询服务始终访问 `resumes_current`，不需要知道真实索引名。
 
-当前代码只支持最新 mapping，不兼容缺少 `semantic_profile_vector`、`.keyword` 或 `.phrase` 子字段的旧索引。mapping 变化后应重建新索引。
+当前代码只支持最新 mapping，不兼容缺少多路画像向量、`.keyword` 或 `.phrase` 子字段的旧索引。mapping 变化后应重建新索引。
 
 ## 3. 核心概念解释
 
@@ -451,7 +454,7 @@ resume_search 产生:
 
 ### 4.3 dense_vector 设计
 
-向量字段只有一个：
+当前使用多路画像向量，而不是只把整份简历压成一个向量：
 
 ```json
 "semantic_profile_vector": {
@@ -466,6 +469,15 @@ resume_search 产生:
   }
 }
 ```
+
+同样的 `dense_vector` mapping 会用于：
+
+- `semantic_profile_vector`：整体能力画像。
+- `skills_vector`：技能画像。
+- `projects_vector`：项目画像。
+- `internships_vector`：实习/工作经历画像。
+- `education_vector`：教育、专业、研究方向画像。
+- `role_vector`：岗位和求职方向画像。
 
 设计含义：
 
@@ -482,7 +494,14 @@ resume_search 产生:
 embedding_model_id: IEITYuan/Yuan-embedding-2.0-zh
 embedding_vector_dims: 1792
 embedding_normalized: true
-semantic_profile_version: semantic-profile-v2
+semantic_profile_version: semantic-profile-v3
+embedding_vector_fields:
+  - semantic_profile_vector
+  - skills_vector
+  - projects_vector
+  - internships_vector
+  - education_vector
+  - role_vector
 ```
 
 每条文档也写入：
@@ -508,13 +527,14 @@ embedding.semantic_profile_version
 - 联系方式、城市、学校、公司等实体进入向量后会污染语义检索。
 - 简历中很多内容是结构化字段，应该分别服务过滤、精确匹配和语义匹配。
 
-当前向量输入是抽取式 `semantic_profile_vector`，主要包含：
+当前向量输入是抽取式多画像：
 
-- 项目名称、描述、职责。
-- 实习部门、职位、描述。
-- 技能标签。
-- 教育专业、研究方向、实验室方向。
-- 目标岗位、专业背景。
+- 整体画像：项目、实习、技能、教育方向、目标岗位、专业背景。
+- 技能画像：技能标签。
+- 项目画像：项目名称、描述、职责。
+- 实习画像：实习部门、职位、描述。
+- 教育画像：教育专业、研究方向、实验室方向。
+- 岗位画像：目标岗位、求职意向、专业背景。
 
 明确排除：
 
@@ -630,7 +650,7 @@ embedding.semantic_profile_version
     }
   },
   "_source": {
-    "excludes": ["raw_text", "raw_sections", "search_text", "skills_text", "semantic_profile_vector"]
+    "excludes": ["raw_text", "raw_sections", "search_text", "skills_text", "..._vector"]
   }
 }
 ```
@@ -733,7 +753,7 @@ filter 的特点：
 | `match_phrase` | text 连续短语匹配 | `candidate.major.phrase` | 是 | 是 |
 | `multi_match` | 多 text 字段同时检索 | 岗位、姓名、学校、专业、项目、实习、技能文本 | 是 | 是 |
 | `nested` | 检索数组对象内部字段 | `education`、`internships`、`projects` | 取决于内部 query | 是 |
-| `knn` | 向量近邻检索 | `semantic_profile_vector` | 否 | 返回向量相似度分 |
+| `knn` | 向量近邻检索 | 多路画像向量 | 否 | 返回向量相似度分 |
 
 ### 6.6 exact、phrase、BM25 的分层
 
@@ -829,17 +849,18 @@ nested：
 
 ### 7.1 两路检索
 
-当启用 dense 时，系统并发执行两路搜索：
+当启用 dense 时，系统在外层仍按两路搜索理解：
 
 ```text
 BM25 retriever:
   keyword + phrase + BM25 + filter
 
 Dense retriever:
-  semantic_profile_vector kNN + 同一组 filter
+  根据 query 意图选择技能、项目、实习、教育、岗位或整体画像 kNN + 同一组 filter
+  多个向量通道先在 Dense 内部融合
 ```
 
-并发执行由 `ThreadPoolExecutor` 完成。这样 BM25 和 dense 的耗时可以重叠。
+并发执行由 `ThreadPoolExecutor` 完成。这样 BM25 和多路 dense kNN 的耗时可以重叠。
 
 ### 7.2 RRF 融合
 
@@ -862,10 +883,21 @@ RRF_RANK_CONSTANT = 60
 例子：
 
 ```text
-BM25 rank = 1  -> 1 / (60 + 1) = 0.01639
-Dense rank = 1 -> 1 / (60 + 1) = 0.01639
-Dense rank = 5 -> 1 / (60 + 5) = 0.01538
+BM25 rank = 1  -> 1.5 / (60 + 1) = 0.02459
+Dense rank = 1 -> 1.0 / (60 + 1) = 0.01639
+Dense rank = 5 -> 1.0 / (60 + 5) = 0.01538
 ```
+
+Dense 侧虽然会同时查多个画像向量，但不会把多个向量通道直接累加到最终 RRF。流程是：
+
+```text
+1. 项目向量、技能向量、岗位向量等分别返回自己的 kNN rank。
+2. 查询意图只决定选择哪些向量通道；被选中的向量通道权重统一为 1.0。
+3. 按内部合计分得到一个统一的 dense_rank。
+4. 外层 RRF 只使用 1.0 / (60 + dense_rank) 作为 Dense 贡献。
+```
+
+这样做可以避免“项目向量 + 技能向量 + 岗位向量 + 实习向量”在最终排序里变成多张 Dense 票，从而稀释 BM25 的字段命中证据。
 
 为什么不用 BM25 `_score` + dense `_score` 直接相加？
 
@@ -877,11 +909,11 @@ Dense rank = 5 -> 1 / (60 + 5) = 0.01538
 
 RRF 只看名次，能更稳定地融合不同检索器。
 
-### 7.3 乘数加权模型（Score Multiplier）：打破阶级固化
+### 7.3 乘数加权模型
 
 最初的系统将候选人严格划分为四个不可逾越的阶级（lexical_tier：exact > phrase > term > dense）。这会导致极低分数的普通词命中也会永远排在完美的纯语义匹配之前。
 
-为解决此问题，目前采用 **综合加权得分的连续性排序**：
+目前采用综合加权得分排序，页面 Debug 中展示的 `最终加权得分` 就是实际排序依据：
 
 ```text
 最终加权得分 = 基础 RRF 分数 × 业务奖励系数
@@ -896,7 +928,7 @@ RRF 只看名次，能更稳定地融合不同检索器。
 2. **多词覆盖奖励 (`term_coverage`)**：
    对于多词查询，每多覆盖一个 query token，奖励系数增加 0.05。
 
-这套逻辑**打破了阶级壁垒**：一份纯靠 AI 理解的完美语义简历（基础 RRF 极高），现在能够轻松超越质量低劣的关键词匹配；同时，精准命中核心关键词的候选人依然能获得 `1.45x` 以上的分数膨胀，稳坐前排。
+这套逻辑的目标是：强字段证据通过奖励系数体现在最终分数里，同时普通关键词命中不会无条件压过高质量语义匹配。
 
 ### 7.4 dense-only gate
 
@@ -905,8 +937,8 @@ BM25 没命中的 dense-only 候选不能无条件进入结果，否则向量 to
 当前规则：
 
 ```text
-dense top1 _score 必须 >= 0.855
-dense-only 候选 _score 必须 >= max(0.855, dense_top1_score - 0.02)
+dense top1 _score 必须 >= 0.860
+dense-only 候选 _score 必须 >= max(0.860, dense_top1_score - 0.02)
 每次最多补 8 个 dense-only 候选
 ```
 
@@ -990,7 +1022,7 @@ dense-only 候选 _score 必须 >= max(0.855, dense_top1_score - 0.02)
 | 分段文本 | `section_text.education` | text + `.phrase` | 否 | 是 | 展示和补充召回 |
 | 分段文本 | `section_text.internships` | text + `.phrase` | 否 | 是 | 展示和补充召回 |
 | 分段文本 | `section_text.projects` | text + `.phrase` | 否 | 是 | 展示和补充召回 |
-| 向量 | `semantic_profile_vector` | `dense_vector` | 可附带 filter | 是 | 能力和经历语义 |
+| 向量 | 多路画像向量 | `dense_vector` | 可附带 filter | 是 | 技能、项目、实习、教育、岗位等语义 |
 
 ### 8.2 必须完全匹配的字段
 
@@ -1132,7 +1164,7 @@ def search(...):
 核心函数：
 
 ```python
-_run_hybrid_search(query_text, query_vector, filters, rank_window_size, use_dense)
+_run_hybrid_search(query_text, query_vector, filters, rank_window_size, dense_routes)
 ```
 
 执行逻辑：
@@ -1140,15 +1172,17 @@ _run_hybrid_search(query_text, query_vector, filters, rank_window_size, use_dens
 ```text
 requests_to_run:
   BM25 request
-  Dense request, 如果 use_dense=True
+  多个 Dense route request, 如果 dense_routes 非空
 
 ThreadPoolExecutor:
   并发请求 ES
 
 每个 response 附加:
-  _retriever_name = bm25 / dense
-  _rrf_weight = 1.0
+  _retriever_name = bm25 / dense:skills / dense:projects / ...
+  _rrf_weight = BM25 外层权重；Dense route 统一为 1.0
 ```
+
+在 `_rrf_merge` 中，所有 `dense:*` response 会先合成一个统一的 Dense 排名，再和 BM25 做外层 RRF。
 
 ### 9.5 结果如何格式化
 
@@ -1201,7 +1235,7 @@ BM25 terms:
   nested education.major
 
 dense:
-  semantic_profile_vector kNN
+  意图路由后的多画像 kNN
 ```
 
 简化后的 ES DSL：
@@ -1271,19 +1305,19 @@ dense:
 
 ```text
 计算机科学 Top 6:
-1. 孔雅婷  计算机科学与技术  lexical_tier=2  bm25_rank=1
-2. 施佳宁  计算机科学与技术  lexical_tier=2  bm25_rank=2
-3. 杨佳宁  计算机科学与技术  lexical_tier=2  bm25_rank=3
-4. 钱博文  计算机科学与技术  lexical_tier=2  bm25_rank=4
-5. 卫辰逸  计算机科学与技术  lexical_tier=2  bm25_rank=5
-6. 秦佳宁  计算机科学与技术  lexical_tier=2  bm25_rank=6
+1. 杨佳宁  计算机科学与技术  lexical_tier=2  bm25_rank=2  dense_rank=2
+2. 秦佳宁  计算机科学与技术  lexical_tier=2  bm25_rank=6  dense_rank=11
+3. 许诗涵  网络空间安全      lexical_tier=2  bm25_rank=8  dense_rank=9
+4. 施佳宁  计算机科学与技术  lexical_tier=2  bm25_rank=1  dense_rank=35
+5. 卫辰逸  计算机科学与技术  lexical_tier=2  bm25_rank=5  dense_rank=29
+6. 吕博文  计算机技术        lexical_tier=2  bm25_rank=14 dense_rank=14
 ```
 
 解释：
 
 - `.phrase` 确保 `计算机科学` 作为连续短语优先。
 - `lexical_tier=2` 表示 phrase 证据。
-- dense 可以加分，但不会压过同 tier 内更强的 BM25 rank。
+- 排名按最终加权得分降序，dense 贡献会体现在最终分里，因此 BM25 rank 不一定单独决定顺序。
 
 ### 10.2 示例二：完整专业查询 `计算机科学与技术`
 
@@ -1500,21 +1534,21 @@ python evaluate_search.py --thresholds 0.84,0.845,0.855,0.86,0.875
 当前推荐阈值：
 
 ```text
-DENSE_ONLY_MIN_SCORE = 0.855
+DENSE_ONLY_MIN_SCORE = 0.860
 ```
 
 单阈值评估：
 
 ```text
 threshold  judged  P@5    P@10   R@5    R@10   MRR@10 NDCG@10 empty_acc forbidden@10
-0.855      117     0.923  0.831  0.316  0.492  0.977  0.928   1.000     2
+0.860      117     0.937  0.862  0.325  0.512  0.970  0.952   1.000     0
 ```
 
 专业回归结果：
 
 ```text
-entity_major: P@5=1.000, R@10=1.000, NDCG@10=1.000
-phrase_major: P@5=1.000, R@10=0.900, NDCG@10=0.927
+entity_major: P@5=1.000, R@10=0.800, NDCG@10=0.870
+phrase_major: P@5=1.000, R@10=0.800, NDCG@10=0.855
 ```
 
 ### 11.4 指标含义
@@ -1704,7 +1738,7 @@ python -m pytest -q
 
 - 还没有学习排序模型，例如 LTR 或 cross-encoder reranker。
 - `lexical_tier` 是规则分层，不是模型自动学习出来的权重。
-- dense 只有一个主语义向量，没有为项目、实习、技能分别建多向量。
+- dense 已拆成多路画像向量，但还没有进一步拆到项目/实习片段级索引。
 - 评估集虽然已有 126 条，但仍然偏小，需要更多真实 query 和人工标注。
 - 当前没有分页游标，默认最多使用 ES 结果窗口 10000。
 - 没有实现复杂权限控制、租户隔离、审计日志等生产系统能力。
@@ -1719,7 +1753,7 @@ python -m pytest -q
 - 扩充真实 query 评估集，按岗位、技能、专业、学校、负例分层评估。
 - 对字段 boost 做网格搜索或贝叶斯调参。
 - 引入二阶段 reranker，例如 cross-encoder 或轻量 LTR。
-- 为不同语义块建立多向量，例如项目向量、实习向量、技能向量。
+- 进一步建立项目、实习、教育片段级索引，返回更细的命中证据。
 - 加入同义词词典，例如 `后端` 和 `服务端`，`风控` 和 `反欺诈`。
 - 增加职位、专业、技能的标准化词表。
 
@@ -1779,9 +1813,9 @@ python -m pytest -q
    同时构造 kNN 查询。
 
 4. 排序:
-   先按 lexical_tier 保证强词面证据。
-   再按多词 coverage。
-   再用 RRF 融合 BM25 和 dense rank。
+   用 RRF 融合 BM25 和 dense rank。
+   再乘以 lexical_tier 与 term_coverage 奖励系数。
+   最终按 Debug 中展示的最终加权得分降序排序。
    dense-only 需要高置信 gate。
 
 5. 评估:
@@ -1800,8 +1834,8 @@ python -m pytest -q
 
 - 搜索 API、ES mapping、BM25 查询、phrase 查询、filter、dense kNN、RRF 融合、评估脚本都在仓库中。
 - 当前索引设计只支持最新 mapping，不兼容旧索引。
-- 当前主向量字段是 `semantic_profile_vector`。
-- 当前默认 dense-only 阈值是 `0.855`。
+- 当前向量字段包括整体、技能、项目、实习、教育、岗位多路画像。
+- 当前默认 dense-only 阈值是 `0.860`。
 
 需要业务侧进一步补充的信息：
 

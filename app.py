@@ -34,7 +34,8 @@ BM25_RETRIEVER = "bm25"
 DENSE_RETRIEVER = "dense"
 BM25_RRF_WEIGHT = 1.5
 DENSE_RRF_WEIGHT = 1.0
-DENSE_ONLY_MIN_SCORE = 0.855
+DENSE_RANK_WINDOW_SIZE = 300
+DENSE_ONLY_MIN_SCORE = 0.860
 DENSE_ONLY_SCORE_BAND = 0.02
 DENSE_ONLY_MAX_RESULTS = 8
 QUERY_TERM_COVERAGE_BOOST = 0.001
@@ -42,7 +43,78 @@ MAX_QUERY_COVERAGE_TERMS = 8
 COVERAGE_QUERY_PREFIX = "query_term:"
 LEXICAL_EXACT_QUERY_PREFIX = "lexical_exact:"
 LEXICAL_PHRASE_QUERY_PREFIX = "lexical_phrase:"
-VECTOR_FIELDS = ("semantic_profile_vector",)
+VECTOR_FIELDS = (
+    "semantic_profile_vector",
+    "skills_vector",
+    "projects_vector",
+    "internships_vector",
+    "education_vector",
+    "role_vector",
+)
+DENSE_ROUTE_MAX_FIELDS = 4
+DENSE_ROUTE_BASE_PRIORITIES = {
+    "semantic_profile_vector": 0.75,
+    "skills_vector": 0.80,
+    "projects_vector": 0.85,
+    "internships_vector": 0.75,
+    "education_vector": 0.55,
+    "role_vector": 0.60,
+}
+PROJECT_INTENT_TERMS = (
+    "项目",
+    "系统",
+    "平台",
+    "知识库",
+    "召回",
+    "排序",
+    "模型",
+    "落地",
+    "服务化",
+    "可视化",
+    "看板",
+    "漏洞复现",
+    "数据仓库",
+    "问答",
+    "推荐",
+)
+WORK_INTENT_TERMS = (
+    "实习",
+    "工作",
+    "经验",
+    "负责",
+    "参与",
+    "上线",
+    "优化",
+    "治理",
+    "运维",
+    "测试",
+    "应急响应",
+    "告警",
+    "接口",
+    "缓存",
+)
+ROLE_INTENT_TERMS = (
+    "工程师",
+    "候选人",
+    "后端",
+    "前端",
+    "算法",
+    "机器学习",
+    "安全研究员",
+    "数据分析师",
+    "测试工程师",
+    "运维",
+)
+EDUCATION_INTENT_TERMS = (
+    "专业",
+    "研究方向",
+    "实验室",
+    "计算机科学",
+    "人工智能",
+    "自然语言处理",
+    "图像识别",
+    "数据挖掘",
+)
 SOURCE_EXCLUDES = [
     "raw_text",
     "raw_sections",
@@ -120,12 +192,15 @@ def search(
     retrieval_warnings: list[str] = []
 
     if query_text:
-        # Hybrid: BM25 + semantic profile kNN merged with manual RRF.
+        # Hybrid: BM25 + routed profile kNN merged with manual RRF.
         use_dense = _use_dense(query_text)
         query_vector: list[float] = []
+        dense_routes: list[dict[str, Any]] = []
         if use_dense:
             try:
                 query_vector = encode_single(query_text)
+                route_skill_vocab = skill_vocab if skill_vocab is not None else _load_filter_vocab()["skills"]
+                dense_routes = _infer_dense_routes(query_text, route_skill_vocab)
             except Exception as exc:
                 logger.exception("query embedding failed")
                 retrieval_warnings.append(f"dense embedding failed: {exc}")
@@ -136,7 +211,7 @@ def search(
             query_vector,
             filters,
             rank_window_size,
-            use_dense,
+            dense_routes if use_dense else [],
         )
         retrieval_warnings.extend(retriever_warnings)
         matched_total = _lexical_total(responses)
@@ -946,6 +1021,89 @@ def _term_coverage_filter(token: str) -> dict[str, Any]:
     }
 
 
+def _infer_dense_routes(
+    query_text: str,
+    skill_vocab: set[str] | None = None,
+) -> list[dict[str, Any]]:
+    tokens = _query_tokens(query_text)
+    skill_mentions = _known_skill_mentions(query_text, tokens, skill_vocab)
+    priorities = dict(DENSE_ROUTE_BASE_PRIORITIES)
+
+    if skill_mentions:
+        priorities["skills_vector"] += min(0.60, 0.20 * len(skill_mentions))
+        priorities["projects_vector"] += 0.15
+        priorities["internships_vector"] += 0.10
+
+    if _contains_any(query_text, PROJECT_INTENT_TERMS):
+        priorities["projects_vector"] += 0.50
+        priorities["skills_vector"] += 0.15
+        priorities["internships_vector"] += 0.10
+
+    if _contains_any(query_text, WORK_INTENT_TERMS):
+        priorities["internships_vector"] += 0.45
+        priorities["projects_vector"] += 0.25
+        priorities["skills_vector"] += 0.10
+
+    if _contains_any(query_text, ROLE_INTENT_TERMS):
+        priorities["role_vector"] += 0.45
+        priorities["skills_vector"] += 0.15
+        priorities["projects_vector"] += 0.10
+
+    if _contains_any(query_text, EDUCATION_INTENT_TERMS):
+        priorities["education_vector"] += 0.45
+        priorities["semantic_profile_vector"] += 0.10
+
+    if not skill_mentions and len(tokens) >= 2:
+        priorities["semantic_profile_vector"] += 0.15
+
+    selected = sorted(
+        ((field, priority) for field, priority in priorities.items() if field in VECTOR_FIELDS),
+        key=lambda item: (-item[1], item[0]),
+    )[:DENSE_ROUTE_MAX_FIELDS]
+
+    return [
+        {
+            "field": field,
+            "retriever_name": _dense_retriever_name(field),
+            "weight": DENSE_RRF_WEIGHT,
+            "priority": round(priority, 3),
+        }
+        for field, priority in selected
+    ]
+
+
+def _known_skill_mentions(
+    query_text: str,
+    tokens: list[str],
+    skill_vocab: set[str] | None,
+) -> set[str]:
+    token_keys = {_casefold_key(token) for token in tokens}
+    mentions: set[str] = set()
+    for skill in skill_vocab or set():
+        cleaned = str(skill).strip()
+        if not cleaned:
+            continue
+        key = _casefold_key(cleaned)
+        if key in token_keys:
+            mentions.add(cleaned)
+        elif len(cleaned) >= 2 and cleaned in query_text:
+            mentions.add(cleaned)
+    return mentions
+
+
+def _contains_any(text: str, terms: tuple[str, ...]) -> bool:
+    return any(term in text for term in terms)
+
+
+def _dense_retriever_name(field: str) -> str:
+    label = field.removesuffix("_vector").replace("semantic_profile", "profile")
+    return f"{DENSE_RETRIEVER}:{label}"
+
+
+def _is_dense_retriever(name: Any) -> bool:
+    return name == DENSE_RETRIEVER or str(name).startswith(f"{DENSE_RETRIEVER}:")
+
+
 def _knn_body(
     field: str,
     query_vector: list[float],
@@ -974,18 +1132,24 @@ def _run_hybrid_search(
     query_vector: list[float],
     filters: list[dict[str, Any]],
     rank_window_size: int,
-    use_dense: bool = True,
+    dense_routes: list[dict[str, Any]] | None = None,
 ) -> tuple[list[dict[str, Any]], list[str]]:
     requests_to_run = [
-        (BM25_RETRIEVER, BM25_RRF_WEIGHT, _bm25_body(query_text, filters, rank_window_size)),
+        (
+            BM25_RETRIEVER,
+            BM25_RRF_WEIGHT,
+            _bm25_body(query_text, filters, rank_window_size),
+            None,
+        ),
     ]
-    vector_fields = VECTOR_FIELDS if use_dense else ()
-    if vector_fields:
+    dense_size = min(rank_window_size, DENSE_RANK_WINDOW_SIZE)
+    for route in dense_routes or []:
         requests_to_run.append(
             (
-                DENSE_RETRIEVER,
-                DENSE_RRF_WEIGHT,
-                _knn_body(vector_fields[0], query_vector, filters, rank_window_size),
+                route["retriever_name"],
+                route["weight"],
+                _knn_body(route["field"], query_vector, filters, dense_size),
+                route["field"],
             )
         )
 
@@ -993,11 +1157,11 @@ def _run_hybrid_search(
     warnings: list[str] = []
     with ThreadPoolExecutor(max_workers=len(requests_to_run)) as executor:
         futures = {
-            executor.submit(_es, "POST", f"/{INDEX_ALIAS}/_search", body): (name, weight)
-            for name, weight, body in requests_to_run
+            executor.submit(_es, "POST", f"/{INDEX_ALIAS}/_search", body): (name, weight, field)
+            for name, weight, body, field in requests_to_run
         }
         for future in as_completed(futures):
-            name, weight = futures[future]
+            name, weight, field = futures[future]
             try:
                 response = future.result()
             except Exception as exc:
@@ -1008,6 +1172,8 @@ def _run_hybrid_search(
                 continue
             response["_retriever_name"] = name
             response["_rrf_weight"] = weight
+            if field:
+                response["_vector_field"] = field
             responses.append(response)
     return responses, warnings
 
@@ -1044,6 +1210,8 @@ def _rrf_merge(
     query_text: str = "",
 ) -> list[dict[str, Any]]:
     rrf_scores: dict[str, float] = {}
+    dense_inner_scores: dict[str, float] = {}
+    dense_best_route_rank: dict[str, int] = {}
     hit_map: dict[str, dict[str, Any]] = {}
     best_rank: dict[str, int] = {}
     bm25_rank: dict[str, int] = {}
@@ -1056,10 +1224,16 @@ def _rrf_merge(
     for response in responses:
         retriever_name = response.get("_retriever_name")
         weight = float(response.get("_rrf_weight", 1.0))
+        is_dense = _is_dense_retriever(retriever_name)
         for rank, hit, dense_debug in _accepted_hits(response, lexical_ids, allow_dense_only):
             doc_id = hit["_id"]
-            rrf_scores[doc_id] = rrf_scores.get(doc_id, 0) + weight / (RRF_RANK_CONSTANT + rank)
-            best_rank[doc_id] = min(best_rank.get(doc_id, rank), rank)
+            route_contribution = weight / (RRF_RANK_CONSTANT + rank)
+            if is_dense:
+                dense_inner_scores[doc_id] = dense_inner_scores.get(doc_id, 0) + route_contribution
+                dense_best_route_rank[doc_id] = min(dense_best_route_rank.get(doc_id, rank), rank)
+            else:
+                rrf_scores[doc_id] = rrf_scores.get(doc_id, 0) + route_contribution
+                best_rank[doc_id] = min(best_rank.get(doc_id, rank), rank)
             if coverage_enabled and retriever_name == BM25_RETRIEVER:
                 term_coverage[doc_id] = max(
                     term_coverage.get(doc_id, 0),
@@ -1081,15 +1255,68 @@ def _rrf_merge(
                     "dense_rank": None,
                 },
             )
-            if retriever_name not in debug["retrieval_sources"]:
+            if not is_dense and retriever_name not in debug["retrieval_sources"]:
                 debug["retrieval_sources"].append(retriever_name)
             if retriever_name == BM25_RETRIEVER:
                 debug["bm25_rank"] = rank
                 debug["bm25_score"] = round(float(hit.get("_score") or 0), 4)
+                debug["bm25_weight"] = round(weight, 3)
                 debug["matched_queries"] = hit.get("matched_queries") or []
-            elif retriever_name == DENSE_RETRIEVER:
-                debug["dense_rank"] = rank
-                debug.update(dense_debug)
+            elif is_dense:
+                debug.setdefault("dense_matches", []).append(
+                    {
+                        "retriever": retriever_name,
+                        "field": dense_debug.get("dense_field"),
+                        "rank": rank,
+                        "score": dense_debug.get("dense_score"),
+                        "weight": dense_debug.get("dense_weight"),
+                        "contribution": round(route_contribution, 6),
+                    }
+                )
+                debug["dense_only_threshold"] = dense_debug.get("dense_only_threshold")
+                debug["dense_only_accepted"] = bool(debug.get("dense_only_accepted")) or bool(
+                    dense_debug.get("dense_only_accepted")
+                )
+
+    dense_group_ids = sorted(
+        dense_inner_scores.keys(),
+        key=lambda doc_id: (
+            -dense_inner_scores[doc_id],
+            dense_best_route_rank.get(doc_id, 10**9),
+            doc_id,
+        ),
+    )
+    for dense_rank, doc_id in enumerate(dense_group_ids, start=1):
+        dense_contribution = DENSE_RRF_WEIGHT / (RRF_RANK_CONSTANT + dense_rank)
+        rrf_scores[doc_id] = rrf_scores.get(doc_id, 0) + dense_contribution
+        best_rank[doc_id] = min(best_rank.get(doc_id, dense_rank), dense_rank)
+        debug = retrieval_debug.setdefault(
+            doc_id,
+            {
+                "retrieval_sources": [],
+                "bm25_rank": None,
+                "dense_rank": None,
+            },
+        )
+        if DENSE_RETRIEVER not in debug["retrieval_sources"]:
+            debug["retrieval_sources"].append(DENSE_RETRIEVER)
+        dense_matches = debug.get("dense_matches") or []
+        best_dense_match = min(
+            dense_matches,
+            key=lambda match: (
+                match.get("rank") or 10**9,
+                -float(match.get("score") or 0),
+            ),
+        ) if dense_matches else {}
+        debug["dense_rank"] = dense_rank
+        debug["dense_group_rank"] = dense_rank
+        debug["dense_inner_score"] = round(dense_inner_scores[doc_id], 6)
+        debug["dense_outer_weight"] = round(DENSE_RRF_WEIGHT, 3)
+        debug["dense_rrf_contribution"] = round(dense_contribution, 6)
+        debug["dense_route_rank"] = best_dense_match.get("rank")
+        debug["dense_score"] = best_dense_match.get("score")
+        debug["dense_field"] = best_dense_match.get("field")
+        debug["dense_retriever"] = best_dense_match.get("retriever")
 
     final_scores: dict[str, float] = {}
     score_multipliers: dict[str, float] = {}
@@ -1124,7 +1351,6 @@ def _rrf_merge(
         results.append(_format_hit(hit, final_scores[doc_id]))
     return results
 
-
 def _matched_term_coverage(hit: dict[str, Any]) -> int:
     matched_queries = hit.get("matched_queries") or []
     return len(
@@ -1157,7 +1383,7 @@ def _accepted_hits(
     allow_dense_only: bool,
 ) -> list[tuple[int, dict[str, Any], dict[str, Any]]]:
     hits = response.get("hits", {}).get("hits", [])
-    if response.get("_retriever_name") != DENSE_RETRIEVER:
+    if not _is_dense_retriever(response.get("_retriever_name")):
         return [(rank, hit, {}) for rank, hit in enumerate(hits, start=1)]
 
     threshold = _dense_only_threshold(response)
@@ -1169,6 +1395,8 @@ def _accepted_hits(
         dense_debug = {
             "dense_score": round(raw_score, 6),
             "dense_only_threshold": round(threshold, 6) if threshold is not None else None,
+            "dense_field": response.get("_vector_field"),
+            "dense_weight": round(float(response.get("_rrf_weight", 1.0)), 3),
         }
         if doc_id in lexical_ids:
             dense_debug["dense_only_accepted"] = False

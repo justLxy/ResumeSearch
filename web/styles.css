@@ -994,6 +994,30 @@ mark {
   color: #475569;
   border-color: #e2e8f0;
 }
+.dense-match-list {
+  display: grid;
+  gap: 4px;
+  width: 100%;
+}
+
+.dense-match-item {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) minmax(90px, auto);
+  gap: 10px;
+  padding: 3px 0;
+  border-bottom: 1px solid var(--line-soft);
+  color: var(--subtext);
+  font-size: 12px;
+}
+
+.dense-match-item:last-child {
+  border-bottom: 0;
+}
+
+.dense-match-name {
+  color: var(--text);
+  font-weight: 650;
+}
 
 /* Formula box */
 .debug-formula-box {
@@ -1024,12 +1048,15 @@ mark {
 }
 
 .formula-calc {
+  flex: 1;
+  min-width: 0;
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  flex-wrap: wrap;
-  gap: 8px;
+  flex-wrap: nowrap;
+  gap: 6px;
   text-align: right;
+  white-space: nowrap;
 }
 
 .formula-eq {
@@ -1037,10 +1064,11 @@ mark {
 }
 
 .formula-val {
-  min-width: 70px;
+  min-width: 64px;
   display: inline-block;
   color: var(--text);
   font-weight: 500;
+  text-align: right;
 }
 
 .formula-divider {

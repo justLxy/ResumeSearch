@@ -18,9 +18,19 @@ DEFAULT_ALIAS = "resumes_current"
 BULK_BATCH_SIZE = 100
 REQUEST_TIMEOUT_SECONDS = 90
 SEMANTIC_PROFILE_CHAR_BUDGET = 512
-SEMANTIC_PROFILE_VERSION = "semantic-profile-v2"
+SECTION_SEMANTIC_CHAR_BUDGET = 512
+SKILLS_SEMANTIC_CHAR_BUDGET = 256
+ROLE_SEMANTIC_CHAR_BUDGET = 256
+SEMANTIC_PROFILE_VERSION = "semantic-profile-v3"
 EMBEDDING_NORMALIZED = True
-VECTOR_FIELDS = ("semantic_profile_vector",)
+VECTOR_FIELDS = (
+    "semantic_profile_vector",
+    "skills_vector",
+    "projects_vector",
+    "internships_vector",
+    "education_vector",
+    "role_vector",
+)
 
 
 def _dense_vector_mapping() -> dict[str, Any]:
@@ -63,6 +73,7 @@ INDEX_BODY: dict[str, Any] = {
             "embedding_vector_dims": VECTOR_DIMS,
             "embedding_normalized": EMBEDDING_NORMALIZED,
             "semantic_profile_version": SEMANTIC_PROFILE_VERSION,
+            "embedding_vector_fields": list(VECTOR_FIELDS),
         },
         "properties": {
             "resume_id": {"type": "keyword"},
@@ -415,6 +426,11 @@ INDEX_BODY: dict[str, Any] = {
                 "index": False,
             },
             "semantic_profile_vector": _dense_vector_mapping(),
+            "skills_vector": _dense_vector_mapping(),
+            "projects_vector": _dense_vector_mapping(),
+            "internships_vector": _dense_vector_mapping(),
+            "education_vector": _dense_vector_mapping(),
+            "role_vector": _dense_vector_mapping(),
         }
     },
 }
@@ -428,7 +444,7 @@ def import_resumes(
     recreate: bool = True,
     delete_missing: bool = False,
 ) -> dict[str, Any]:
-    docs = parse_resume_batch(discover_doc_files(data_path))
+    docs = _load_resume_docs(data_path)
     docs = [_enrich_doc(doc) for doc in docs if doc.get("parse_status") == "ok"]
     if recreate and not docs:
         raise RuntimeError("no parsed documents; aborting index rebuild")
@@ -462,6 +478,38 @@ def import_resumes(
         "indexed": count,
         "alias_count": alias_count,
     }
+
+
+def _load_resume_docs(data_path: str | Path) -> list[dict[str, Any]]:
+    path = Path(data_path)
+    if path.is_file() and path.suffix.lower() == ".jsonl":
+        return _load_jsonl_docs(path)
+    if path.is_file() and path.suffix.lower() == ".json":
+        return _load_json_docs(path)
+    return parse_resume_batch(discover_doc_files(path))
+
+
+def _load_jsonl_docs(path: Path) -> list[dict[str, Any]]:
+    docs: list[dict[str, Any]] = []
+    for line_no, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+        if not line.strip():
+            continue
+        item = json.loads(line)
+        if not isinstance(item, dict):
+            raise ValueError(f"{path}:{line_no} must contain a JSON object per line")
+        docs.append(item)
+    return docs
+
+
+def _load_json_docs(path: Path) -> list[dict[str, Any]]:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if isinstance(payload, list):
+        if not all(isinstance(item, dict) for item in payload):
+            raise ValueError(f"{path} must contain a list of JSON objects")
+        return payload
+    if isinstance(payload, dict):
+        return [payload]
+    raise ValueError(f"{path} must contain a JSON object or a list of JSON objects")
 
 
 def _enrich_doc(doc: dict[str, Any]) -> dict[str, Any]:
@@ -500,7 +548,14 @@ def add_doc_embeddings(docs: list[dict[str, Any]]) -> None:
 
 
 def _embedding_inputs(doc: dict[str, Any]) -> dict[str, str]:
-    return {"semantic_profile_vector": doc.get("search_text", "")}
+    return {
+        "semantic_profile_vector": doc.get("search_text", "") or _build_search_text(doc),
+        "skills_vector": _skills_semantic_text(doc),
+        "projects_vector": _project_semantic_text(doc),
+        "internships_vector": _internship_semantic_text(doc),
+        "education_vector": _education_semantic_text(doc),
+        "role_vector": _role_semantic_text(doc),
+    }
 
 
 def _drop_index_debug_fields(value: Any) -> Any:
@@ -564,8 +619,12 @@ def _build_search_text(doc: dict[str, Any]) -> str:
         _profile_line("目标岗位", application.get("position_name")),
         _profile_line("专业背景", candidate.get("major")),
     ]
+    return _semantic_text(doc, lines, SEMANTIC_PROFILE_CHAR_BUDGET)
+
+
+def _semantic_text(doc: dict[str, Any], lines: list[Any], max_chars: int) -> str:
     cleaned = _strip_semantic_exclusions(_compact_join(lines), _semantic_exclusions(doc))
-    return _budgeted_join(cleaned.splitlines(), SEMANTIC_PROFILE_CHAR_BUDGET)
+    return _budgeted_join(cleaned.splitlines(), max_chars)
 
 
 def _education_semantic_text(doc: dict[str, Any]) -> str:
@@ -578,7 +637,7 @@ def _education_semantic_text(doc: dict[str, Any]) -> str:
                 _profile_line("实验室方向", item.get("lab_name")),
             ]
         )
-    return _compact_join(lines)
+    return _semantic_text(doc, lines, SECTION_SEMANTIC_CHAR_BUDGET)
 
 
 def _internship_semantic_text(doc: dict[str, Any]) -> str:
@@ -591,7 +650,7 @@ def _internship_semantic_text(doc: dict[str, Any]) -> str:
                 _profile_line("实习描述", item.get("description")),
             ]
         )
-    return _compact_join(lines)
+    return _semantic_text(doc, lines, SECTION_SEMANTIC_CHAR_BUDGET)
 
 
 def _project_semantic_text(doc: dict[str, Any]) -> str:
@@ -604,7 +663,27 @@ def _project_semantic_text(doc: dict[str, Any]) -> str:
                 _profile_line("项目职责", item.get("responsibility")),
             ]
         )
-    return _compact_join(lines)
+    return _semantic_text(doc, lines, SECTION_SEMANTIC_CHAR_BUDGET)
+
+
+def _skills_semantic_text(doc: dict[str, Any]) -> str:
+    return _semantic_text(
+        doc,
+        [_profile_line("能力标签", "，".join(doc.get("skills") or []))],
+        SKILLS_SEMANTIC_CHAR_BUDGET,
+    )
+
+
+def _role_semantic_text(doc: dict[str, Any]) -> str:
+    application = doc.get("application") or {}
+    candidate = doc.get("candidate") or {}
+    lines = [
+        _profile_line("目标岗位", application.get("position_name")),
+        _profile_line("专业背景", candidate.get("major")),
+    ]
+    for item in application.get("wishes") or []:
+        lines.append(_profile_line("求职意向", item.get("position_name")))
+    return _semantic_text(doc, lines, ROLE_SEMANTIC_CHAR_BUDGET)
 
 
 def _profile_line(label: str, value: Any) -> str:

@@ -8,6 +8,7 @@ from app import (
     _default_snippet,
     _format_hit,
     _hybrid_total,
+    _infer_dense_routes,
     _lexical_query,
     _lexical_total,
     _merge_case_insensitive_skill_buckets,
@@ -20,6 +21,7 @@ from import_to_es import (
     EMBEDDING_NORMALIZED,
     SEMANTIC_PROFILE_VERSION,
     VECTOR_DIMS,
+    VECTOR_FIELDS,
     INDEX_BODY,
     _build_search_text,
     _embedding_inputs,
@@ -167,7 +169,7 @@ class SearchLogicTests(unittest.TestCase):
         self.assertEqual([item["id"] for item in results], ["lexical-2", "lexical-1", "vector-only"])
         self.assertEqual(results[0]["retrieval_debug"]["retrieval_sources"], [BM25_RETRIEVER, DENSE_RETRIEVER])
 
-    def test_multi_term_coverage_takes_priority_over_single_term_frequency(self) -> None:
+    def test_multi_term_coverage_boost_is_reflected_in_final_score(self) -> None:
         bm25_response = _response(
             BM25_RETRIEVER,
             [
@@ -191,11 +193,12 @@ class SearchLogicTests(unittest.TestCase):
             query_text="A B",
         )
 
-        self.assertEqual([item["id"] for item in results], ["both", "a-many", "b-many", "zero"])
-        self.assertEqual(results[0]["retrieval_debug"]["term_coverage"], 2)
-        self.assertEqual(results[1]["retrieval_debug"]["term_coverage"], 1)
+        self.assertEqual([item["id"] for item in results], ["a-many", "both", "b-many", "zero"])
+        self.assertGreaterEqual(results[0]["retrieval_debug"]["rrf_score"], results[1]["retrieval_debug"]["rrf_score"])
+        self.assertEqual(results[0]["retrieval_debug"]["term_coverage"], 1)
+        self.assertEqual(results[1]["retrieval_debug"]["term_coverage"], 2)
 
-    def test_phrase_evidence_takes_priority_over_split_terms_and_dense_rank(self) -> None:
+    def test_final_score_orders_phrase_against_dense_rank(self) -> None:
         bm25_response = _response(
             BM25_RETRIEVER,
             [
@@ -217,10 +220,11 @@ class SearchLogicTests(unittest.TestCase):
             query_text="计算机科学",
         )
 
-        self.assertEqual([item["id"] for item in results], ["phrase", "split-and-dense"])
-        self.assertEqual(results[0]["retrieval_debug"]["lexical_tier"], 2)
+        self.assertEqual([item["id"] for item in results], ["split-and-dense", "phrase"])
+        self.assertGreaterEqual(results[0]["retrieval_debug"]["rrf_score"], results[1]["retrieval_debug"]["rrf_score"])
+        self.assertEqual(results[1]["retrieval_debug"]["lexical_tier"], 2)
 
-    def test_phrase_tier_uses_bm25_rank_before_dense_rrf_boost(self) -> None:
+    def test_final_score_can_include_dense_support_for_phrase_hits(self) -> None:
         bm25_response = _response(
             BM25_RETRIEVER,
             [
@@ -242,7 +246,8 @@ class SearchLogicTests(unittest.TestCase):
             query_text="计算机科学",
         )
 
-        self.assertEqual([item["id"] for item in results], ["major-phrase", "weak-field-phrase"])
+        self.assertEqual([item["id"] for item in results], ["weak-field-phrase", "major-phrase"])
+        self.assertGreaterEqual(results[0]["retrieval_debug"]["rrf_score"], results[1]["retrieval_debug"]["rrf_score"])
 
     def test_dense_only_hits_need_similarity_gate(self) -> None:
         bm25_response = _response(
@@ -264,7 +269,8 @@ class SearchLogicTests(unittest.TestCase):
 
         self.assertEqual(_hybrid_total([bm25_response, vector_response], allow_dense_only=True), 1)
         self.assertEqual([item["id"] for item in results], ["lexical-1"])
-        self.assertEqual(results[0]["retrieval_debug"]["dense_rank"], 2)
+        self.assertEqual(results[0]["retrieval_debug"]["dense_rank"], 1)
+        self.assertEqual(results[0]["retrieval_debug"]["dense_route_rank"], 2)
         self.assertIsNone(results[0]["retrieval_debug"]["dense_only_threshold"])
 
     def test_dense_only_gate_keeps_high_confidence_semantic_hits(self) -> None:
@@ -282,6 +288,42 @@ class SearchLogicTests(unittest.TestCase):
         self.assertEqual([item["id"] for item in results], ["vector-1", "vector-2"])
         self.assertEqual(results[0]["retrieval_debug"]["dense_only_threshold"], 0.86)
         self.assertTrue(results[0]["retrieval_debug"]["dense_only_accepted"])
+
+    def test_dense_routes_are_group_normalized_before_outer_rrf(self) -> None:
+        bm25_response = _response(
+            BM25_RETRIEVER,
+            [
+                _hit("lexical-1", "词面候选"),
+            ],
+            weight=1.5,
+            total=1,
+        )
+        dense_projects_response = _response(
+            "dense:projects",
+            [
+                _hit("vector-1", "向量候选", score=0.92),
+            ],
+            weight=2.0,
+        )
+        dense_skills_response = _response(
+            "dense:skills",
+            [
+                _hit("vector-1", "向量候选", score=0.91),
+            ],
+            weight=2.0,
+        )
+
+        results = _rrf_merge(
+            [bm25_response, dense_projects_response, dense_skills_response],
+            10,
+            allow_dense_only=True,
+        )
+
+        self.assertEqual([item["id"] for item in results], ["lexical-1", "vector-1"])
+        vector_debug = results[1]["retrieval_debug"]
+        self.assertEqual(vector_debug["retrieval_sources"], [DENSE_RETRIEVER])
+        self.assertEqual(vector_debug["dense_rank"], 1)
+        self.assertGreater(vector_debug["dense_inner_score"], vector_debug["raw_rrf_score"])
 
     def test_vector_text_excludes_entity_and_location_noise(self) -> None:
         doc = {
@@ -328,18 +370,45 @@ class SearchLogicTests(unittest.TestCase):
 
         search_text = _build_search_text(doc)
         embedding_inputs = _embedding_inputs({"search_text": search_text, **doc})
+        all_embedding_text = "\n".join(embedding_inputs.values())
 
         self.assertNotIn("北京大学", search_text)
         self.assertNotIn("北京", search_text)
         self.assertNotIn("张三", search_text)
-        self.assertNotIn("百度在线网络技术", embedding_inputs["semantic_profile_vector"])
-        self.assertNotIn("学士", embedding_inputs["semantic_profile_vector"])
+        self.assertNotIn("百度在线网络技术", all_embedding_text)
+        self.assertNotIn("学士", all_embedding_text)
         self.assertLessEqual(len(embedding_inputs["semantic_profile_vector"]), 512)
-        self.assertIn("机器学习", search_text)
-        self.assertIn("自然语言处理", embedding_inputs["semantic_profile_vector"])
-        self.assertIn("推荐系统", embedding_inputs["semantic_profile_vector"])
-        self.assertIn("医疗问答系统", embedding_inputs["semantic_profile_vector"])
+        self.assertIn("机器学习", embedding_inputs["skills_vector"])
+        self.assertIn("自然语言处理", embedding_inputs["education_vector"])
+        self.assertIn("推荐系统", embedding_inputs["internships_vector"])
+        self.assertIn("医疗问答系统", embedding_inputs["projects_vector"])
+        self.assertIn("机器学习工程师", embedding_inputs["role_vector"])
         self.assertLess(search_text.index("项目名称"), search_text.index("实习职位"))
+
+    def test_dense_routes_prioritize_query_intent(self) -> None:
+        skill_routes = _infer_dense_routes(
+            "Python SQL 推荐系统",
+            {"Python", "SQL", "推荐系统"},
+        )
+        self.assertEqual(skill_routes[0]["field"], "skills_vector")
+        self.assertIn("projects_vector", [route["field"] for route in skill_routes])
+
+        project_routes = _infer_dense_routes(
+            "做过推荐系统召回和 NLP 模型落地的人",
+            {"推荐系统", "NLP"},
+        )
+        self.assertEqual(project_routes[0]["field"], "projects_vector")
+        self.assertIn("skills_vector", [route["field"] for route in project_routes])
+
+        role_routes = _infer_dense_routes(
+            "机器学习工程师 Python 推荐系统",
+            {"Python", "推荐系统"},
+        )
+        role_fields = [route["field"] for route in role_routes]
+        self.assertIn("role_vector", role_fields)
+        self.assertIn("skills_vector", role_fields)
+        self.assertTrue(all(route["weight"] == 1.0 for route in role_routes))
+        self.assertTrue(all("priority" in route for route in role_routes))
 
     def test_skill_filters_are_and_terms(self) -> None:
         filters = _build_filters("", [], ["Python", "NLP", "Python"], 0)
@@ -504,8 +573,11 @@ class SearchLogicTests(unittest.TestCase):
         self.assertEqual(meta["embedding_vector_dims"], VECTOR_DIMS)
         self.assertEqual(meta["semantic_profile_version"], SEMANTIC_PROFILE_VERSION)
         self.assertEqual(meta["embedding_normalized"], EMBEDDING_NORMALIZED)
+        self.assertEqual(tuple(meta["embedding_vector_fields"]), VECTOR_FIELDS)
         self.assertIn("embedding", INDEX_BODY["mappings"]["properties"])
         props = INDEX_BODY["mappings"]["properties"]
+        for field in VECTOR_FIELDS:
+            self.assertIn(field, props)
         self.assertIn("keyword", props["candidate"]["properties"]["major"]["fields"])
         self.assertIn("phrase", props["candidate"]["properties"]["major"]["fields"])
         self.assertIn("keyword", props["education"]["properties"]["major"]["fields"])
