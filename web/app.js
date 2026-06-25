@@ -329,11 +329,12 @@ function renderResults() {
       const denseOuterWeight = Number(debug.dense_outer_weight ?? 1);
       const denseGroupRank = debug.dense_group_rank ?? debug.dense_rank;
       const bestDenseRouteRank = debug.dense_route_rank ?? denseMatches[0]?.rank ?? debug.dense_rank;
+      const evidenceGroupRank = debug.evidence_group_rank ?? debug.evidence_rank;
       const bestDenseLabel = denseMatches[0] ? denseMatchLabel(denseMatches[0]) : denseFieldLabel(debug.dense_field, null);
 
       const lexicalStatusRows = [
         hasEvidenceLexical
-          ? `<div class="debug-item"><span class="debug-label" title="证据索引中的 BM25 / phrase 词面召回&#10;先命中候选人档案、项目、实习、教育或技能证据片段，再按候选人聚合" style="cursor: help; text-decoration: underline dotted var(--muted); text-underline-offset: 4px;">词面证据排名：</span> <span class="debug-value">${debug.evidence_rank} <span class="tier-desc">(分数: ${formatScore(debug.evidence_score || 0, 4)})</span></span></div>`
+          ? `<div class="debug-item"><span class="debug-label" title="证据索引中的 BM25 / phrase 词面召回&#10;先命中候选人档案、项目、实习、教育或技能证据片段，再按候选人聚合排名" style="cursor: help; text-decoration: underline dotted var(--muted); text-underline-offset: 4px;">词面证据排名：</span> <span class="debug-value">${evidenceGroupRank} <span class="tier-desc">(最佳片段 #${debug.evidence_rank}，分数: ${formatScore(debug.evidence_score || 0, 4)})</span></span></div>`
           : "",
       ].filter(Boolean).join("");
       const bm25Html = hasLexical
@@ -384,12 +385,14 @@ function renderResults() {
         : '';
 
       const evidenceLexicalContrib = hasEvidenceLexical
-        ? (Number(debug.evidence_weight ?? 1.2) / (60 + Number(debug.evidence_rank))).toFixed(6)
+        ? (debug.evidence_rrf_contribution != null
+            ? formatScore(debug.evidence_rrf_contribution, 6)
+            : (Number(debug.evidence_weight ?? 1.2) / (60 + Number(evidenceGroupRank))).toFixed(6))
         : "0";
       const lexicalFormulaRowsHtml = `
         <div class="formula-row">
           <span class="formula-label">词面证据贡献：</span>
-          <span class="formula-calc">${hasEvidenceLexical ? formatScore(debug.evidence_weight ?? 1.2, 2) + " / (60 + " + debug.evidence_rank + ")" : '0 (未命中)'} <span class="formula-eq">=</span> <span class="formula-val">${evidenceLexicalContrib}</span></span>
+          <span class="formula-calc">${hasEvidenceLexical ? formatScore(debug.evidence_weight ?? 1.2, 2) + " / (60 + " + evidenceGroupRank + ")" : '0 (未命中)'} <span class="formula-eq">=</span> <span class="formula-val">${evidenceLexicalContrib}</span></span>
         </div>`;
       const denseContrib = hasDense ? denseOuterContribution(debug).toFixed(6) : "0";
       const denseFormulaHtml = hasDense

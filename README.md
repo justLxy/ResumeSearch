@@ -1,1864 +1,950 @@
-# 简历检索系统
+# 简历检索系统 (ResumeSearch)
 
-这是一个面向简历筛选场景的 Elasticsearch 混合检索原型。项目用 FastAPI 提供搜索接口，用 Elasticsearch 承载结构化字段检索、中文 BM25 全文检索、连续短语匹配、向量近邻检索，并在应用层实现 RRF 融合排序。
+一个面向校招/实习简历筛选场景的 **混合检索原型系统**。系统以 Elasticsearch 为核心引擎，实现了 **结构化过滤 + 中文 BM25 全文检索 + 短语匹配 + 证据切片向量检索 + RRF 融合排序**，并配套前端 Web 界面供交互使用。
 
-本文档的目标不是只告诉你“怎么启动项目”，而是帮助你系统理解项目的业务背景、数据链路、字段设计、Elasticsearch 查询 DSL、排序策略和技术取舍。读完后，应当能够比较完整地向面试官说明：
+> **适读对象**：项目新接手者、面试评审方、需要理解系统全貌的协作开发者。读完本文档后，你应当能回答以下问题：
+>
+> - 这个项目的完整数据链路是怎样的（从 `.doc` 文件到可搜索索引）？
+> - 用户输入一个 query 后，系统经历了哪些步骤才返回结果？
+> - 为什么需要"证据索引"？它比直接对整份简历做向量化好在哪里？
+> - RRF 融合排序具体是怎么计算的？
+> - 系统有哪些已知边界和可优化方向？
 
-- 这个项目为什么需要混合检索。
-- keyword、phrase、BM25、filter、dense vector 分别解决什么问题。
-- 用户输入如何被解析成 Elasticsearch 查询。
-- 搜索结果如何从 BM25 和向量检索融合而来。
-- 为什么某些字段必须精确匹配，某些字段适合分词搜索，某些字段只应该过滤。
-- 如果数据量变大，应该从哪些方向优化。
-
-开发过程中的问题复盘和面试表达补充见 [PROJECT_REVIEW.md](./PROJECT_REVIEW.md)。
+---
 
 ## 目录
 
-- [1. 项目整体介绍](#1-项目整体介绍)
-- [2. 项目架构设计](#2-项目架构设计)
-- [3. 核心概念解释](#3-核心概念解释)
-- [4. Elasticsearch Mapping 与索引设计](#4-elasticsearch-mapping-与索引设计)
-- [5. 用户输入解析](#5-用户输入解析)
-- [6. 搜索逻辑与 Elasticsearch DSL](#6-搜索逻辑与-elasticsearch-dsl)
-- [7. 排序与融合逻辑](#7-排序与融合逻辑)
-- [8. 字段匹配规则](#8-字段匹配规则)
-- [9. 代码实现概览](#9-代码实现概览)
-- [10. 完整搜索示例](#10-完整搜索示例)
-- [11. 检索效果评估](#11-检索效果评估)
-- [12. 本地运行与验证](#12-本地运行与验证)
-- [13. 设计取舍与面试重点](#13-设计取舍与面试重点)
-- [14. 当前边界与需要补充的信息](#14-当前边界与需要补充的信息)
+- [1. 业务背景与问题定义](#1-业务背景与问题定义)
+- [2. 项目架构总览](#2-项目架构总览)
+- [3. 技术栈与依赖](#3-技术栈与依赖)
+- [4. 数据处理流程](#4-数据处理流程)
+  - [4.1 简历解析 (resume_parser.py)](#41-简历解析-resume_parserpy)
+  - [4.2 证据切片构建与向量化 (import_to_es.py)](#42-证据切片构建与向量化-import_to_espy)
+  - [4.3 Embedding 服务 (embedding_service.py)](#43-embedding-服务-embedding_servicepy)
+  - [4.4 Elasticsearch 索引设计](#44-elasticsearch-索引设计)
+- [5. 检索流程详解](#5-检索流程详解)
+  - [5.1 请求入口与 Query 解析](#51-请求入口与-query-解析)
+  - [5.2 三路并行检索](#52-三路并行检索)
+  - [5.3 RRF 融合排序](#53-rrf-融合排序)
+  - [5.4 结果格式化与返回](#54-结果格式化与返回)
+- [6. 前端交互](#6-前端交互)
+- [7. 检索效果评估](#7-检索效果评估)
+- [8. 本地部署与运行](#8-本地部署与运行)
+- [9. 配置项与环境变量](#9-配置项与环境变量)
+- [10. 与旧 README 的差异说明](#10-与旧-readme-的差异说明)
+- [11. 当前实现说明与后续优化方向](#11-当前实现说明与后续优化方向)
 
-## 1. 项目整体介绍
+---
 
-### 1.1 这个项目解决什么问题
+## 1. 业务背景与问题定义
 
-简历检索不是普通的全文搜索。用户可能输入非常不同类型的查询：
+### 1.1 简历检索为什么不能只用一种技术
 
-| 查询类型 | 用户输入示例 | 用户真实意图 |
-| --- | --- | --- |
-| 编号查询 | `A0009`、`M20260001` | 找某个岗位或某份简历 |
-| 实体查询 | `北京交通大学`、`百度在线网络技术` | 找指定学校或公司背景 |
-| 专业查询 | `计算机科学`、`计算机科学与技术` | 专业字段中连续短语或完整专业优先 |
-| 技能查询 | `Python NLP SQL` | 找同时具备多个技能或能力的人 |
-| 结构化筛选 | `北京 本科 0.5年以上 推荐系统` | 在城市、学历、年限、技能约束下搜索 |
-| 自然语言能力查询 | `做过推荐系统召回和 NLP 模型落地的人` | 找经历语义相近的人 |
+招聘场景中，用户的搜索意图极度多样化：
 
-这些查询不能只靠一种技术解决：
+| 查询类型       | 用户输入示例                         | 实际意图                             |
+|----------------|--------------------------------------|--------------------------------------|
+| 编号精确查找   | `A0009`、`M20260001`                 | 按候选人编号或岗位编号直接定位       |
+| 实体精确查找   | `北京交通大学`、`百度`               | 找特定学校/公司背景的候选人          |
+| 专业查询       | `计算机科学与技术`                   | 专业字段中连续短语优先匹配           |
+| 多技能组合     | `Python NLP SQL`                     | 同时具备这些技能的候选人             |
+| 结构化筛选     | `北京 本科 0.5年以上 推荐系统`       | 多维度约束 + 关键词搜索              |
+| 语义能力查询   | `做过推荐系统召回和 NLP 模型落地`     | 找经历在语义上相近的候选人           |
 
-- 只用 keyword：无法理解自然语言描述，也无法处理职责、项目、能力语义。
-- 只用 BM25：能做关键词相关性，但对“模型落地”“召回链路”这类表达的语义泛化有限。
-- 只用向量：容易把实体查询泛化错，例如搜索 `北京大学` 却召回 `北京交通大学` 或 `北京` 城市相关候选人。
-- 只用 filter：太硬，召回容易为 0，也不能排序。
+**单一技术无法覆盖所有场景**：
 
-因此项目采用混合检索：
+- **只用 keyword/term**：无法理解"NLP 模型落地"这类语义描述。
+- **只用 BM25 分词**：能做关键词相关性排序，但对同义表达（如"机器学习"vs"ML"）泛化能力有限。
+- **只用向量检索**：语义泛化过强——搜"北京大学"可能错误召回所有带"北京"的候选人。
+- **只用 filter**：过于严格，召回量极低，且不能做相关性排序。
 
-```text
-keyword / phrase / BM25 负责“字段上明确写了什么”
-filter 负责“必须满足哪些结构化条件”
-dense vector 负责“经历和能力在语义上像不像”
-RRF 负责把词面检索和向量检索的排名融合起来
+因此本项目采用 **混合检索**：让不同技术各自负责最擅长的部分，再通过 RRF 融合排名。
+
+### 1.2 "证据切片"架构——为什么不对整份简历做向量化
+
+这是项目架构中最核心的设计决策，需要先理解其动机：
+
+**问题**：一份简历可能有 2000+ 字，包含教育、实习、项目、技能等多个截然不同的信息维度。如果把全文拼接成一个字符串去做 embedding，得到的向量只能表达一个"模糊的平均语义"。当用户搜"做过推荐系统"时，这个平均向量可能被简历里大段的教育经历描述所"稀释"，导致匹配精度下降。
+
+**解决方案——证据切片（Evidence Chunks）**：
+
+1. 把每份简历按**结构化段落**拆分成多个"证据片段"——每个项目一片、每段实习一片、每段教育经历一片、技能列表一片。
+2. 对每个证据片段**独立做向量化**，存入独立的 `resume_evidence` 索引。
+3. 检索时，向量检索在证据片段级别进行，找到最相关的片段后，再按 `resume_id` **聚合回候选人维度**。
+
+这样，用户搜"推荐系统"时，系统能精准匹配到某份简历中"项目：推荐系统召回层设计"这个具体片段，而不是被整份简历的平均语义干扰。
+
+---
+
+## 2. 项目架构总览
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                         用户浏览器                              │
+│   web/index.html + web/app.js + web/styles.css                 │
+│   ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐      │
+│   │ 搜索框   │  │ 筛选面板 │  │ 结果列表 │  │ 详情抽屉 │      │
+│   └──────────┘  └──────────┘  └──────────┘  └──────────┘      │
+└───────────────────────────┬─────────────────────────────────────┘
+                            │  HTTP (fetch → /api/search)
+                            ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                    FastAPI 后端 (app.py)                         │
+│                                                                 │
+│  ┌──────────────┐  ┌──────────────┐  ┌─────────────────┐       │
+│  │ Query 解析   │→│ 并行检索调度  │→│ RRF 融合 + 排序 │       │
+│  │ _parse_query │  │ ThreadPool   │  │ _rrf_merge()    │       │
+│  │ _constraints │  │ Executor     │  │                 │       │
+│  └──────────────┘  └──────────────┘  └─────────────────┘       │
+│         │                │                                      │
+│         │    ┌───────────┼───────────┐                          │
+│         │    ▼           ▼           ▼                          │
+│         │  Evidence    Evidence    候选人                        │
+│         │  BM25检索    kNN检索    profile                       │
+│         │  (词面)      (向量)     回填                           │
+│         ▼                                                       │
+│  embedding_service.py  ←→  Yuan-embedding-2.0-zh (1792维)       │
+└────────────────────────┬────────────────────────────────────────┘
+                         │  HTTP (requests → ES REST API)
+                         ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                  Elasticsearch 9.x                              │
+│                                                                 │
+│  ┌─────────────────────┐    ┌──────────────────────────────┐   │
+│  │ resumes_current     │    │ resume_evidence_current      │   │
+│  │ (候选人主索引)       │    │ (证据切片索引)                │   │
+│  │                     │    │                              │   │
+│  │ - 结构化字段        │    │ - evidence_id / resume_id    │   │
+│  │ - 嵌套对象          │    │ - section_type / title / text│   │
+│  │ - section_text      │    │ - evidence_vector (1792维)   │   │
+│  │ - skills keyword    │    │ - 冗余 candidate/application │   │
+│  │                     │    │ - skills / skills_text       │   │
+│  └─────────────────────┘    └──────────────────────────────┘   │
+│                                                                 │
+│  IK 分词器 (ik_max_word / ik_smart)                            │
+│  HNSW 向量索引 (m=32, ef_construction=300)                     │
+└─────────────────────────────────────────────────────────────────┘
+
+离线数据导入流程：
+┌──────────┐     ┌──────────────┐     ┌──────────────┐     ┌─────────┐
+│ .doc 文件 │ ──→ │ resume_parser│ ──→ │ import_to_es │ ──→ │   ES    │
+│ (HTML格式)│     │ 解析结构化   │     │ 证据切片     │     │ 双索引  │
+│           │     │ JSON         │     │ 向量化       │     │         │
+└──────────┘     └──────────────┘     │ bulk index   │     └─────────┘
+                                      └──────────────┘
 ```
 
-### 1.2 核心业务场景
+### 模块职责一览
 
-业务场景是招聘或实习简历筛选。系统面向的用户可以是招聘人员、业务面试官或筛选系统。他们希望通过一个搜索框和若干筛选条件，快速找到符合岗位要求的候选人。
+| 模块文件                | 核心职责                                                         |
+|-------------------------|------------------------------------------------------------------|
+| `resume_parser.py`      | 解析 HTML 格式 `.doc` 简历文件，提取结构化字段（候选人、教育、实习、项目、技能等） |
+| `import_to_es.py`       | 加载解析结果 → 构建证据切片 → 调用 embedding 服务向量化 → 批量写入 ES 双索引 |
+| `embedding_service.py`  | 封装 `Yuan-embedding-2.0-zh` 模型的加载与推理，提供 `encode_single` / `encode_batch` |
+| `app.py`                | FastAPI 后端：Query 解析 → 并行混合检索 → RRF 融合排序 → 结果格式化 |
+| `web/index.html`        | 前端页面骨架：搜索框、筛选面板、结果区域、详情抽屉               |
+| `web/app.js`            | 前端交互逻辑：搜索触发、facet 渲染、结果卡片、Debug 面板        |
+| `web/styles.css`        | 前端样式                                                         |
+| `evaluate_search.py`    | 检索质量评估脚本，基于 eval_queries.jsonl 计算 P@K / R@K / MRR / NDCG |
+| `tests/test_search_logic.py` | 单元测试，覆盖查询解析、RRF 融合、过滤器构建等核心逻辑     |
 
-典型任务包括：
+---
 
-- 搜索特定岗位编号下的候选人。
-- 搜索特定学校、专业、公司背景。
-- 搜索具备某些技能组合的人。
-- 搜索做过某类项目、模型、系统、漏洞挖掘或数据分析工作的人。
-- 对搜索结果进行排序，让最符合意图的人排在前面。
+## 3. 技术栈与依赖
 
-### 1.3 用户输入是什么
+| 类别           | 技术选型                                          | 说明                                           |
+|----------------|---------------------------------------------------|------------------------------------------------|
+| 后端框架       | FastAPI + Uvicorn                                 | 异步 Web 框架，提供 REST API                   |
+| 搜索引擎       | Elasticsearch 9.x                                 | 承载 BM25 全文检索 + kNN 向量检索 + 结构化过滤 |
+| 中文分词       | IK Analysis Plugin                                | `ik_max_word`（索引时细粒度分词）/ `ik_smart`（搜索时智能分词） |
+| Embedding 模型 | `IEITYuan/Yuan-embedding-2.0-zh`                  | 1792 维中文 embedding，cosine 相似度，HNSW 索引 |
+| 模型框架       | sentence-transformers + PyTorch                   | 模型推理框架                                   |
+| 模型下载       | ModelScope + HuggingFace Hub                      | 双通道下载（ModelScope 主体 + HF Dense 层权重） |
+| HTML 解析      | BeautifulSoup4                                    | 解析 HTML 格式的 .doc 简历文件                 |
+| 前端           | 原生 HTML + CSS + JavaScript                      | 无框架依赖的轻量前端                           |
 
-搜索接口位于 `GET /api/search`，主要输入参数如下：
+### Python 依赖 (`requirements.txt`)
 
-| 参数 | 类型 | 含义 | 示例 |
-| --- | --- | --- | --- |
-| `q` | string | 搜索框里的自由文本，可以是编号、学校、专业、技能、自然语言描述 | `计算机科学` |
-| `degree` | string | 显式学历筛选 | `本科`、`硕士` |
-| `cities` | list[string] | 显式期望城市筛选 | `北京`、`上海` |
-| `skills` | list[string] | 显式技能筛选，多个技能是 AND 关系 | `Python`、`NLP` |
-| `min_years` | float | 最低工作或实习年限 | `0.5` |
-| `limit` | int | 返回结果数量。`0` 或不传表示使用默认窗口 | `20` |
-
-除了显式参数，系统也会从 `q` 中轻量识别结构化条件。例如：
-
-```text
-q = "0.5年以上 北京 本科 推荐系统"
+```
+beautifulsoup4>=4.12
+fastapi>=0.100
+requests>=2.31
+uvicorn>=0.23
+sentence-transformers==3.4.1
+torch>=2.0
+modelscope>=1.14
+huggingface-hub>=0.20
 ```
 
-会被解析成：
+---
 
-```text
-query_text = "推荐系统"
-filters:
-  candidate.years_experience >= 0.5
-  application.expected_work_cities contains 北京
-  candidate.highest_degree = 本科
-  skills contains 推荐系统
+## 4. 数据处理流程
+
+数据处理分为三个阶段：**简历解析** → **证据切片构建与向量化** → **写入 ES 索引**。
+
+### 4.1 简历解析 (`resume_parser.py`)
+
+#### 输入格式
+
+本项目处理的简历不是常见的 PDF 或 Word `.docx`，而是 **HTML 内容封装的 `.doc` 文件**——这是一些招聘系统导出简历时采用的格式。文件扩展名是 `.doc`，但实际内容是 HTML 表格。
+
+#### 解析流程
+
+```
+.doc 文件 (实际是 HTML)
+    │
+    ▼
+1. 编码检测与解码
+   - 先检查 HTML meta 标签中的 charset 声明
+   - 按 utf-8-sig → utf-8 → gb18030 顺序尝试解码
+    │
+    ▼
+2. HTML 清洗
+   - 移除 <script>、<style> 等非内容节点
+   - 提取纯文本 (raw_text)
+    │
+    ▼
+3. 文件名解析
+   - 从文件名中提取公司、岗位名称、岗位编号、候选人姓名、候选人编号
+   - 文件名格式：{公司}-{岗位}({岗位编号})-{姓名}({候选人编号}).doc
+    │
+    ▼
+4. 表格行扫描与段落分区
+   - 遍历所有 <tr> 行
+   - 遇到段落标题行(如"个人信息""教育经历")时创建新分区
+   - 非标题行解析为 key-value 对
+    │
+    ▼
+5. 结构化字段映射
+   - 个人信息 → candidate 对象 (姓名、性别、学历、学校、手机、邮箱等)
+   - 教育经历 → education[] (学校、专业、学历、研究方向、实验室等)
+   - 实习经历 → internships[] (公司、部门、职位、描述等)
+   - 项目经验 → projects[] (名称、描述、职责等)
+   - IT技能   → skills[] (去重的技能标签列表)
+   - 语言能力 → languages (英语成绩、口语水平)
+   - 奖项活动 → awards[]
+    │
+    ▼
+6. 日期规范化
+   - "2019年3月" → "2019-03-01" (ISO 格式)
+   - "至今"/"现在" → null + is_current=true
+    │
+    ▼
+7. 生成 resume_id
+   - 优先使用候选人编号 (candidate_no)
+   - 回退为文件内容的 SHA-256 哈希值
 ```
 
-### 1.4 系统输出是什么
+#### 输出结构
 
-接口返回 JSON，核心字段包括：
-
-| 字段 | 含义 |
-| --- | --- |
-| `query` | 用户原始查询 |
-| `effective_query` | 结构化解析后真正进入文本检索的 query |
-| `parsed_constraints` | 从自然语言里解析出的结构化约束 |
-| `matched_total` | BM25 / keyword / phrase / filter 侧命中的业务总数 |
-| `candidate_total` | 进入融合排序并被接受的候选数量 |
-| `returned_count` | 当前响应实际返回数量 |
-| `retrieval_warnings` | 某一路检索失败或降级时的 warning |
-| `results` | 搜索结果列表 |
-| `facets` | 前端筛选面板需要的学历、城市、技能、岗位聚合 |
-
-每条结果会包含候选人摘要、教育经历、技能、项目片段、高亮片段和调试信息。调试信息对排查排序很重要：
+解析结果是一个 JSON 对象，关键字段：
 
 ```json
 {
-  "retrieval_debug": {
-    "retrieval_sources": ["bm25", "dense"],
-    "bm25_rank": 3,
-    "dense_rank": 12,
-    "dense_route_rank": 4,
-    "dense_field": "projects_vector",
-    "dense_inner_score": 0.052104,
-    "dense_rrf_contribution": 0.013889,
-    "rrf_score": 0.027367,
-    "lexical_tier": 2,
-    "term_coverage": 2
-  }
-}
-```
-
-### 1.5 从输入到结果返回的整体流程
-
-```mermaid
-flowchart TD
-    A["用户输入 q + 筛选参数"] --> B["FastAPI /api/search"]
-    B --> C["解析结构化约束"]
-    C --> D["构造 filter 条件"]
-    C --> E["得到 effective_query"]
-    E --> F["构造 BM25 / keyword / phrase 查询"]
-    E --> G{"是否启用 dense"}
-    G -->|是| H["生成 query embedding"]
-    H --> I["构造 kNN 查询"]
-    G -->|否| J["只走 lexical 检索"]
-    F --> K["Elasticsearch BM25 搜索"]
-    I --> L["Elasticsearch kNN 搜索"]
-    J --> K
-    K --> M["收集 BM25 rank / matched_queries / highlight"]
-    L --> N["收集 dense rank / dense_score"]
-    M --> O["应用层 RRF 融合"]
-    N --> O
-    O --> P["按 lexical_tier / coverage / RRF 排序"]
-    P --> Q["格式化结果返回前端"]
-```
-
-## 2. 项目架构设计
-
-### 2.1 整体架构
-
-项目由五个核心部分组成：
-
-| 层级 | 主要文件 | 作用 |
-| --- | --- | --- |
-| 简历解析层 | `resume_parser.py` | 从本地简历文件中抽取结构化字段 |
-| 索引构建层 | `import_to_es.py` | 定义 ES mapping，构建搜索文本，生成 embedding，批量写入 ES |
-| 向量生成层 | `embedding_service.py` | 加载 embedding 模型，提供单条和批量编码 |
-| 搜索服务层 | `app.py` | FastAPI 接口、查询解析、ES DSL 构造、混合检索、RRF 排序 |
-| 效果评估层 | `evaluate_search.py`、`eval_queries.jsonl` | 用标注 query 评估 P@K、R@K、MRR、NDCG、负例误召回 |
-| 前端展示层 | `web/` | 搜索框、筛选条件、结果列表、详情查看 |
-
-### 2.2 数据从输入到输出的完整链路
-
-索引构建链路：
-
-```text
-本地简历文件
-  -> resume_parser.py 解析成结构化 JSON
-  -> import_to_es.py 补充工作年限、skills_text、embedding 元信息
-  -> embedding_service.py 生成技能、项目、实习、教育四路画像向量
-  -> Elasticsearch 建索引并 bulk 写入
-  -> resumes_current alias 指向最新索引
-```
-
-查询链路：
-
-```text
-用户搜索
-  -> /api/search
-  -> 解析 q 中的城市、学历、年限、技能
-  -> 构造 bool query:
-       must: lexical query
-       filter: 结构化硬过滤
-  -> 并发执行:
-       BM25 / keyword / phrase 查询
-       dense_vector kNN 查询
-  -> 应用层合并两路结果
-  -> lexical_tier / term_coverage / RRF 排序
-  -> 返回结果、facet、debug 信息
-```
-
-### 2.3 为什么需要 alias
-
-导入脚本默认使用：
-
-```text
-index: resumes_v1_时间戳
-alias: resumes_current
-```
-
-重建索引时先写入新 index，校验成功后再切换 alias。这样查询服务始终访问 `resumes_current`，不需要知道真实索引名。
-
-当前代码只支持最新 mapping，不兼容缺少多路画像向量、`.keyword` 或 `.phrase` 子字段的旧索引。mapping 变化后应重建新索引。
-
-## 3. 核心概念解释
-
-### 3.1 keyword 是什么
-
-`keyword` 是 Elasticsearch 中不分词的字段类型。它把整个字段值当成一个完整 token，用于精确匹配、过滤、聚合和排序。
-
-例子：
-
-```json
-{
+  "resume_id": "20190016837",
+  "parse_status": "ok",
+  "parser_version": "html-doc-v1",
+  "file": { "path": "...", "sha256": "...", "encoding": "utf-8" },
+  "application": {
+    "candidate_no": "20190016837",
+    "company": "奇安信",
+    "position_name": "NLP工程师",
+    "position_code": "A0009",
+    "expected_work_cities": ["北京", "上海"],
+    "wishes": [{ "rank": 1, "position_name": "...", "company": "..." }]
+  },
   "candidate": {
-    "school": "北京交通大学"
-  }
+    "name": "张三", "gender": "男", "highest_degree": "硕士",
+    "school": "北京交通大学", "major": "计算机科学与技术",
+    "phone": "13800138000", "email": "xxx@xxx.com"
+  },
+  "education": [{ "school": "...", "major": "...", "degree": "...", ... }],
+  "internships": [{ "company": "...", "title": "...", "description": "...", ... }],
+  "projects": [{ "name": "...", "description": "...", "responsibility": "...", ... }],
+  "skills": ["Python", "NLP", "PyTorch", "TensorFlow"],
+  "section_text": { "education": "...", "internships": "...", "projects": "..." }
 }
 ```
 
-如果 `candidate.school.keyword = 北京交通大学`，那么查询：
+#### 命令行用法
 
-```json
-{"term": {"candidate.school.keyword": "北京交通大学"}}
+```bash
+# 解析单个文件
+python resume_parser.py path/to/resume.doc --pretty
+
+# 解析目录下所有 .doc 文件，输出为 JSONL
+python resume_parser.py data/ --jsonl -o parsed_resumes.jsonl
 ```
 
-只会命中完整等于 `北京交通大学` 的字段，不会因为只包含 `北京` 或 `交通` 就命中。
+### 4.2 证据切片构建与向量化 (`import_to_es.py`)
 
-本项目适合 keyword 的字段：
+这是数据管道的核心环节，完成 **解析结果 → 证据切片 → 向量化 → 双索引写入** 的全流程。
 
-- `application.candidate_no`
-- `application.position_code`
-- `candidate.name.keyword`
-- `candidate.school.keyword`
-- `candidate.major.keyword`
-- `education.school.keyword`
-- `education.major.keyword`
-- `internships.company.keyword`
-- `projects.name.keyword`
-- `skills`
-- `candidate.highest_degree`
-- `application.expected_work_cities`
+#### 整体流程
 
-### 3.2 phrase 是什么
+```
+1. 加载数据
+   - 支持三种输入：
+     ① .jsonl 文件 (一行一个 JSON 对象)
+     ② .json 文件 (JSON 数组 或 单个 JSON 对象)
+     ③ 目录路径 → 自动调用 resume_parser 解析 .doc 文件
+   - 只保留 parse_status == "ok" 的文档
 
-`phrase` 指连续短语匹配。用户搜索 `计算机科学` 时，系统希望：
+2. 文档富化 (_enrich_doc)
+   - 从实习经历中估算工作年限 (years_experience)
+     计算方式：合并所有实习经历的时间跨度，处理重叠区间，
+     以申请日期（或文件修改日期/当前日期）为截止时间，
+     总天数 / 365 = 年数
+   - 清除遗留向量字段（旧版 whole-doc 向量）
+   - 生成 skills_text (所有技能标签空格连接的文本)
 
-```text
-计算机科学与技术
-计算机科学学院
+3. 构建证据切片 (_build_evidence_docs)
+   - 对每份简历生成以下类型的证据片段：
+     ┌─────────────┬──────────────────────────────────┬─────────┐
+     │ section_type │ 内容来源                         │ 有向量？│
+     ├─────────────┼──────────────────────────────────┼─────────┤
+     │ profile     │ 候选人档案（编号/姓名/学校/岗位等）│ ✗       │
+     │ skills      │ 所有技能标签拼接                  │ ✓       │
+     │ project     │ 每个项目：名称 + 描述 + 职责      │ ✓       │
+     │ internship  │ 每段实习：部门 + 职位 + 描述      │ ✓       │
+     │ education   │ 每段教育：专业 + 研究方向 + 实验室 │ ✓       │
+     └─────────────┴──────────────────────────────────┴─────────┘
+   - evidence_id 格式：{resume_id}:{section_type}:{ordinal}
+   - 每个证据片段冗余存储了候选人基本信息和申请信息，
+     便于在证据索引上直接做过滤和词面检索
+   - 语义文本有字符预算控制（section 512 字符, skills 256 字符）
+   - 证据文本会排除公司名、学校名、姓名等实体，
+     避免这些高频信息干扰语义向量的表达
+
+4. 向量化 (add_evidence_embeddings)
+   - 对 skills/project/internship/education 四类证据做向量化
+   - profile 类型不做向量化（它是纯结构化文本，不适合语义检索）
+   - 调用 embedding_service.encode_batch() 批量生成 1792 维向量
+   - 向量做 L2 归一化 (normalize=True)
+
+5. 创建 ES 索引并写入
+   - 带时间戳创建新版本索引 (如 resumes_v1_20260625080000000000)
+   - Bulk API 批量写入（每批 100 条）
+   - 主索引和证据索引分别写入
+   - 写入完成后原子切换 alias（resumes_current → 新索引）
+   - 旧索引保留但不再被 alias 指向
 ```
 
-优先于只分散出现 `计算机` 和 `科学` 的文档。
+#### 命令行用法
 
-本项目给关键 text 字段增加 `.phrase` 子字段：
+```bash
+# 从 JSONL 文件导入（最常用）
+python import_to_es.py mock_resumes_llm_diverse.jsonl
 
-```json
-"candidate.major": {
-  "type": "text",
-  "analyzer": "resume_text",
-  "search_analyzer": "resume_search",
-  "fields": {
-    "keyword": {"type": "keyword"},
-    "phrase": {
-      "type": "text",
-      "analyzer": "resume_search",
-      "search_analyzer": "resume_search"
-    }
-  }
-}
+# 从目录解析并导入
+python import_to_es.py data/
+
+# 指定 ES 地址
+python import_to_es.py data/ --es-url http://localhost:9200
+
+# 增量更新（不重建索引）
+python import_to_es.py new_resumes.jsonl --no-recreate
+
+# 增量更新并删除不在本批次中的旧文档
+python import_to_es.py current_resumes.jsonl --no-recreate --delete-missing
 ```
 
-为什么不用主字段直接 `match_phrase`？
+### 4.3 Embedding 服务 (`embedding_service.py`)
 
-主字段使用 `ik_max_word` 建索引。`ik_max_word` 会产生更多 token，有利于宽召回，但会产生重叠和位置问题，某些连续短语匹配不稳定。因此 `.phrase` 子字段使用 `ik_smart` 建索引，专门服务 `match_phrase`。
+#### 模型选型
 
-### 3.3 filter 是什么
+使用 **`IEITYuan/Yuan-embedding-2.0-zh`**，一个 1792 维的中文 embedding 模型。模型结构：
 
-`filter` 是 Elasticsearch bool query 中的硬过滤条件。它只决定文档是否保留，不参与相关性评分。
+```
+Transformer Encoder (1024维 hidden)
+    ↓
+1_Pooling (mean pooling → 1024维)
+    ↓
+2_Dense (线性投影 1024→1792维)
+    ↓
+L2 归一化
+```
 
-例子：
+#### 模型加载流程
+
+模型加载需要处理 ModelScope 和 HuggingFace 的兼容性问题：
+
+1. **从 ModelScope 下载模型主体**（`snapshot_download`）
+2. **重建子目录结构**——ModelScope 会把文件平铺到根目录，但 `sentence-transformers` 期望 `1_Pooling/` 和 `2_Dense/` 子目录
+3. **从 HuggingFace 下载 Dense 层权重**——Dense 层的 `model.safetensors` 或 `pytorch_model.bin` 需要单独下载
+4. **构建 `SentenceTransformer` 实例**——模型懒加载，首次调用时初始化
+
+#### 关键 API
+
+```python
+encode_single(text: str) -> list[float]     # 单条文本 → 1792维向量
+encode_batch(texts: list[str]) -> list[list[float]]  # 批量编码
+```
+
+### 4.4 Elasticsearch 索引设计
+
+系统维护 **两个索引**，通过 **alias** 机制实现版本切换：
+
+#### 主索引 (`resumes_current`)
+
+存储完整的候选人资料，用于 **结果展示** 和 **无 query 时的浏览模式**。
+
+关键字段设计：
+
+| 字段路径                          | 类型              | 设计意图                                       |
+|-----------------------------------|-------------------|------------------------------------------------|
+| `resume_id`                       | keyword           | 文档唯一标识                                   |
+| `candidate.name`                  | text + keyword    | text 支持分词搜索，keyword 支持精确匹配        |
+| `candidate.school`                | text + keyword + phrase | phrase 子字段支持连续短语匹配             |
+| `candidate.major`                 | text + keyword + phrase | 同上                                     |
+| `candidate.highest_degree`        | keyword           | 精确匹配（博士/硕士/本科）                     |
+| `candidate.years_experience`      | float             | 范围过滤 (`gte`)                               |
+| `application.expected_work_cities`| keyword           | 精确匹配，支持 terms 多值                      |
+| `skills`                          | keyword           | 精确匹配技能标签（大小写敏感）                 |
+| `skills_text`                     | text              | 技能标签拼接的文本，支持分词搜索               |
+| `education`                       | **nested**        | 嵌套对象，支持同一教育经历内的关联查询         |
+| `internships`                     | **nested**        | 同上                                           |
+| `projects`                        | **nested**        | 同上                                           |
+| `section_text.{education/internships/projects}` | text + phrase | 段落级全文检索             |
+
+> **为什么 education/internships/projects 使用 nested 类型？**
+>
+> Elasticsearch 默认会把对象数组"扁平化"——如果一个候选人有两段教育经历，"学校A + 专业X"和"学校B + 专业Y"，扁平化后搜索"学校A + 专业Y"也能匹配。nested 类型保证每个子对象的字段关联性，避免跨条目的错误匹配。
+
+#### 中文分词配置
+
+```
+索引时分词器 (index analyzer)：   ik_max_word  → 尽可能细粒度切分
+搜索时分词器 (search analyzer)：  ik_smart     → 智能合并，保持搜索语义完整
+```
+
+**为什么索引和搜索使用不同的分词器？** 索引时用细粒度分词可以建立更多倒排表项，提高召回率。搜索时用粗粒度分词可以减少无意义的短词匹配，提高精确率。例如"计算机科学与技术"：
+
+- `ik_max_word` → `["计算机", "计算", "科学", "与", "技术", "计算机科学", ...]`
+- `ik_smart` → `["计算机科学", "与", "技术"]`
+
+#### 证据索引 (`resume_evidence_current`)
+
+存储简历的 **语义切片**，用于 **检索命中**。
+
+关键字段：
+
+| 字段                    | 类型          | 说明                                           |
+|-------------------------|---------------|------------------------------------------------|
+| `evidence_id`           | keyword       | 格式 `{resume_id}:{section_type}:{ordinal}`    |
+| `resume_id`             | keyword       | 关联回主索引                                   |
+| `section_type`          | keyword       | profile / skills / project / internship / education |
+| `title`                 | text + keyword + phrase | 切片标题（如项目名称、公司/职位）      |
+| `text`                  | text + phrase | 切片正文（描述、职责等）                       |
+| `evidence_vector`       | dense_vector  | 1792维，cosine相似度，HNSW索引（m=32, ef=300） |
+| `candidate.*`           | 冗余字段      | 候选人基本信息，用于直接在证据索引上做过滤     |
+| `application.*`         | 冗余字段      | 申请信息，同上                                 |
+| `skills` / `skills_text`| keyword / text| 冗余的技能信息                                 |
+
+> **为什么证据索引要冗余存储 candidate 和 application 信息？**
+>
+> 因为检索时需要在证据索引上同时做"筛选条件过滤"和"BM25/kNN 检索"。如果不冗余，就需要先在主索引查出符合条件的 resume_id 列表，再用这个列表去证据索引做过滤，这会增加一次额外的 ES 请求和延迟。冗余存储是"以空间换时间"的典型取舍。
+
+---
+
+## 5. 检索流程详解
+
+这是整个系统最核心的部分。以用户输入 `q = "Python 自然语言处理"` 为例，完整跟踪一次搜索请求。
+
+### 5.1 请求入口与 Query 解析
+
+**入口**：`GET /api/search?q=Python+自然语言处理`
+
+**Step 1：构建显式过滤器**
+
+从 URL 参数中的 `degree`、`cities`、`skills`、`min_years` 构建 Elasticsearch filter 子句。
+
+**Step 2：Query 文本解析** (`_parse_query_constraints`)
+
+系统会尝试从自由文本中识别出结构化约束，并将其从 query 中剥离：
+
+```
+输入: "0.5年以上 北京 本科 Python 自然语言处理"
+      ↓ 解析
+识别出:
+  - "0.5年以上" → filter: years_experience >= 0.5
+  - "北京"     → filter: expected_work_cities = "北京"
+  - "本科"     → filter: highest_degree = "本科"
+残留 query_text: "Python 自然语言处理"
+```
+
+解析规则：
+- **年限识别**：正则匹配 `数字+年(以上|+)` 的模式
+- **城市识别**：与 ES 中实际存在的城市词表做精确匹配
+- **学历识别**：与已知学历词表匹配，支持别名映射（"博士研究生"→"博士"）
+- **技能提升为 filter**：仅当 query 中已包含其他结构化约束时，才把匹配到的技能词从自由搜索提升为硬过滤。这是为了避免纯技能查询（如"Python"）被错误地限定为只搜 skills 字段
+
+**Step 3：决定是否启用向量检索** (`_use_dense`)
+
+```python
+# 不启用向量检索的情况：
+# 1. query 为空
+# 2. query 看起来是精确查找（编号、手机号、邮箱、以"大学/学院/公司/集团"结尾）
+# 3. query 太短（去空格后 < 4 个字符 且只有 1 个 token）
+#
+# 启用的条件：
+# - query 有 >= 2 个 token（空格分隔），或
+# - 去空格后 >= 4 个字符
+```
+
+### 5.2 三路并行检索
+
+当 query 不为空时，系统通过 `ThreadPoolExecutor` **并行**发出最多两个检索请求（如果启用了向量检索）：
+
+```
+                       ┌──────────────────────────┐
+                       │    ThreadPoolExecutor     │
+                       └─────┬──────────┬──────────┘
+                             │          │
+                   ┌─────────▼──┐  ┌────▼──────────┐
+                   │ Evidence   │  │ Evidence       │
+                   │ BM25 检索  │  │ kNN 检索       │
+                   │ (词面)     │  │ (向量)         │
+                   │ weight=1.2 │  │ weight=1.0     │
+                   └────────────┘  └───────────────┘
+                       ▲                  ▲
+                       │                  │
+               evidence_current    evidence_current
+               索引               索引
+```
+
+#### 路线 1：Evidence BM25 检索
+
+在 **证据索引** 上执行复杂的词面检索。查询结构如下：
+
+```
+dis_max (tie_breaker=0.0)
+├── 精确匹配层 (Exact)
+│   ├── term: candidate_no (boost=60)
+│   ├── term: position_code (boost=55)
+│   ├── term: candidate.name.keyword (boost=45)
+│   ├── term: candidate.phone (boost=45)
+│   ├── term: candidate.email (boost=45)
+│   ├── term: skills (boost=40)
+│   ├── term: candidate.school.keyword (boost=36)
+│   ├── term: candidate.major.keyword (boost=34)
+│   ├── term: application.company (boost=30)
+│   └── ... (更多精确匹配字段)
+│
+├── 短语匹配层 (Phrase)
+│   ├── match_phrase: candidate.major.phrase (boost=24)
+│   ├── match_phrase: candidate.school.phrase (boost=18)
+│   ├── match_phrase: title.phrase (boost=12)
+│   ├── match_phrase: text.phrase (boost=10)
+│   └── ... (更多短语匹配字段)
+│
+└── 分词匹配层 (Term)
+    ├── multi_match(operator=and, boost=4)   ← 所有词都命中
+    └── multi_match(operator=or, min_match=70%, boost=1) ← 部分词命中
+```
+
+**为什么用 `dis_max` 而不是 `bool/should`？**
+
+`dis_max` 取各子查询中得分最高的那个作为最终分数（`tie_breaker=0.0`）。这避免了"一个候选人在多个低权重字段都匹配到"导致分数虚高的问题——我们希望的是"在最相关的那个字段上匹配得好"就够了。
+
+**三层匹配的权重设计逻辑**：
+
+- **精确匹配**给最高分（45-60）：因为如果 query 恰好是某个编号或姓名，这几乎一定是用户想找的
+- **短语匹配**给中等分（10-24）：连续短语比散词匹配更精确，比如搜"计算机科学"应该优先匹配专业名完全包含这四个字的候选人
+- **分词匹配**给基础分（1-4）：用于兜底，保证语义相关但没有精确命中的候选人也能被召回
+
+#### 路线 2：Evidence kNN 检索
+
+在证据索引的 `evidence_vector` 字段上执行 kNN 近邻搜索：
 
 ```json
 {
-  "bool": {
-    "must": [
-      {"match": {"skills_text": "推荐系统"}}
-    ],
-    "filter": [
-      {"term": {"candidate.highest_degree": "本科"}},
-      {"terms": {"application.expected_work_cities": ["北京"]}},
-      {"range": {"candidate.years_experience": {"gte": 0.5}}}
+  "knn": {
+    "field": "evidence_vector",
+    "query_vector": [0.123, -0.456, ...],  // 1792 维
+    "k": 300,
+    "num_candidates": 300,
+    "filter": { "bool": { "filter": [...] } }
+  }
+}
+```
+
+- `k` 和 `num_candidates` 控制候选池大小（默认 300）
+- 如果有筛选条件，会附带 filter 子句在向量检索阶段就做预过滤
+
+#### Term Coverage 机制
+
+除了主要的 dis_max 评分查询外，系统还会添加 **term coverage** 辅助查询。它的作用不是改变排序，而是为后续的 RRF 融合提供"这个候选人覆盖了多少个查询词"的信息。
+
+对于多词 query（如"Python 自然语言处理"），会为每个词生成一个 `constant_score` 查询，检查该词是否在候选人的任意字段中出现。覆盖率越高的候选人，在 RRF 阶段会获得额外加分。
+
+### 5.3 RRF 融合排序
+
+#### 为什么需要手动实现 RRF
+
+Elasticsearch 的内置 RRF 功能需要高级许可证（Platinum/Enterprise）。项目使用的是 Basic 许可证，因此在应用层手动实现 RRF。
+
+#### 什么是 RRF
+
+**Reciprocal Rank Fusion（倒数排名融合）** 是一种不依赖分数绝对值、只依赖排名的融合方法。它解决的问题是：BM25 的分数和向量相似度的分数完全不可比——前者可能是 0-100 的范围，后者是 0-1。直接加权平均没有意义。
+
+RRF 的核心公式：
+
+$$\text{RRF}(d) = \sum_{r \in \text{retrievers}} \frac{w_r}{k + \text{rank}_r(d)}$$
+
+其中：
+- $d$ 是一个文档（候选人）
+- $r$ 是某个检索器（evidence BM25 / evidence kNN）
+- $w_r$ 是该检索器的权重
+- $\text{rank}_r(d)$ 是文档 $d$ 在检索器 $r$ 的结果中的排名
+- $k$ 是常数（本项目 $k=60$），用于控制高排名和低排名的区分度
+
+例如：某候选人在 BM25 证据检索中排第 3，在 kNN 证据检索中排第 10：
+
+$$\text{RRF} = \frac{1.2}{60 + 3} + \frac{1.0}{60 + 10} = 0.01905 + 0.01429 = 0.03333$$
+
+#### 证据片段的聚合与标准 RRF
+
+标准 RRF 的核心原则是：**每个检索器对每个候选人贡献且仅贡献一个排名**。
+
+由于系统的两路检索（BM25 和 kNN）返回的都是**证据片段级别**的结果，同一个候选人可能有多个不同排名位置的片段命中（例如 3 个项目描述和 1 个技能标签都命中了查询）。
+
+为了避免"写的段落多"的候选人因为片段分数累加次数多而总分虚高，系统在进入 RRF 前，对 BM25 和 Dense 两路都进行了**完全对称的候选人级别聚合**：
+
+1. **片段最大池化 (Max-Pooling)**：遍历某一路返回的所有片段，对于同一个候选人，**只取其排名最高（rank 最小）的一个片段**作为代表，丢弃其他排名较低的冗余片段。
+2. **候选人全局重排**：根据提取出的最佳片段排名，对本路检索命中的所有候选人重新排序，得到候选人级别的全局排名（`evidence_group_rank` 和 `dense_group_rank`）。
+3. **单项 RRF 贡献**：用重排后的候选人聚合排名参与 RRF 融合。
+
+这样确保了无论候选人命中了几个证据片段，系统只看其**最高质量的那一次匹配**，每路检索都只向最终的 RRF 贡献**1 项**分数。
+
+#### 完整的 RRF 融合流程
+
+```
+Step 1: 检索路内部聚合 (Chunk to Candidate Max-Pooling)
+  - Evidence BM25 路：取候选人名下排名最高的一条词面证据，重排得出 evidence_group_rank
+  - Evidence kNN 路：取候选人名下排名最高的一条向量证据，重排得出 dense_group_rank
+
+Step 2: 计算基础 RRF 分数 (Standard RRF)
+  - evidence BM25 贡献：weight(1.2) / (60 + evidence_group_rank)
+  - dense 贡献：weight(1.0) / (60 + dense_group_rank)
+  - 基础 RRF = 两者之和
+
+Step 4: 匹配层级 (Lexical Tier) 加分
+  - tier=3 (精确匹配命中)：额外 ×1.45
+  - tier=2 (短语匹配命中)：额外 ×1.30
+  - tier=1 (分词匹配命中)：额外 ×1.15
+  - tier=0 (仅 dense 命中)：×1.00
+
+Step 5: Term Coverage 加分
+  - 每覆盖一个查询词，额外 ×(1 + 0.05)
+
+Step 6: 最终得分
+  final_score = base_rrf × (1.0 + 0.15×tier + 0.05×coverage)
+
+Step 7: 排序输出
+  - 按 final_score 降序
+  - 同分时按 best_rank 升序
+  - 取 limit 条返回
+```
+
+#### 为什么要做 tier 加分
+
+纯 RRF 只看排名，不区分"匹配质量"。但在简历检索场景下，精确匹配（比如 `skills` 字段中恰好有 "Python"）的可信度远高于仅分词命中（"Python" 出现在项目描述中但可能只是顺带提到）。Tier 加分让精确匹配的候选人获得额外优势。
+
+### 5.4 结果格式化与返回
+
+RRF 排序完成后，对于通过证据索引命中的候选人，系统会 **回查主索引** 获取完整的候选人资料（因为证据索引只有冗余的基本信息，展示详情需要完整字段）。
+
+返回的每条结果包含：
+
+```json
+{
+  "id": "20190016837",
+  "score": 0.0333,
+  "candidate": { "name": "张三", ... },
+  "application": { "position_name": "NLP工程师", ... },
+  "education_summary": "北京交通大学 / 硕士 / 计算机科学",
+  "project_snippet": "<mark>自然语言处理</mark>平台...",
+  "skills": ["Python", "NLP", ...],
+  "years_experience": 0.9,
+  "experience_display": "0.9 年工作经验",
+  "retrieval_debug": {
+    "retrieval_sources": ["evidence", "dense"],
+    "evidence_rank": 3,
+    "evidence_score": 45.2,
+    "dense_rank": 10,
+    "dense_score": 0.85,
+    "raw_rrf_score": 0.0333,
+    "score_multiplier": 1.45,
+    "rrf_score": 0.0483,
+    "lexical_tier": 3,
+    "term_coverage": 2,
+    "matched_queries": ["evidence_exact:skills:W40", ...],
+    "evidence_matches": [
+      { "evidence_id": "20190016837:skills:0", "title": "能力标签", ... }
     ]
   }
 }
 ```
 
-上面的 `filter` 表示：
+其中 `retrieval_debug` 提供了完整的排序可解释性信息——每个检索器贡献了多少分、命中了哪些字段、最终乘数是多少。这些信息会在前端的 "Debug 排名" 面板中展示。
 
-- 必须是本科。
-- 期望城市必须包含北京。
-- 工作年限必须大于等于 0.5。
+---
 
-这些条件不影响 `_score`。原因是它们更像业务约束，不是相关性证据。一个候选人只要满足本科，就不应该因为“本科”这个字段出现而比另一个本科候选人分数更高。
+## 6. 前端交互
 
-### 3.4 query 是如何构造的
+前端是纯 HTML + CSS + JavaScript 实现的单页应用，没有使用任何框架。
 
-项目中的查询分三层：
+### 页面结构
 
-```text
-外层 bool query
-  must:
-    lexical query
-  filter:
-    结构化过滤条件
-
-lexical query
-  should:
-    exact keyword 查询
-    phrase 查询
-    multi_match AND 查询
-    multi_match OR 查询
-    nested 查询
-
-dense query
-  knn:
-    field = skills_vector / projects_vector / internships_vector / education_vector
-    query_vector = encode_single(query_text)
-    filter = 同一组结构化过滤条件
+```
+┌─────────────────────────────────────────────────────────┐
+│ Header：品牌标识 | 搜索框 + 快捷搜索 | ES 状态指示灯   │
+├───────────┬─────────────────────────────────────────────┤
+│ 左侧筛选   │  结果区域                                   │
+│           │                                             │
+│ 学历 (radio)│  显示 N 条结果  搜索：xxx                  │
+│ 经验 (range)│  ┌──────────────────────────────────┐      │
+│ 城市 (chips)│  │ 候选人卡片                        │      │
+│ 技能 (chips)│  │  姓名 | 岗位·编号                  │      │
+│           │  │  教育信息 | 工作经验                │      │
+│           │  │  匹配摘要 (带高亮)                  │      │
+│           │  │  技能标签                           │      │
+│           │  │  [Debug 排名] [查看详情]             │      │
+│           │  └──────────────────────────────────┘      │
+│           │                                             │
+│           │  (更多卡片...)                              │
+├───────────┴─────────────────────────────────────────────┤
+│ 详情抽屉 (右侧滑出)                                     │
+│  基础信息 | 应聘信息 | 教育经历 | 实习经历 | 项目经验 ...│
+└─────────────────────────────────────────────────────────┘
 ```
 
-注意：
-
-- `must` 表示文本检索必须至少命中一类 lexical 条件。
-- `should` 表示多个召回证据，至少命中一个即可。
-- `filter` 表示硬约束，不参与评分。
-- dense kNN 和 BM25 并发执行，最后由应用层融合。
-
-### 3.5 用户输入中的字段含义
-
-| 输入来源 | 含义 | 处理方式 |
-| --- | --- | --- |
-| `q` | 搜索框自由文本 | 可解析出约束，剩余部分进入 lexical 和 dense |
-| `degree` | 显式学历筛选 | `term candidate.highest_degree` |
-| `cities` | 显式城市筛选 | `terms application.expected_work_cities` |
-| `skills` | 显式技能筛选 | 多个 `term/terms skills`，AND 语义 |
-| `min_years` | 显式最低年限 | `range candidate.years_experience.gte` |
-| `limit` | 返回数量 | `0` 或不传时使用 `MAX_BROWSE_RESULT_SIZE=10000` |
-
-### 3.6 哪些字段影响召回、过滤和排序
-
-| 字段类型 | 影响召回 | 影响过滤 | 影响排序 | 示例 |
-| --- | --- | --- | --- | --- |
-| keyword exact 字段 | 是 | 有时是 | 是 | `candidate.major.keyword` |
-| phrase 字段 | 是 | 否 | 是 | `candidate.major.phrase` |
-| text BM25 字段 | 是 | 否 | 是 | `section_text.projects` |
-| filter 字段 | 否 | 是 | 否 | `candidate.highest_degree` |
-| dense vector | 是 | 可附带 filter | 是 | `skills_vector`、`projects_vector`、`internships_vector`、`education_vector` |
-| date/number 字段 | 通常否 | 是 | 可排序或过滤 | `application.apply_time` |
-
-## 4. Elasticsearch Mapping 与索引设计
-
-### 4.1 analyzer 设计
-
-项目定义了两个中文 analyzer：
-
-```json
-{
-  "analysis": {
-    "analyzer": {
-      "resume_text": {
-        "type": "custom",
-        "tokenizer": "ik_max_word",
-        "filter": ["lowercase"]
-      },
-      "resume_search": {
-        "type": "custom",
-        "tokenizer": "ik_smart",
-        "filter": ["lowercase"]
-      }
-    }
-  }
-}
-```
-
-两者分工：
-
-| analyzer | tokenizer | 用途 |
-| --- | --- | --- |
-| `resume_text` | `ik_max_word` | 主 text 字段索引，尽量多切词，提高召回 |
-| `resume_search` | `ik_smart` | 搜索分析器和 `.phrase` 子字段，减少噪声，保证短语位置更稳定 |
-
-例子：
-
-```text
-文本: 计算机科学与技术
-
-resume_text 可能产生:
-  计算机 / 计算 / 算机 / 科学 / 与 / 技术
-
-resume_search 产生:
-  计算机 / 科学 / 与 / 技术
-```
-
-主字段用 `ik_max_word`，适合普通 BM25 宽召回。`.phrase` 子字段用 `ik_smart`，适合连续短语匹配。
-
-### 4.2 text + keyword + phrase 的 multi-field 设计
-
-很多字段同时支持三种查询方式：
-
-```json
-"major": {
-  "type": "text",
-  "analyzer": "resume_text",
-  "search_analyzer": "resume_search",
-  "fields": {
-    "keyword": {"type": "keyword"},
-    "phrase": {
-      "type": "text",
-      "analyzer": "resume_search",
-      "search_analyzer": "resume_search"
-    }
-  }
-}
-```
-
-同一个业务字段对应三种检索能力：
-
-| 字段 | 查询方式 | 作用 |
-| --- | --- | --- |
-| `candidate.major.keyword` | `term` | 字段整体完全等于 query |
-| `candidate.major.phrase` | `match_phrase` | query 作为连续短语出现 |
-| `candidate.major` | `match` / `multi_match` | 分词后的普通 BM25 检索 |
-
-这正是项目能处理 `计算机科学` 和 `计算机科学与技术` 的关键。
-
-### 4.3 dense_vector 设计
-
-当前使用多路画像向量，而不是只把整份简历压成一个向量：
-
-```json
-"projects_vector": {
-  "type": "dense_vector",
-  "dims": 1792,
-  "similarity": "cosine",
-  "index": true,
-  "index_options": {
-    "type": "hnsw",
-    "m": 32,
-    "ef_construction": 300
-  }
-}
-```
-
-同样的 `dense_vector` mapping 会用于：
-
-- `skills_vector`：技能画像。
-- `projects_vector`：项目画像。
-- `internships_vector`：实习/工作经历画像。
-- `education_vector`：教育、专业、研究方向画像。
-
-岗位名称、岗位编号和求职意向不再单独向量化，主要由 BM25、keyword 和 phrase 查询负责。
-
-设计含义：
-
-- `dims=1792` 必须和 embedding 模型输出维度一致。
-- `similarity=cosine` 使用余弦相似度。
-- `index=true` 表示支持近似最近邻检索。
-- HNSW 参数用于向量索引构建，`m` 和 `ef_construction` 越大，召回通常越好，但索引更大、构建更慢。
-
-### 4.4 embedding 契约
-
-索引 `_meta` 记录 embedding 契约：
-
-```yaml
-embedding_model_id: IEITYuan/Yuan-embedding-2.0-zh
-embedding_vector_dims: 1792
-embedding_normalized: true
-semantic_profile_version: semantic-profile-v5
-embedding_vector_fields:
-  - skills_vector
-  - projects_vector
-  - internships_vector
-  - education_vector
-```
-
-每条文档也写入：
-
-```text
-embedding.model_id
-embedding.vector_dims
-embedding.normalized
-embedding.semantic_profile_version
-```
-
-这样可以排查：
-
-- 查询向量和文档向量是否来自同一个模型。
-- 向量维度是否一致。
-- semantic profile 是否使用同一套拼接逻辑。
-
-### 4.5 为什么不是全文向量化
-
-项目没有把整份简历直接向量化，原因是：
-
-- embedding 模型有长度上限，真实简历很容易超长。
-- 联系方式、城市、学校、公司等实体进入向量后会污染语义检索。
-- 简历中很多内容是结构化字段，应该分别服务过滤、精确匹配和语义匹配。
-
-当前向量输入是抽取式分字段画像：
-
-- 技能画像：技能标签。
-- 项目画像：项目名称、描述、职责。
-- 实习画像：实习部门、职位、描述。
-- 教育画像：教育专业、研究方向、实验室方向。
-
-岗位相关字段不进入 dense 向量：
-
-- 目标岗位。
-- 求职意向。
-- 岗位编号。
-
-这些字段更适合通过 BM25、keyword 或 phrase 做明确匹配。
-
-明确排除：
-
-- 姓名、手机号、邮箱。
-- 学校、城市、公司。
-- 候选人编号、岗位编号。
-
-## 5. 用户输入解析
-
-### 5.1 显式筛选参数
-
-显式参数直接转成 filter：
-
-| 参数 | ES 查询 |
-| --- | --- |
-| `degree=本科` | `term candidate.highest_degree = 本科` |
-| `cities=北京&cities=上海` | `terms application.expected_work_cities = [北京, 上海]` |
-| `skills=Python&skills=NLP` | 两个技能 filter，AND 语义 |
-| `min_years=0.5` | `range candidate.years_experience.gte = 0.5` |
-
-### 5.2 从 q 中解析约束
-
-`q` 会先经过 `_parse_query_constraints`。它会识别：
-
-- 年限：`0.5年以上`、`3年及以上`。
-- 学历：`本科`、`硕士`、`博士`，以及别名 `学士 -> 本科`。
-- 城市：来自当前索引 facet 词表。
-- 技能：来自当前索引技能词表。
-
-解析示例：
-
-```text
-输入:
-  0.5年以上 北京 本科 推荐系统
-
-解析后:
-  effective_query = 推荐系统
-  filters:
-    candidate.years_experience >= 0.5
-    candidate.highest_degree = 本科
-    application.expected_work_cities contains 北京
-    skills contains 推荐系统
-```
-
-注意一个重要规则：
-
-```text
-普通技能组合查询不会被强行拆成 filter。
-```
-
-例如：
-
-```text
-推荐系统 NLP SQL
-```
-
-不会自动变成三个技能硬过滤，因为用户可能只是想宽召回相关简历。如果已经出现城市、学历、年限等明确约束，系统才会把同一句里的技能词提升为 filter。
-
-### 5.3 dense 是否启用
-
-`_use_dense(query_text)` 控制是否执行向量检索：
-
-| query | 是否启用 dense | 原因 |
-| --- | --- | --- |
-| `A0009` | 否 | 精确编号查询 |
-| `M20260001` | 否 | 精确简历 ID |
-| `138xxxxxxx` | 否 | 手机号 |
-| `xxx@example.com` | 否 | 邮箱 |
-| `北京大学` | 否 | 以实体后缀结尾，避免泛化 |
-| `自然语言处理` | 是 | 短能力表达，长度足够 |
-| `推荐召回` | 是 | 短能力表达，长度足够 |
-| `做过推荐系统召回和 NLP 模型落地的人` | 是 | 多词自然语言查询 |
-
-这样做的目的是：实体查询优先精确，能力查询允许语义泛化。
-
-## 6. 搜索逻辑与 Elasticsearch DSL
-
-### 6.1 总体 DSL 形状
-
-当存在 `effective_query` 时，BM25 请求大致是：
-
-```json
-{
-  "size": 100,
-  "query": {
-    "bool": {
-      "must": [
-        {
-          "bool": {
-            "should": [
-              "... exact queries ...",
-              "... phrase queries ...",
-              "... term queries ..."
-            ],
-            "minimum_should_match": 1
-          }
-        }
-      ],
-      "filter": [
-        "... structured filters ..."
-      ]
-    }
-  },
-  "highlight": {
-    "fields": {
-      "application.position_name": {},
-      "candidate.major": {},
-      "section_text.projects": {},
-      "section_text.internships": {},
-      "section_text.education": {},
-      "candidate.school": {},
-      "skills_text": {}
-    }
-  },
-  "_source": {
-    "excludes": ["raw_text", "raw_sections", "skills_text", "..._vector"]
-  }
-}
-```
-
-如果 query token 至少有两个，还会额外加入 coverage `should`，用于统计多词覆盖度：
-
-```json
-{
-  "constant_score": {
-    "_name": "query_term:0",
-    "filter": {
-      "... 判断是否命中第 1 个 token ..."
-    },
-    "boost": 0.001
-  }
-}
-```
-
-coverage query 不负责主召回，只负责让 ES 在 `matched_queries` 中返回命中标记。
-
-### 6.2 must 用在哪里
-
-`must` 用来承载主 lexical query：
-
-```json
-{
-  "bool": {
-    "must": [
-      {
-        "bool": {
-          "should": [
-            {"term": {"candidate.major.keyword": "..."}},
-            {"match_phrase": {"candidate.major.phrase": "..."}},
-            {"multi_match": {"query": "..."}}
-          ],
-          "minimum_should_match": 1
-        }
-      }
-    ],
-    "filter": []
-  }
-}
-```
-
-含义是：
-
-```text
-文档必须至少命中 exact、phrase、BM25、nested 中的一类词面查询。
-```
-
-如果没有 `must`，coverage 的弱查询或者 filter 本身可能导致不相关文档进入排序。
-
-### 6.3 should 用在哪里
-
-`should` 用于多个可选相关性证据：
-
-- 编号 exact。
-- 姓名 exact。
-- 学校 exact。
-- 专业 exact。
-- 岗位 phrase。
-- 项目 phrase。
-- 多字段 BM25。
-- nested 教育、实习、项目检索。
-
-`minimum_should_match=1` 表示至少命中一条相关性证据。
-
-为什么用 `should`？
-
-因为用户输入可能对应不同字段。例如 `计算机科学` 可能是专业，也可能出现在学院、研究方向、项目名称或教育片段里。系统不能预先假设唯一字段，而应该让多个字段竞争，由 boost 和排序策略决定优先级。
-
-### 6.4 filter 用在哪里
-
-filter 用于结构化硬条件：
-
-```json
-[
-  {"term": {"candidate.highest_degree": "本科"}},
-  {"terms": {"application.expected_work_cities": ["北京"]}},
-  {"term": {"skills": "推荐系统"}},
-  {"range": {"candidate.years_experience": {"gte": 0.5}}}
-]
-```
-
-filter 的特点：
-
-- 不参与 `_score`。
-- 可以被 ES 缓存。
-- 表达“必须满足”的业务约束。
-- 同一个 filter 列表也会应用到 kNN 查询中，保证 BM25 和 dense 在同一候选范围内检索。
-
-### 6.5 term、terms、range、match、match_phrase 的使用
-
-| 查询类型 | 用途 | 本项目示例 | 是否分词 | 是否评分 |
-| --- | --- | --- | --- | --- |
-| `term` | 单值精确匹配 | `candidate.major.keyword`、`skills` | 否 | query 中评分，filter 中不评分 |
-| `terms` | 多值精确匹配 | 多城市筛选、技能大小写变体 | 否 | query 中评分，filter 中不评分 |
-| `range` | 数值或日期范围 | `candidate.years_experience >= 0.5` | 否 | filter 中不评分 |
-| `match` | text 分词匹配 | `education.major`、`projects.description` | 是 | 是 |
-| `match_phrase` | text 连续短语匹配 | `candidate.major.phrase` | 是 | 是 |
-| `multi_match` | 多 text 字段同时检索 | 岗位、姓名、学校、专业、项目、实习、技能文本 | 是 | 是 |
-| `nested` | 检索数组对象内部字段 | `education`、`internships`、`projects` | 取决于内部 query | 是 |
-| `knn` | 向量近邻检索 | 证据片段 `evidence_vector` | 否 | 返回向量相似度分 |
-
-### 6.6 exact、phrase、BM25 的分层
-
-`_lexical_query` 会把 query 分成三类 lexical 证据：
-
-```text
-exact_should:
-  term 查询 keyword 字段
-
-phrase_should:
-  match_phrase 查询 .phrase 子字段
-
-term_should:
-  multi_match AND
-  multi_match OR
-  nested match AND
-```
-
-排序证据强度：
-
-```text
-exact field > phrase > all terms > broad terms > vector-only
-```
-
-这不是为某个具体词写规则，而是符合通用搜索系统的相关性层级。
-
-### 6.7 多个搜索条件如何组合
-
-以 `0.5年以上 北京 本科 推荐系统` 为例：
-
-```text
-结构化条件:
-  年限 >= 0.5
-  城市 = 北京
-  学历 = 本科
-  技能 = 推荐系统
-
-文本 query:
-  推荐系统
-```
-
-ES 组合逻辑：
-
-```text
-must:
-  文本 query 至少命中一个 lexical 条件
-
-filter:
-  年限、城市、学历、技能必须全部满足
-```
-
-也就是说：
-
-```text
-文本检索负责相关性
-filter 负责候选集合约束
-```
-
-### 6.8 Elasticsearch 底层机制在项目中的体现
-
-倒排索引：
-
-- text 字段经过 IK 分词后写入倒排索引。
-- 搜索 `推荐系统` 时，ES 根据 token 找到包含这些 token 的文档。
-
-BM25 评分：
-
-- token 越匹配，字段 boost 越高，文档越可能排前。
-- 字段长度、词频、逆文档频率都会影响 `_score`。
-- 项目通过字段 boost 表达业务优先级，例如 `skills_text^6`、`candidate.major^4`。
-
-keyword 精确匹配：
-
-- 不分词，整个字段值作为 token。
-- 适合 ID、学校、专业、公司、技能标签。
-
-phrase 查询：
-
-- 要求 token 顺序和位置连续。
-- 适合 `计算机科学` 这种连续短语意图。
-
-filter：
-
-- 不计算相关性。
-- 适合学历、城市、年限、显式技能筛选。
-
-nested：
-
-- 教育、实习、项目是数组对象。
-- nested 可以保证字段匹配发生在同一个数组元素内，避免跨对象误匹配。
-
-## 7. 排序与融合逻辑
-
-### 7.1 三路召回
-
-当前搜索不再直接对候选人画像向量做 kNN，而是先检索 `resume_evidence_current` 里的证据片段，再按 `resume_id` 聚合回候选人。
-
-当启用 dense 时，系统在外层按三路搜索理解：
-
-```text
-Candidate lexical retriever:
-  候选人索引中的编号、姓名、学校、公司、岗位、技能等字段词面召回
-
-Evidence lexical retriever:
-  title/text/skills_text/position/major 上的 exact + phrase + BM25 + filter
-
-Evidence dense retriever:
-  evidence_vector kNN + 同一组 filter
-```
-
-并发执行由 `ThreadPoolExecutor` 完成。这样候选人词面、证据词面和向量证据召回的耗时可以重叠。
-
-### 7.2 RRF 融合
-
-RRF 是 Reciprocal Rank Fusion，核心思想是融合排名而不是融合原始分数。
-
-公式：
-
-```text
-rrf_score = weight / (rank_constant + rank)
-```
-
-当前配置：
-
-```text
-BM25_RRF_WEIGHT = 1.0
-EVIDENCE_RRF_WEIGHT = 1.2
-DENSE_RRF_WEIGHT = 1.0
-RRF_RANK_CONSTANT = 60
-```
-
-例子：
-
-```text
-Candidate lexical rank = 1 -> 1.0 / (60 + 1) = 0.01639
-Evidence lexical rank = 1  -> 1.2 / (60 + 1) = 0.01967
-Dense rank = 1             -> 1.0 / (60 + 1) = 0.01639
-Dense rank = 5             -> 1.0 / (60 + 5) = 0.01538
-```
-
-Dense 侧返回的是证据片段，不是候选人。流程是：
-
-```text
-1. evidence_vector 返回若干项目、实习、教育、技能证据片段。
-2. 同一个候选人的多个证据片段先在 dense 内部聚合。
-3. 聚合后得到候选人级 `dense_group_rank`。
-4. 外层 RRF 只使用 `1.0 / (60 + dense_group_rank)` 作为 Dense 贡献。
-```
-
-这样做可以避免一个候选人因为命中多个证据片段就在最终排序里获得多张 Dense 票，同时又保留“多个证据都相似”的覆盖度信号。
-
-为什么不用 BM25 `_score` + dense `_score` 直接相加？
-
-因为两者分数尺度不同：
-
-- BM25 分数受字段长度、词频、IDF、boost 影响。
-- dense 分数是向量相似度。
-- 两者直接相加会导致某一路分数支配排序。
-
-RRF 只看名次，能更稳定地融合不同检索器。
-
-### 7.3 乘数加权模型
-
-最初的系统将候选人严格划分为四个不可逾越的阶级（lexical_tier：exact > phrase > term > dense）。这会导致极低分数的普通词命中也会永远排在完美的纯语义匹配之前。
-
-目前采用综合加权得分排序，页面 Debug 中展示的 `最终加权得分` 就是实际排序依据：
-
-```text
-最终加权得分 = 基础 RRF 分数 × 业务奖励系数
-业务奖励系数 = 1.0 + (0.15 × 匹配层级) + (0.05 × 词频覆盖数)
-```
-
-1. **匹配层级奖励 (`lexical_tier`)**：
-   - `3`：exact field 命中（奖励 +0.45）
-   - `2`：phrase 命中（奖励 +0.30）
-   - `1`：普通词面证据命中（奖励 +0.15）
-   - `0`：vector-only（无奖励）
-2. **多词覆盖奖励 (`term_coverage`)**：
-   对于多词查询，每多覆盖一个 query token，奖励系数增加 0.05。
-
-这套逻辑的目标是：强字段证据通过奖励系数体现在最终分数里，同时普通关键词命中不会无条件压过高质量语义匹配。
-
-### 7.4 独立向量召回
-
-当前没有 dense-only 分数阈值。只要 evidence dense kNN 召回到证据片段，候选人就可以进入 RRF 融合。
-
-这么做的原因是：向量 `_score` 不是跨 query 稳定校准的业务置信度，用固定阈值控制准入会让不同查询之间的召回行为不一致。更标准的做法是让词面证据和向量证据独立召回，再通过排名融合、召回窗口和评估集校准整体效果。
-
-相关性控制来自四处：
-
-- `rank_window_size` 和 `DENSE_RANK_WINDOW_SIZE` 控制向量召回窗口。
-- 结构化 filter 同时作用于词面证据检索和 dense kNN。
-- `lexical_tier` 与 `term_coverage` 只奖励明确词面证据，vector-only 不拿这部分奖励。
-- 明显精确查询会跳过 dense，例如候选人编号、岗位编号、邮箱，以及以“大学 / 学院 / 公司 / 集团”结尾的实体查询。
-
-### 7.5 最终排序键
-
-最终排序顺序：
-
-```text
-1. 最终加权得分 降序
-2. best_rank 升序
-3. doc_id 升序，保证稳定排序
-```
-
-### 7.6 BM25 核心打分机制深度解析
-
-由于 BM25 在混合检索中具有 1.5 倍的极高基础 RRF 权重，这里对其内部打分机制进行深度拆解。BM25 并非简单的“命中次数越多分越高”，而是一个高度精妙的**非线性概率模型**。
-
-#### 1. Length Normalization（长度归一化）：惩罚“废话连篇”
-这是最重要的机制。BM25 极其看重**“关键词密度”**。
-- 如果候选人的项目描述很短，且命中了搜索词，BM25 会给予**极高的奖励**。
-- 如果候选人写了上千字的长篇大论才命中一次搜索词，得分会被**疯狂稀释扣分**。
-- **结论**：在 50 个字里提到 Java 的含金量，远远大于在 1000 个字里提到 Java。
-
-#### 2. TF（词频饱和机制）：防范“关键词堆砌”
-如果一个词出现 1 次，收益巨大；出现 2 次，收益显著提升；但如果出现 5 次以上，得分曲线会无限趋近于一条水平线（受 `k1` 参数控制）。
-- **结论**：BM25 鼓励词汇出现，但无视且严厉惩罚无意义的简历关键词堆砌。
-
-#### 3. IDF（逆文档频率）：衡量词的“稀有度与含金量”
-如果搜索词“Python”在简历库中满大街都是，它的 IDF 值就会极低；而“医疗”很罕见，IDF 值极高。
-- **结论**：命中了罕见词的候选人，能轻松反超仅仅命中了烂大街词汇的候选人。
-
-#### 4. Elasticsearch 的 Field Boost（字段提权与爆发）
-在 `app.py` 中，系统对不同字段设置了严密的加权：
-- `skills_text^7`（技能标签 7 倍得分）
-- `candidate.major^4`（专业名称 4 倍得分）
-- `section_text.projects^4`（项目经历 4 倍得分）
-
-同时采用 `type: "best_fields"` 策略。这意味着如果一个精简干练的候选人在“技能标签（7倍区）”精准命中了搜索词，他将引发爆炸性的单项超高分，直接击败那些在长篇大论的实习经历中命中无数次的候选人。
-
-## 8. 字段匹配规则
-
-### 8.1 字段总表
-
-| 模块 | 字段 | mapping / 查询方式 | 是否影响过滤 | 是否影响排序 | 设计原因 |
-| --- | --- | --- | --- | --- | --- |
-| 文档 | `resume_id` | `keyword` | 可用于详情 | 否 | 文档唯一 ID |
-| 投递 | `application.candidate_no` | `keyword` + `term` | 否 | 是 | 候选人编号必须精确 |
-| 投递 | `application.position_code` | `keyword` + `term` | 否 | 是 | 岗位编号必须精确 |
-| 投递 | `application.company` | `keyword` + `term` | 否 | 是 | 投递公司是实体 |
-| 投递 | `application.position_name` | `text` + `.keyword` + `.phrase` | 否 | 是 | 岗位名既要 exact，也要短语和分词 |
-| 投递 | `application.expected_work_cities` | `keyword` + `terms filter` | 是 | 否 | 城市是硬约束 |
-| 志愿 | `application.wishes.position_name` | nested text + `.phrase` | 否 | 是 | 志愿岗位参与相关性 |
-| 志愿 | `application.wishes.company` | nested `keyword` | 否 | 是 | 志愿公司精确实体 |
-| 候选人 | `candidate.name` | text + `.keyword` | 否 | 是 | 姓名精确优先，也允许搜索 |
-| 候选人 | `candidate.school` | text + `.keyword` + `.phrase` | 否 | 是 | 学校实体 exact 优先 |
-| 候选人 | `candidate.major` | text + `.keyword` + `.phrase` | 否 | 是 | 专业 exact/phrase 非常重要 |
-| 候选人 | `candidate.highest_degree` | `keyword` + `term filter` | 是 | query 中也可弱匹配 | 学历通常是硬筛选 |
-| 候选人 | `candidate.years_experience` | `float` + `range filter` | 是 | 否 | 年限是范围约束 |
-| 教育 | `education.school` | nested text + `.keyword` + `.phrase` | 否 | 是 | 多段教育经历，需 nested |
-| 教育 | `education.college` | nested text + `.phrase` | 否 | 是 | 学院允许短语和分词 |
-| 教育 | `education.major` | nested text + `.keyword` + `.phrase` | 否 | 是 | 教育专业是核心相关性字段 |
-| 教育 | `education.education_level` | nested `keyword` | 可扩展 | 是 | 本科、硕士等枚举 |
-| 教育 | `education.degree` | nested `keyword` | 可扩展 | 是 | 学士、硕士等枚举 |
-| 教育 | `education.research_direction` | nested text + `.phrase` | 否 | 是 | 研究方向适合全文和短语 |
-| 教育 | `education.lab_name` | nested text + `.phrase` | 否 | 是 | 实验室方向有语义价值 |
-| 实习 | `internships.company` | nested text + `.keyword` + `.phrase` | 否 | 是 | 公司实体 exact 优先 |
-| 实习 | `internships.department` | nested text + `.phrase` | 否 | 是 | 部门体现方向 |
-| 实习 | `internships.title` | nested text + `.phrase` | 否 | 是 | 实习岗位相关性强 |
-| 实习 | `internships.work_type` | nested `keyword` | 可扩展 | 是 | 实习、全职等枚举 |
-| 实习 | `internships.description` | nested text + `.phrase` | 否 | 是 | 职责描述适合全文和语义 |
-| 项目 | `projects.name` | nested text + `.keyword` + `.phrase` | 否 | 是 | 项目名 exact/phrase 价值高 |
-| 项目 | `projects.description` | nested text + `.phrase` | 否 | 是 | 项目背景适合全文检索 |
-| 项目 | `projects.responsibility` | nested text + `.phrase` | 否 | 是 | 项目职责体现能力 |
-| 技能 | `skills` | `keyword` | 显式筛选时是 | 是 | 技能标签应精确 |
-| 技能 | `skills_text` | text | 否 | 是 | 多技能组合 BM25 |
-| 分段文本 | `section_text.education` | text + `.phrase` | 否 | 是 | 展示和补充召回 |
-| 分段文本 | `section_text.internships` | text + `.phrase` | 否 | 是 | 展示和补充召回 |
-| 分段文本 | `section_text.projects` | text + `.phrase` | 否 | 是 | 展示和补充召回 |
-| 向量 | 多路画像向量 | `dense_vector` | 可附带 filter | 是 | 技能、项目、实习、教育、岗位等语义 |
-
-### 8.2 必须完全匹配的字段
-
-这些字段应优先用 `keyword` 或 `term`：
-
-- `application.candidate_no`
-- `application.position_code`
-- `candidate.phone`
-- `candidate.email`
-- `candidate.name.keyword`
-- `candidate.school.keyword`
-- `candidate.major.keyword`
-- `education.school.keyword`
-- `education.major.keyword`
-- `internships.company.keyword`
-- `projects.name.keyword`
-- `skills`
-
-原因：
-
-- 它们是 ID、实体、枚举或标签。
-- 用户搜索这些字段时通常不希望语义泛化。
-- 完整匹配比部分匹配更可信。
-
-### 8.3 允许部分匹配和分词搜索的字段
-
-这些字段适合 `text` + `match` / `multi_match`：
-
-- `application.position_name`
-- `candidate.major`
-- `section_text.projects`
-- `section_text.internships`
-- `section_text.education`
-- `skills_text`
-- `education.research_direction`
-- `internships.description`
-- `projects.description`
-- `projects.responsibility`
-
-原因：
-
-- 用户可能只输入部分能力词。
-- 文本中存在长句、职责描述、项目背景。
-- 分词和 BM25 能处理关键词相关性。
-
-### 8.4 支持 phrase 的字段
-
-这些字段适合连续短语：
-
-- `application.position_name.phrase`
-- `candidate.school.phrase`
-- `candidate.major.phrase`
-- `education.school.phrase`
-- `education.college.phrase`
-- `education.major.phrase`
-- `internships.company.phrase`
-- `internships.title.phrase`
-- `projects.name.phrase`
-- `section_text.*.phrase`
-
-典型场景：
-
-```text
-计算机科学
-机器学习工程师
-跨境电商反欺诈
-百度在线网络技术
-```
-
-### 8.5 只作为 filter 的字段
-
-这些字段主要作为硬约束：
-
-- `candidate.highest_degree`
-- `application.expected_work_cities`
-- `candidate.years_experience`
-- 显式选择的 `skills`
-
-原因：
-
-- 它们表达筛选条件，不表达相关性强弱。
-- 例如“本科”只是约束，满足本科的人不应该因为该字段出现次数多而更靠前。
-
-## 9. 代码实现概览
-
-### 9.1 主要文件职责
-
-| 文件 | 职责 |
-| --- | --- |
-| `app.py` | 搜索 API、查询解析、ES DSL 构造、BM25 + dense 并发检索、RRF 融合、结果格式化 |
-| `import_to_es.py` | ES mapping、索引创建、简历 enrich、embedding 生成、bulk 写入、alias 切换 |
-| `embedding_service.py` | 加载中文 embedding 模型，提供 `encode_single` 和 `encode_batch` |
-| `resume_parser.py` | 简历文件发现与结构化解析 |
-| `evaluate_search.py` | 读取评估集，调用搜索接口，计算 P@K、R@K、MRR、NDCG |
-| `eval_queries.jsonl` | 检索效果评估集 |
-| `tests/test_search_logic.py` | 核心查询逻辑、排序逻辑、mapping 契约单元测试 |
-| `web/` | 前端页面和交互逻辑 |
-
-### 9.2 请求如何进入系统
-
-入口函数：
-
-```python
-@app.get("/api/search")
-def search(...):
-    ...
-```
-
-关键步骤：
-
-```text
-1. 读取 q、degree、cities、skills、min_years、limit。
-2. 调用 _parse_query_constraints 解析 q 中的隐式约束。
-3. 调用 _build_filters 构造显式 filter。
-4. 如果 effective_query 非空，执行 hybrid search。
-5. 如果只有 filter，无 query，则按投递时间浏览。
-6. 如果 query 和 filter 都为空，则返回浏览列表。
-7. 格式化结果并返回 facets。
-```
-
-### 9.3 查询参数如何变成 ES DSL
-
-核心函数：
-
-| 函数 | 作用 |
-| --- | --- |
-| `_parse_query_constraints` | 从 q 中解析年限、学历、城市、技能 |
-| `_build_filters` | 显式参数转 ES filter |
-| `_bm25_body` | 构造 BM25 搜索请求体 |
-| `_lexical_query` | 构造 exact、phrase、BM25 分层查询 |
-| `_lexical_exact_queries` | 构造 keyword / term 查询 |
-| `_lexical_phrase_queries` | 构造 `.phrase` / `match_phrase` 查询 |
-| `_lexical_term_queries` | 构造 `multi_match` 和 nested `match` 查询 |
-| `_term_coverage_queries` | 构造多词覆盖度 named query |
-| `_knn_body` | 构造 dense vector kNN 请求体 |
-
-### 9.4 混合检索如何执行
-
-核心函数：
-
-```python
-_run_hybrid_search(query_text, query_vector, filters, rank_window_size, dense_routes)
-```
-
-执行逻辑：
-
-```text
-requests_to_run:
-  BM25 request
-  多个 Dense route request, 如果 dense_routes 非空
-
-ThreadPoolExecutor:
-  并发请求 ES
-
-每个 response 附加:
-  _retriever_name = bm25 / dense:skills / dense:projects / ...
-  _rrf_weight = BM25 外层权重；Dense route 统一为 1.0
-```
-
-在 `_rrf_merge` 中，所有 `dense:*` response 会先合成一个统一的 Dense 排名，再和 BM25 做外层 RRF。
-
-### 9.5 结果如何格式化
-
-核心函数：
-
-```python
-_format_hit(hit, rrf_score)
-```
-
-负责：
-
-- 从 `_source` 提取候选人、教育、项目、实习、技能。
-- 合并 highlight。
-- 构造默认摘要。
-- 附加 `retrieval_debug`。
-- 隐藏大字段和向量字段。
-
-## 10. 完整搜索示例
-
-### 10.1 示例一：专业短语查询 `计算机科学`
-
-用户输入：
-
-```text
-q = 计算机科学
-```
-
-解析结果：
-
-```text
-effective_query = 计算机科学
-filters = []
-use_dense = true
-```
-
-中间 query 结构：
-
-```text
-lexical exact:
-  candidate.major.keyword = 计算机科学
-  education.major.keyword = 计算机科学
-
-lexical phrase:
-  candidate.major.phrase match_phrase 计算机科学
-  education.major.phrase match_phrase 计算机科学
-
-BM25 terms:
-  candidate.major
-  section_text.education
-  nested education.major
-
-dense:
-  意图路由后的多画像 kNN
-```
-
-简化后的 ES DSL：
-
-```json
-{
-  "query": {
-    "bool": {
-      "must": [
-        {
-          "bool": {
-            "should": [
-              {
-                "term": {
-                  "candidate.major.keyword": {
-                    "value": "计算机科学",
-                    "boost": 34,
-                    "_name": "lexical_exact:candidate_major"
-                  }
-                }
-              },
-              {
-                "match_phrase": {
-                  "candidate.major.phrase": {
-                    "query": "计算机科学",
-                    "slop": 0,
-                    "boost": 24,
-                    "_name": "lexical_phrase:candidate_major"
-                  }
-                }
-              },
-              {
-                "nested": {
-                  "path": "education",
-                  "_name": "lexical_phrase:education",
-                  "query": {
-                    "bool": {
-                      "should": [
-                        {
-                          "match_phrase": {
-                            "education.major.phrase": {
-                              "query": "计算机科学",
-                              "slop": 0,
-                              "boost": 24,
-                              "_name": "lexical_phrase:education_major"
-                            }
-                          }
-                        }
-                      ],
-                      "minimum_should_match": 1
-                    }
-                  }
-                }
-              }
-            ],
-            "minimum_should_match": 1
-          }
-        }
-      ],
-      "filter": []
-    }
-  }
-}
-```
-
-当前验证结果：
-
-```text
-计算机科学 Top 6:
-1. 杨佳宁  计算机科学与技术  lexical_tier=2  bm25_rank=2  dense_rank=2
-2. 秦佳宁  计算机科学与技术  lexical_tier=2  bm25_rank=6  dense_rank=11
-3. 许诗涵  网络空间安全      lexical_tier=2  bm25_rank=8  dense_rank=9
-4. 施佳宁  计算机科学与技术  lexical_tier=2  bm25_rank=1  dense_rank=35
-5. 卫辰逸  计算机科学与技术  lexical_tier=2  bm25_rank=5  dense_rank=29
-6. 吕博文  计算机技术        lexical_tier=2  bm25_rank=14 dense_rank=14
-```
-
-解释：
-
-- `.phrase` 确保 `计算机科学` 作为连续短语优先。
-- `lexical_tier=2` 表示 phrase 证据。
-- 排名按最终加权得分降序，dense 贡献会体现在最终分里，因此 BM25 rank 不一定单独决定顺序。
-
-### 10.2 示例二：完整专业查询 `计算机科学与技术`
-
-用户输入：
-
-```text
-q = 计算机科学与技术
-```
-
-核心匹配：
-
-```text
-candidate.major.keyword = 计算机科学与技术
-education.major.keyword = 计算机科学与技术
-```
-
-当前验证结果：
-
-```text
-计算机科学与技术 Top 6:
-1. 孔雅婷  计算机科学与技术  lexical_tier=3  bm25_rank=1
-2. 施佳宁  计算机科学与技术  lexical_tier=3  bm25_rank=2
-3. 杨佳宁  计算机科学与技术  lexical_tier=3  bm25_rank=3
-4. 钱博文  计算机科学与技术  lexical_tier=3  bm25_rank=4
-5. 卫辰逸  计算机科学与技术  lexical_tier=3  bm25_rank=5
-6. 秦佳宁  计算机科学与技术  lexical_tier=3  bm25_rank=6
-```
-
-解释：
-
-- `.keyword` 完整命中是最高词面证据。
-- `lexical_tier=3` 高于 phrase 和普通分词。
-- 这能避免 `计算机学院`、`信息与计算科学`、`电子科学与技术` 之类部分相关结果插到完整专业前面。
-
-### 10.3 示例三：结构化筛选 + 文本查询
-
-用户输入：
-
-```text
-q = 0.5年以上 北京 本科 推荐系统
-```
-
-解析结果：
-
-```json
-{
-  "effective_query": "推荐系统",
-  "parsed_constraints": {
-    "min_years": 0.5,
-    "degree": "本科",
-    "cities": ["北京"],
-    "skills": ["推荐系统"]
-  }
-}
-```
-
-简化 DSL：
-
-```json
-{
-  "query": {
-    "bool": {
-      "must": [
-        {
-          "bool": {
-            "should": [
-              {"term": {"skills": {"value": "推荐系统", "boost": 28}}},
-              {"match": {"skills_text": "推荐系统"}},
-              {"multi_match": {"query": "推荐系统"}}
-            ],
-            "minimum_should_match": 1
-          }
-        }
-      ],
-      "filter": [
-        {"range": {"candidate.years_experience": {"gte": 0.5}}},
-        {"term": {"candidate.highest_degree": "本科"}},
-        {"terms": {"application.expected_work_cities": ["北京"]}},
-        {"term": {"skills": "推荐系统"}}
-      ]
-    }
-  }
-}
-```
-
-这里 keyword、phrase、filter 的作用：
-
-| 机制 | 作用 |
-| --- | --- |
-| `filter` | 保证候选人满足年限、城市、学历、技能 |
-| `term skills` | 技能标签精确命中，参与排序 |
-| `match / multi_match` | 在描述文本里找推荐系统相关内容 |
-| dense | 在过滤后的候选集合中补充语义相近结果 |
-
-### 10.4 示例四：自然语言能力查询
-
-用户输入：
-
-```text
-q = 做过推荐系统召回和 NLP 模型落地的人
-```
-
-BM25 能命中：
-
-```text
-skills: 推荐系统
-skills: NLP
-projects.responsibility: 推荐系统、NLP
-internships.description: 模型
-```
-
-dense 能理解：
-
-```text
-模型落地
-离线模型封装为批处理推理服务
-推荐系统召回
-NLP 项目经验
-```
-
-融合后：
-
-```text
-同时有 BM25 命中和 dense 语义支持的候选人会上升。
-只有 dense 命中的候选人也可以进入融合，但不会获得词面证据奖励。
-```
-
-### 10.5 示例五：多词覆盖度
-
-用户输入：
-
-```text
-q = A B
-```
-
-如果候选人分别是：
-
-```text
-0 0 0 0
-A A A 0
-0 B B B
-A B 0 0
-```
-
-期望排序：
-
-```text
-A B 0 0
-A A A 0
-0 B B B
-```
-
-原因：
-
-- `A B 0 0` 同时覆盖两个 query token。
-- `A A A 0` 和 `0 B B B` 只覆盖一个 token。
-- 词频不能压过 query term 覆盖度。
-
-## 11. 检索效果评估
-
-### 11.1 评估集
-
-评估集位于 [eval_queries.jsonl](./eval_queries.jsonl)，当前 126 条 query，覆盖：
-
-- 学校实体查询。
-- 专业 exact 查询。
-- 专业 phrase 查询。
-- 候选人编号和岗位编号。
-- 岗位查询。
-- 结构化过滤查询。
-- 技能组合查询。
-- 岗位 + 技能查询。
-- 自然语言语义查询。
-- 负例查询。
-
-标注方式有两种：
-
-```json
-{"id":"entity_school_bjtu","query":"北京交通大学","relevant_es_query":{"term":{"candidate.school.keyword":"北京交通大学"}}}
-```
-
-以及：
-
-```json
-{"id":"negative_school_peking","query":"北京大学","relevant_ids":[],"expect_empty":true}
-```
-
-### 11.2 运行评估
+### 交互功能
+
+- **搜索框**：输入时 300ms 防抖自动搜索，Enter 键立即搜索
+- **快捷搜索**：预设 "Python 自然语言处理" / "机器学习 医疗" / "Java 服务端"
+- **筛选条件**：学历(radio)、经验(range slider)、城市(chips)、技能(chips)，数据来自 ES 聚合
+- **结果卡片**：展示候选人摘要，带 `<mark>` 高亮的匹配片段
+- **Debug 面板**：展开可查看 RRF 融合计算过程、各路检索的排名/分数/匹配详情
+- **详情抽屉**：右侧滑出面板，展示候选人完整资料
+- **ES 健康检查**：每 30 秒轮询 `/api/health`，显示在线/离线状态
+
+### API 接口
+
+| 端点                        | 方法 | 用途             |
+|-----------------------------|------|------------------|
+| `/`                         | GET  | 返回前端页面     |
+| `/api/search`               | GET  | 核心搜索接口     |
+| `/api/health`               | GET  | ES 健康检查      |
+| `/api/resumes/{resume_id}`  | GET  | 获取单份简历详情 |
+| `/static/*`                 | GET  | 静态资源         |
+
+---
+
+## 7. 检索效果评估
+
+项目包含一套基于 JSONL 格式的评估框架 (`evaluate_search.py` + `eval_queries.jsonl`)。
+
+### 评估指标
+
+| 指标         | 含义                                   |
+|--------------|----------------------------------------|
+| P@5 / P@10   | 前 5/10 条中相关文档的比例             |
+| R@5 / R@10   | 前 5/10 条覆盖了多少比例的所有相关文档 |
+| MRR@10       | 第一个相关文档的倒数排名               |
+| NDCG@10      | 归一化折扣累积增益                     |
+| forbidden@10 | 前 10 条中出现的"禁止出现"文档数       |
+| empty_acc    | 对于期望无结果的查询，是否正确返回空   |
+
+### 运行方式
 
 ```bash
+# 需要先启动 ES 并导入数据
 python evaluate_search.py
-```
 
-按类型查看：
+# 打印每个查询的详细结果
+python evaluate_search.py --details
 
-```bash
+# 按查询类型分组汇总
 python evaluate_search.py --type-summary
 ```
 
-查看每条 query：
+### 评估用例格式
 
-```bash
-python evaluate_search.py --details
+```jsonl
+{
+  "id": "skill_python_nlp",
+  "query": "Python NLP",
+  "type": "skill",
+  "relevant_ids": ["20190016837", "20190017200"],
+  "forbidden_ids": []
+}
 ```
 
-### 11.3 当前评估结果
+也支持通过 `relevant_es_query` 字段动态从 ES 查询相关文档集。
 
-评估脚本会输出当前检索策略的整体指标：
+---
 
-```text
-queries judged  P@5    P@10   R@5    R@10   MRR@10 NDCG@10 empty_acc forbidden@10
-```
+## 8. 本地部署与运行
 
-具体数值会随 mock 数据、embedding 模型和检索参数变化，以本地运行 `python evaluate_search.py` 的输出为准。
+### 前置条件
 
-专业回归结果：
+- Python 3.10+
+- Elasticsearch 9.x（需安装 IK 分词插件）
+- 约 4-8GB 可用内存（embedding 模型加载需要）
 
-```text
-entity_major: P@5=1.000, R@10=0.900, NDCG@10=0.934
-phrase_major: P@5=1.000, R@10=0.700, NDCG@10=0.801
-```
-
-### 11.4 指标含义
-
-| 指标 | 含义 |
-| --- | --- |
-| `P@5` | Top5 中相关结果比例 |
-| `P@10` | Top10 中相关结果比例 |
-| `R@5` | Top5 覆盖了多少相关集合 |
-| `R@10` | Top10 覆盖了多少相关集合 |
-| `MRR@10` | 第一个相关结果越靠前越好 |
-| `NDCG@10` | 综合考虑相关结果位置，越靠前得分越高 |
-| `empty_acc` | 负例 query 是否返回空 |
-| `forbidden@10` | Top10 中不应出现的结果数 |
-
-## 12. 本地运行与验证
-
-### 12.1 安装依赖
+### 步骤 1：安装 Python 依赖
 
 ```bash
 pip install -r requirements.txt
 ```
 
-### 12.2 启动 Elasticsearch
-
-确保本地 ES 可访问：
+### 步骤 2：安装并启动 Elasticsearch
 
 ```bash
-curl -s 'http://localhost:9200/_cluster/health?pretty'
+# 下载 ES 9.x（项目目录下已有 elasticsearch-9.3.0，可直接使用）
+cd elasticsearch-9.3.0
+
+# 安装 IK 分词插件（如果尚未安装）
+bin/elasticsearch-plugin install https://get.infini.cloud/elasticsearch/analysis-ik/9.3.0
+
+# 启动 ES（开发模式，单节点）
+bin/elasticsearch -d  # -d 表示后台运行
+
+# 验证 ES 是否启动
+curl http://localhost:9200/_cluster/health
 ```
 
-项目依赖 IK 分词插件。如果 analyzer 不存在，创建索引会失败。
-
-### 12.3 导入简历
-
-重建索引：
+### 步骤 3：导入数据
 
 ```bash
-python import_to_es.py data_path --es-url http://localhost:9200 --index resumes_v1 --alias resumes_current
+# 如果有 .doc 简历文件，放入 data/ 目录
+python import_to_es.py data/
+
+# 如果使用 JSONL 格式的模拟数据
+python import_to_es.py mock_resumes_llm_diverse.jsonl
 ```
 
-增量导入到当前 alias：
+> **⚠️ 首次运行会自动下载 embedding 模型**（约 2-4GB），需要网络连接。如果国内访问 HuggingFace 受限，可设置 `HF_ENDPOINT=https://hf-mirror.com`。
+
+### 步骤 4：启动后端
 
 ```bash
-python import_to_es.py data_path --no-recreate
+uvicorn app:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-mapping 或 analyzer 变化后应重建新索引。
+### 步骤 5：访问前端
 
-### 12.4 启动服务
+浏览器打开 `http://localhost:8000`
+
+### 步骤 6：运行测试
 
 ```bash
-uvicorn app:app --reload
+# 单元测试（不需要 ES）
+python -m pytest tests/test_search_logic.py -v
+
+# 检索质量评估（需要 ES 在线且已导入数据）
+python evaluate_search.py --details --type-summary
 ```
 
-访问：
-
-```text
-http://localhost:8000
-```
-
-### 12.5 验证 mapping
-
-```bash
-python - <<'PY'
-import requests
-
-mapping = requests.get(
-    'http://localhost:9200/resumes_current/_mapping',
-    timeout=10,
-).json()
-
-props = next(iter(mapping.values()))['mappings']['properties']
-print(props['candidate']['properties']['major']['fields'])
-print(props['education']['properties']['major']['fields'])
-print(props['projects']['properties']['name']['fields'])
-print(props['projects_vector']['type'])
-PY
-```
-
-期望看到：
-
-```text
-candidate.major 有 keyword 和 phrase
-education.major 有 keyword 和 phrase
-projects.name 有 keyword 和 phrase
-projects_vector 是 dense_vector
-```
-
-### 12.6 验证搜索行为
-
-```bash
-python - <<'PY'
-from fastapi.testclient import TestClient
-from app import app
-
-client = TestClient(app)
-
-for query in ['计算机科学', '计算机科学与技术']:
-    data = client.get('/api/search', params={'q': query, 'limit': 6}).json()
-    print('\n', query)
-    for item in data['results']:
-        majors = [item['candidate'].get('major')]
-        majors += [edu.get('major') for edu in item.get('education', []) if edu.get('major')]
-        print(
-            item['candidate'].get('name'),
-            majors,
-            item['retrieval_debug'].get('lexical_tier'),
-            item['retrieval_debug'].get('bm25_rank'),
-        )
-PY
-```
-
-期望：
-
-```text
-计算机科学:
-  Top 结果优先是 计算机科学与技术，lexical_tier=2
-
-计算机科学与技术:
-  Top 结果优先是完整专业命中，lexical_tier=3
-```
-
-### 12.7 运行测试
-
-```bash
-python -m pytest -q
-```
-
-当前结果：
-
-```text
-26 passed
-```
-
-## 13. 设计取舍与面试重点
-
-### 13.1 为什么使用 Elasticsearch
-
-可以从四个角度回答：
-
-1. 结构化检索能力强。
-
-   简历有学历、城市、技能、年限、学校、岗位等结构化字段，ES 的 keyword、range、terms、nested 非常适合。
-
-2. 中文全文检索成熟。
-
-   IK 分词 + BM25 可以处理中文关键词、项目描述、职责文本。
-
-3. 支持向量检索。
-
-   `dense_vector` + HNSW 可以补充语义召回。
-
-4. 生态完整。
-
-   ES 支持 highlight、aggregation、alias、bulk import、mapping 管理，适合快速构建搜索原型。
-
-### 13.2 为什么 keyword、phrase、filter 要分开
-
-因为它们表达不同语义：
-
-| 类型 | 语义 | 例子 |
-| --- | --- | --- |
-| keyword | 字段整体等于 query | 专业完整等于 `计算机科学与技术` |
-| phrase | query 连续出现在字段里 | `计算机科学` 出现在 `计算机科学与技术` 中 |
-| BM25 | 分词后的相关性 | `推荐系统 NLP SQL` |
-| filter | 必须满足的业务条件 | 本科、北京、0.5 年以上 |
-
-如果混在一起，会出现问题：
-
-- 把 filter 当 query，会让学历、城市参与评分。
-- 只用 BM25，会让拆词命中压过完整专业命中。
-- 只用 keyword，会漏掉短语和部分能力描述。
-- 只用 dense，会导致实体查询被语义泛化。
-
-### 13.3 当前实现的优点
-
-- 字段职责清晰：实体、短语、全文、向量、过滤分别处理。
-- 对中文短语友好：`.phrase` 子字段解决连续短语排序问题。
-- 对实体查询稳：编号、学校、公司、专业 exact 优先。
-- 对自然语言查询有语义补充：dense vector 支持能力和经历泛化。
-- 排序可解释：`lexical_tier`、`bm25_rank`、`dense_rank`、`rrf_score` 都可观察。
-- 评估可回归：`eval_queries.jsonl` 覆盖实体、专业、技能、语义和负例。
-- 索引契约明确：mapping `_meta` 和文档 embedding 元信息记录模型、维度、版本。
-
-### 13.4 当前实现的限制
-
-- 还没有学习排序模型，例如 LTR 或 cross-encoder reranker。
-- `lexical_tier` 是规则分层，不是模型自动学习出来的权重。
-- dense 已拆成多路画像向量，但还没有进一步拆到项目/实习片段级索引。
-- 评估集虽然已有 126 条，但仍然偏小，需要更多真实 query 和人工标注。
-- 当前没有分页游标，默认最多使用 ES 结果窗口 10000。
-- 没有实现复杂权限控制、租户隔离、审计日志等生产系统能力。
-- 当前 README 不展开 `resume_parser.py` 的所有解析规则，因为真实简历来源格式需要业务上下文确认。
-
-### 13.5 如果面试官问如何优化
-
-可以按三个方向回答。
-
-相关性优化：
-
-- 扩充真实 query 评估集，按岗位、技能、专业、学校、负例分层评估。
-- 对字段 boost 做网格搜索或贝叶斯调参。
-- 引入二阶段 reranker，例如 cross-encoder 或轻量 LTR。
-- 进一步建立项目、实习、教育片段级索引，返回更细的命中证据。
-- 加入同义词词典，例如 `后端` 和 `服务端`，`风控` 和 `反欺诈`。
-- 增加职位、专业、技能的标准化词表。
-
-性能优化：
-
-- 控制 `RRF_RANK_WINDOW_SIZE`，避免过大候选窗口。
-- 调整 `KNN_NUM_CANDIDATES`，平衡向量召回和延迟。
-- 对 filter 字段保持 keyword 类型，利用 ES filter cache。
-- 减少 `_source` 返回字段，避免传输向量和原文。
-- 用 search_after 或 scroll/PIT 支持大结果集浏览。
-- 对 facet 做缓存或异步更新。
-
-索引优化：
-
-- 为高频筛选字段设计合理 doc_values。
-- 控制 nested 数量，避免 nested 文档膨胀。
-- 定期清理旧索引，避免磁盘水位线阻止新分片分配。
-- 根据数据量调整 shard 数和 replica。
-- 对向量字段评估 HNSW 参数和压缩策略。
-
-工程化优化：
-
-- 增加查询日志，保存 query、TopK、点击、查看详情、投递反馈。
-- 用线上反馈构造训练集。
-- 增加 API latency 指标和 ES 慢查询日志。
-- 增加导入失败重试、断点续导和数据校验报告。
-
-### 13.6 如果数据量变大可能遇到的问题
-
-| 问题 | 表现 | 优化方向 |
-| --- | --- | --- |
-| BM25 查询变慢 | TopK 延迟升高 | 优化字段、减少 should、调 rank window、加缓存 |
-| kNN 查询变慢 | dense 延迟高 | 调 `num_candidates`、分片策略、向量压缩 |
-| nested 膨胀 | 索引文档数远大于简历数 | 控制项目/实习条数，必要时拆索引 |
-| facet 慢 | 页面加载慢 | 缓存 facet 或离线聚合 |
-| 索引变大 | 磁盘水位线触发 | ILM、清理旧索引、扩容 |
-| 排序不稳定 | 用户反馈相关性差 | 扩评估集、引入 reranker、记录点击反馈 |
-| 大结果翻页困难 | from/size 深分页慢 | search_after + PIT |
-
-### 13.7 面试讲解主线
-
-可以按这个顺序讲：
-
-```text
-1. 业务背景:
-   简历检索既有实体精确匹配，又有能力语义匹配。
-
-2. 字段建模:
-   ID、学校、专业、公司、技能用 keyword。
-   岗位、专业、项目、实习描述用 text。
-   关键 text 字段增加 .phrase。
-   能力 profile 写入 dense_vector。
-
-3. 查询构造:
-   用户输入先解析结构化 filter。
-   剩余 query 构造成 exact、phrase、BM25 分层查询。
-   同时构造 kNN 查询。
-
-4. 排序:
-   用 RRF 融合 BM25 和 dense rank。
-   再乘以 lexical_tier 与 term_coverage 奖励系数。
-   最终按 Debug 中展示的最终加权得分降序排序。
-   vector-only 可以独立进入融合，但不拿词面奖励。
-
-5. 评估:
-   用 eval_queries.jsonl 固定评估集看 P@K、R@K、MRR、NDCG 和负例误召回。
-
-6. 取舍:
-   不直接全文向量化。
-   不把 filter 当评分。
-   不直接相加 BM25 和 dense 分数。
-   当前不上复杂 reranker，先用可解释规则和评估集校准。
-```
-
-## 14. 当前边界与需要补充的信息
-
-从仓库代码可以确定的信息：
-
-- 搜索 API、ES mapping、BM25 查询、phrase 查询、filter、dense kNN、RRF 融合、评估脚本都在仓库中。
-- 当前索引设计只支持最新 mapping，不兼容旧索引。
-- 当前候选人索引不保存 dense 向量；项目、实习、教育、技能被拆成证据文档，并在证据索引中保存 `evidence_vector`。
-- 当前没有 dense-only 分数阈值；词面证据和向量证据独立召回后统一 RRF 融合。
-
-需要业务侧进一步补充的信息：
-
-- 真实生产简历来源格式和字段完整定义。
-- 字段权限和隐私要求，例如手机号、邮箱是否应该对所有用户返回。
-- 线上用户点击、查看详情、收藏、面试通过等反馈数据。
-- 不同岗位是否需要不同排序策略，例如算法岗、安全岗、前端岗的字段权重是否不同。
-- 期望的分页方式和最大结果浏览范围。
-- 生产集群规模、数据量、QPS、延迟目标和磁盘保留策略。
-
-这些信息会影响后续是否需要引入多租户权限、在线学习排序、岗位定制化 query profile、索引生命周期管理和更严格的可观测性设计。
-
-## 15. 前端高亮与去重排版逻辑
-
-为了在保留底层混合检索（BM25 + Dense）透明度的同时，提供干净清爽的用户体验，系统对高亮切片（Snippet）进行了深度的处理与美化：
-
-### 15.1 后端打标与标签生成 (`app.py`)
-Elasticsearch 默认返回的高亮仅有 `<mark>` 标签。为了让用户知道“这个词是在哪个字段匹配上的”，后端 `_evidence_snippet` 进行了显式打标：
-- **词面匹配（BM25）**：遍历 `highlight`，将底层字段名映射为可读标签（如 `text` -> `正文`，`skills_text` -> `技能词`），并直接在后端拼接 HTML：`<span class="snippet-label">正文</span> ...`。
-- **向量匹配（Dense）**：当某段经历纯粹依靠向量相似度召回（无关键字高亮）时，系统提供 Fallback 兜底文本，并在最前方加上专属的绿色徽标：`<span class="snippet-label dense-label">Dense 匹配</span> ...`。
-
-### 15.2 强力文本去重机制
-由于 Elasticsearch 混合检索经常会导致**“同一段文本被不同字段（`text` 和 `skills_text`）重复召回”**或**“被不同经历分块重复命中”**，系统在后端实现了一套全文本覆盖式去重逻辑：
-- **过滤 HTML 与标点**：通过正则提取纯粹的字母、数字和中文字符串（`clean_frag`）。
-- **字段级子串去重**：如果 `[技能词]` 命中的纯文本内容，完全是 `[正文]` 高亮合并文本的子串（例如 `JavaSpring` 是 `能力标签JavaSpring` 的子集），系统会直接抛弃 `[技能词]` 标签，避免同一个简历片段里疯狂重复。
-- **跨块级去重**：如果在聚合不同 evidence chunk 时，发现两段经历产出了高度重合的 Snippet 文本，第二段也会被折叠。
-
-### 15.3 前端实体色块 UI (`web/styles.css`)
-后端返回的安全 HTML 片段，前端通过 `innerHTML` 渲染。标签 UI 采用了经典的**高对比度实体色块（Solid Block）**风格：
-- **普通 BM25 标签**：采用品牌主蓝底白字（`var(--primary)` + `#fff`），视觉结构扎实。
-- **Dense 向量标签**：采用极具辨识度的翡翠绿（Emerald Green, `#059669`），在不使用柔性或紫色调的前提下，与传统的蓝色词面召回形成极强对比，一目了然地区分两种召回机制。
+---
+
+## 9. 配置项与环境变量
+
+### 环境变量
+
+| 变量            | 说明                                        | 默认值                    |
+|-----------------|---------------------------------------------|---------------------------|
+| `HF_ENDPOINT`   | HuggingFace Hub 镜像地址                    | `https://huggingface.co`  |
+
+### `app.py` 中的关键常量
+
+| 常量                         | 值     | 说明                                         |
+|------------------------------|--------|----------------------------------------------|
+| `ES_URL`                     | `http://localhost:9200` | Elasticsearch 地址              |
+| `INDEX_ALIAS`                | `resumes_current` | 主索引别名                          |
+| `EVIDENCE_INDEX_ALIAS`       | `resume_evidence_current` | 证据索引别名              |
+| `RRF_RANK_CONSTANT`          | 60     | RRF 公式中的 k 值                            |
+| `RRF_RANK_WINDOW_SIZE`       | 100    | 每路检索参与 RRF 的最大文档数                |
+| `KNN_NUM_CANDIDATES`         | 300    | kNN 检索的候选池大小                         |
+| `DENSE_RRF_WEIGHT`           | 1.0    | Dense 路在 RRF 中的外层权重                  |
+| `EVIDENCE_RRF_WEIGHT`        | 1.2    | Evidence BM25 路在 RRF 中的权重              |
+| `EVIDENCE_DENSE_RRF_WEIGHT`  | 1.0    | Evidence kNN 路在 RRF 中的权重               |
+| `DENSE_RANK_WINDOW_SIZE`     | 300    | Dense 检索的最大结果窗口                     |
+| `QUERY_TERM_COVERAGE_BOOST`  | 0.001  | Term Coverage 的 constant_score boost        |
+| `MAX_BROWSE_RESULT_SIZE`     | 10,000 | 浏览模式下的最大返回数                       |
+| `FACETS_CACHE_TTL_SECONDS`   | 60     | Facet 聚合结果缓存时间                       |
+| `FILTER_VOCAB_CACHE_TTL_SECONDS` | 300 | 过滤词表缓存时间                            |
+
+### `import_to_es.py` 中的关键常量
+
+| 常量                           | 值     | 说明                                       |
+|--------------------------------|--------|--------------------------------------------|
+| `BULK_BATCH_SIZE`              | 100    | Bulk API 每批文档数                        |
+| `SECTION_SEMANTIC_CHAR_BUDGET` | 512    | 每个 section 证据的最大字符数              |
+| `SKILLS_SEMANTIC_CHAR_BUDGET`  | 256    | 技能证据的最大字符数                       |
+| `PROFILE_LEXICAL_CHAR_BUDGET`  | 768    | 档案证据的最大字符数                       |
+| `VECTOR_EVIDENCE_SECTION_TYPES`| `{skills, project, internship, education}` | 需要向量化的证据类型 |
+
+### `embedding_service.py` 中的关键常量
+
+| 常量          | 值     | 说明                     |
+|---------------|--------|--------------------------|
+| `MODEL_ID`    | `IEITYuan/Yuan-embedding-2.0-zh` | 模型标识 |
+| `VECTOR_DIMS` | 1792   | 向量维度                 |
+
+---
+
+## 10. 与旧 README 的差异说明
+
+旧版 README 中有部分内容与当前代码实现已存在较大出入，以下列出主要差异：
+
+| 旧 README 描述                         | 实际代码实现                                                |
+|----------------------------------------|-------------------------------------------------------------|
+| 主索引上的 BM25 检索作为独立路线        | 当前已移除主索引上的独立 BM25 路线，所有词面检索统一在证据索引上进行 |
+| 候选人级别的整文档向量（`semantic_profile_vector`、`role_vector` 等） | 已标记为 obsolete，导入时主动删除。当前向量化只在证据索引的切片级别进行 |
+| 4 个候选人向量字段（`skills_vector`、`projects_vector` 等） | 已标记为 `LEGACY_CANDIDATE_VECTOR_FIELDS`，不再生成和使用 |
+| 多路 BM25 + 多路 Dense 的检索架构       | 简化为 Evidence BM25 + Evidence Dense 两路                   |
+| RRF 直接使用各路排名                    | 增加了 lexical_tier 加分和 term_coverage 加分机制            |
+
+---
+
+## 11. 当前实现说明与后续优化方向
+
+### 当前已实现功能
+
+- ✅ HTML 格式 `.doc` 简历解析，提取 12+ 类结构化字段
+- ✅ 双索引架构：候选人主索引 + 证据切片索引
+- ✅ 证据切片级别的向量化（非整文档向量化）
+- ✅ 中文 IK 分词 + 多层权重 BM25 检索
+- ✅ kNN 向量近邻检索
+- ✅ 手动 RRF 融合排序（含 tier 加分 + coverage 加分）
+- ✅ 自由文本中的结构化约束自动识别（年限、城市、学历）
+- ✅ Facet 聚合驱动的动态筛选面板
+- ✅ 完整的检索排序可解释性 Debug 面板
+- ✅ 检索质量评估框架 (P@K / R@K / MRR / NDCG)
+- ✅ 单元测试覆盖
+
+### 已知设计边界与可优化方向
+
+**数据处理层面**：
+
+1. **简历解析仅支持 HTML 格式 `.doc`**——不支持 PDF、`.docx`、纯文本等格式。如需支持更多格式，可引入 Apache Tika 或 python-docx。
+2. **工作经验仅从实习经历计算**——项目经历不纳入工时统计。如需更精确的经验估算，可考虑加权不同类型的经历。
+3. **模型下载依赖网络**——生产环境应预先下载模型到本地或内网镜像。
+
+**检索层面**：
+
+4. **Query 解析依赖词表精确匹配**——城市、学历的识别依赖 ES 中已有的词表。对于新城市名或学历别名（如"研究生"→"硕士"），需要手动扩充。
+5. **无 Query Rewriting 或同义词扩展**——"ML"不会被扩展为"Machine Learning"/"机器学习"。可引入同义词词典或 LLM 辅助改写。
+6. **无 Re-ranking 阶段**——当前是 RRF 一次排序即最终结果。可在 RRF 之后增加一个 Cross-Encoder 精排阶段来提升头部排序质量。
+7. **filter 子句在证据索引上基于冗余字段**——如果冗余字段与主索引不一致（理论上不应发生，但增量更新时需注意），可能导致过滤遗漏。
+
+**工程层面**：
+
+8. **ES 地址硬编码**——`ES_URL` 在代码中写死为 `localhost:9200`，生产部署需通过环境变量或配置文件管理。
+9. **无认证机制**——API 和 ES 连接均无认证，仅适用于内网开发环境。
+10. **embedding 推理在应用进程内**——模型加载占用约 4GB 内存。高并发场景应将 embedding 推理拆分为独立服务（如 ONNX Runtime Serving 或 Triton）。
+11. **Facet 和词表使用内存缓存**——多实例部署时各实例缓存不一致。可改用 Redis 或直接每次查询（ES 聚合查询通常很快）。
+12. **前端无分页**——默认返回最多 10,000 条结果一次性渲染。数据量大时需引入虚拟滚动或分页加载。
