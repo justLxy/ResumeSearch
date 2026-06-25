@@ -17,18 +17,18 @@ DEFAULT_INDEX = "resumes_v1"
 DEFAULT_ALIAS = "resumes_current"
 BULK_BATCH_SIZE = 100
 REQUEST_TIMEOUT_SECONDS = 90
-SEMANTIC_PROFILE_CHAR_BUDGET = 512
 SECTION_SEMANTIC_CHAR_BUDGET = 512
 SKILLS_SEMANTIC_CHAR_BUDGET = 256
-ROLE_SEMANTIC_CHAR_BUDGET = 256
-SEMANTIC_PROFILE_VERSION = "semantic-profile-v3"
+SEMANTIC_PROFILE_VERSION = "semantic-profile-v5"
 EMBEDDING_NORMALIZED = True
 VECTOR_FIELDS = (
-    "semantic_profile_vector",
     "skills_vector",
     "projects_vector",
     "internships_vector",
     "education_vector",
+)
+OBSOLETE_VECTOR_FIELDS = (
+    "semantic_profile_vector",
     "role_vector",
 )
 
@@ -421,16 +421,10 @@ INDEX_BODY: dict[str, Any] = {
                 "type": "text",
                 "index": False,
             },
-            "search_text": {
-                "type": "text",
-                "index": False,
-            },
-            "semantic_profile_vector": _dense_vector_mapping(),
             "skills_vector": _dense_vector_mapping(),
             "projects_vector": _dense_vector_mapping(),
             "internships_vector": _dense_vector_mapping(),
             "education_vector": _dense_vector_mapping(),
-            "role_vector": _dense_vector_mapping(),
         }
     },
 }
@@ -513,6 +507,9 @@ def _load_json_docs(path: Path) -> list[dict[str, Any]]:
 
 
 def _enrich_doc(doc: dict[str, Any]) -> dict[str, Any]:
+    for field in OBSOLETE_VECTOR_FIELDS:
+        doc.pop(field, None)
+    doc.pop("search_text", None)
     candidate = doc.setdefault("candidate", {})
     years_experience = _estimate_years_experience(doc)
     if years_experience is None:
@@ -520,7 +517,6 @@ def _enrich_doc(doc: dict[str, Any]) -> dict[str, Any]:
     else:
         candidate["years_experience"] = years_experience
     doc["skills_text"] = " ".join(doc.get("skills") or [])
-    doc["search_text"] = _build_search_text(doc)
     doc["embedding"] = {
         "model_id": MODEL_ID,
         "vector_dims": VECTOR_DIMS,
@@ -549,12 +545,10 @@ def add_doc_embeddings(docs: list[dict[str, Any]]) -> None:
 
 def _embedding_inputs(doc: dict[str, Any]) -> dict[str, str]:
     return {
-        "semantic_profile_vector": doc.get("search_text", "") or _build_search_text(doc),
         "skills_vector": _skills_semantic_text(doc),
         "projects_vector": _project_semantic_text(doc),
         "internships_vector": _internship_semantic_text(doc),
         "education_vector": _education_semantic_text(doc),
-        "role_vector": _role_semantic_text(doc),
     }
 
 
@@ -608,20 +602,6 @@ def _merge_spans(spans: list[tuple[date, date]]) -> list[tuple[date, date]]:
     return [(start, end) for start, end in merged]
 
 
-def _build_search_text(doc: dict[str, Any]) -> str:
-    application = doc.get("application") or {}
-    candidate = doc.get("candidate") or {}
-    lines = [
-        _project_semantic_text(doc),
-        _internship_semantic_text(doc),
-        _profile_line("能力标签", "，".join(doc.get("skills") or [])),
-        _education_semantic_text(doc),
-        _profile_line("目标岗位", application.get("position_name")),
-        _profile_line("专业背景", candidate.get("major")),
-    ]
-    return _semantic_text(doc, lines, SEMANTIC_PROFILE_CHAR_BUDGET)
-
-
 def _semantic_text(doc: dict[str, Any], lines: list[Any], max_chars: int) -> str:
     cleaned = _strip_semantic_exclusions(_compact_join(lines), _semantic_exclusions(doc))
     return _budgeted_join(cleaned.splitlines(), max_chars)
@@ -672,18 +652,6 @@ def _skills_semantic_text(doc: dict[str, Any]) -> str:
         [_profile_line("能力标签", "，".join(doc.get("skills") or []))],
         SKILLS_SEMANTIC_CHAR_BUDGET,
     )
-
-
-def _role_semantic_text(doc: dict[str, Any]) -> str:
-    application = doc.get("application") or {}
-    candidate = doc.get("candidate") or {}
-    lines = [
-        _profile_line("目标岗位", application.get("position_name")),
-        _profile_line("专业背景", candidate.get("major")),
-    ]
-    for item in application.get("wishes") or []:
-        lines.append(_profile_line("求职意向", item.get("position_name")))
-    return _semantic_text(doc, lines, ROLE_SEMANTIC_CHAR_BUDGET)
 
 
 def _profile_line(label: str, value: Any) -> str:

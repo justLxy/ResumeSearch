@@ -191,12 +191,10 @@ function formatMatchedQuery(q) {
 }
 
 const denseFieldNameMap = {
-  semantic_profile_vector: "整体向量",
   skills_vector: "技能向量",
   projects_vector: "项目向量",
   internships_vector: "实习向量",
   education_vector: "教育向量",
-  role_vector: "岗位向量",
 };
 
 function isDenseSource(source) {

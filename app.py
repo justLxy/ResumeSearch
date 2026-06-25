@@ -44,21 +44,17 @@ COVERAGE_QUERY_PREFIX = "query_term:"
 LEXICAL_EXACT_QUERY_PREFIX = "lexical_exact:"
 LEXICAL_PHRASE_QUERY_PREFIX = "lexical_phrase:"
 VECTOR_FIELDS = (
-    "semantic_profile_vector",
     "skills_vector",
     "projects_vector",
     "internships_vector",
     "education_vector",
-    "role_vector",
 )
 DENSE_ROUTE_MAX_FIELDS = 4
 DENSE_ROUTE_BASE_PRIORITIES = {
-    "semantic_profile_vector": 0.75,
     "skills_vector": 0.80,
     "projects_vector": 0.85,
     "internships_vector": 0.75,
     "education_vector": 0.55,
-    "role_vector": 0.60,
 }
 PROJECT_INTENT_TERMS = (
     "项目",
@@ -93,18 +89,6 @@ WORK_INTENT_TERMS = (
     "接口",
     "缓存",
 )
-ROLE_INTENT_TERMS = (
-    "工程师",
-    "候选人",
-    "后端",
-    "前端",
-    "算法",
-    "机器学习",
-    "安全研究员",
-    "数据分析师",
-    "测试工程师",
-    "运维",
-)
 EDUCATION_INTENT_TERMS = (
     "专业",
     "研究方向",
@@ -118,8 +102,9 @@ EDUCATION_INTENT_TERMS = (
 SOURCE_EXCLUDES = [
     "raw_text",
     "raw_sections",
-    "search_text",
     "skills_text",
+    "semantic_profile_vector",
+    "role_vector",
     *VECTOR_FIELDS,
 ]
 EXACT_LOOKUP_RE = re.compile(
@@ -1044,17 +1029,8 @@ def _infer_dense_routes(
         priorities["projects_vector"] += 0.25
         priorities["skills_vector"] += 0.10
 
-    if _contains_any(query_text, ROLE_INTENT_TERMS):
-        priorities["role_vector"] += 0.45
-        priorities["skills_vector"] += 0.15
-        priorities["projects_vector"] += 0.10
-
     if _contains_any(query_text, EDUCATION_INTENT_TERMS):
         priorities["education_vector"] += 0.45
-        priorities["semantic_profile_vector"] += 0.10
-
-    if not skill_mentions and len(tokens) >= 2:
-        priorities["semantic_profile_vector"] += 0.15
 
     selected = sorted(
         ((field, priority) for field, priority in priorities.items() if field in VECTOR_FIELDS),
@@ -1096,7 +1072,7 @@ def _contains_any(text: str, terms: tuple[str, ...]) -> bool:
 
 
 def _dense_retriever_name(field: str) -> str:
-    label = field.removesuffix("_vector").replace("semantic_profile", "profile")
+    label = field.removesuffix("_vector")
     return f"{DENSE_RETRIEVER}:{label}"
 
 

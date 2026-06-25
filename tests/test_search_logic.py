@@ -23,7 +23,6 @@ from import_to_es import (
     VECTOR_DIMS,
     VECTOR_FIELDS,
     INDEX_BODY,
-    _build_search_text,
     _embedding_inputs,
     _estimate_years_experience,
 )
@@ -368,22 +367,21 @@ class SearchLogicTests(unittest.TestCase):
             ],
         }
 
-        search_text = _build_search_text(doc)
-        embedding_inputs = _embedding_inputs({"search_text": search_text, **doc})
+        embedding_inputs = _embedding_inputs(doc)
         all_embedding_text = "\n".join(embedding_inputs.values())
 
-        self.assertNotIn("北京大学", search_text)
-        self.assertNotIn("北京", search_text)
-        self.assertNotIn("张三", search_text)
+        self.assertNotIn("北京大学", all_embedding_text)
+        self.assertNotIn("北京", all_embedding_text)
+        self.assertNotIn("张三", all_embedding_text)
         self.assertNotIn("百度在线网络技术", all_embedding_text)
         self.assertNotIn("学士", all_embedding_text)
-        self.assertLessEqual(len(embedding_inputs["semantic_profile_vector"]), 512)
+        self.assertNotIn("semantic_profile_vector", embedding_inputs)
         self.assertIn("机器学习", embedding_inputs["skills_vector"])
         self.assertIn("自然语言处理", embedding_inputs["education_vector"])
         self.assertIn("推荐系统", embedding_inputs["internships_vector"])
         self.assertIn("医疗问答系统", embedding_inputs["projects_vector"])
-        self.assertIn("机器学习工程师", embedding_inputs["role_vector"])
-        self.assertLess(search_text.index("项目名称"), search_text.index("实习职位"))
+        self.assertNotIn("role_vector", embedding_inputs)
+        self.assertNotIn("机器学习工程师", all_embedding_text)
 
     def test_dense_routes_prioritize_query_intent(self) -> None:
         skill_routes = _infer_dense_routes(
@@ -400,15 +398,15 @@ class SearchLogicTests(unittest.TestCase):
         self.assertEqual(project_routes[0]["field"], "projects_vector")
         self.assertIn("skills_vector", [route["field"] for route in project_routes])
 
-        role_routes = _infer_dense_routes(
+        role_like_routes = _infer_dense_routes(
             "机器学习工程师 Python 推荐系统",
             {"Python", "推荐系统"},
         )
-        role_fields = [route["field"] for route in role_routes]
-        self.assertIn("role_vector", role_fields)
-        self.assertIn("skills_vector", role_fields)
-        self.assertTrue(all(route["weight"] == 1.0 for route in role_routes))
-        self.assertTrue(all("priority" in route for route in role_routes))
+        role_like_fields = [route["field"] for route in role_like_routes]
+        self.assertNotIn("role_vector", role_like_fields)
+        self.assertIn("skills_vector", role_like_fields)
+        self.assertTrue(all(route["weight"] == 1.0 for route in role_like_routes))
+        self.assertTrue(all("priority" in route for route in role_like_routes))
 
     def test_skill_filters_are_and_terms(self) -> None:
         filters = _build_filters("", [], ["Python", "NLP", "Python"], 0)
@@ -578,6 +576,8 @@ class SearchLogicTests(unittest.TestCase):
         props = INDEX_BODY["mappings"]["properties"]
         for field in VECTOR_FIELDS:
             self.assertIn(field, props)
+        self.assertNotIn("semantic_profile_vector", props)
+        self.assertNotIn("role_vector", props)
         self.assertIn("keyword", props["candidate"]["properties"]["major"]["fields"])
         self.assertIn("phrase", props["candidate"]["properties"]["major"]["fields"])
         self.assertIn("keyword", props["education"]["properties"]["major"]["fields"])

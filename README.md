@@ -184,8 +184,8 @@ flowchart TD
 ```text
 本地简历文件
   -> resume_parser.py 解析成结构化 JSON
-  -> import_to_es.py 补充工作年限、skills_text、search_text、embedding 元信息
-  -> embedding_service.py 生成整体、技能、项目、实习、教育、岗位多路画像向量
+  -> import_to_es.py 补充工作年限、skills_text、embedding 元信息
+  -> embedding_service.py 生成技能、项目、实习、教育四路画像向量
   -> Elasticsearch 建索引并 bulk 写入
   -> resumes_current alias 指向最新索引
 ```
@@ -342,7 +342,7 @@ lexical query
 
 dense query
   knn:
-    field = semantic_profile_vector
+    field = skills_vector / projects_vector / internships_vector / education_vector
     query_vector = encode_single(query_text)
     filter = 同一组结构化过滤条件
 ```
@@ -373,7 +373,7 @@ dense query
 | phrase 字段 | 是 | 否 | 是 | `candidate.major.phrase` |
 | text BM25 字段 | 是 | 否 | 是 | `section_text.projects` |
 | filter 字段 | 否 | 是 | 否 | `candidate.highest_degree` |
-| dense vector | 是 | 可附带 filter | 是 | `semantic_profile_vector` |
+| dense vector | 是 | 可附带 filter | 是 | `skills_vector`、`projects_vector`、`internships_vector`、`education_vector` |
 | date/number 字段 | 通常否 | 是 | 可排序或过滤 | `application.apply_time` |
 
 ## 4. Elasticsearch Mapping 与索引设计
@@ -457,7 +457,7 @@ resume_search 产生:
 当前使用多路画像向量，而不是只把整份简历压成一个向量：
 
 ```json
-"semantic_profile_vector": {
+"projects_vector": {
   "type": "dense_vector",
   "dims": 1792,
   "similarity": "cosine",
@@ -472,12 +472,12 @@ resume_search 产生:
 
 同样的 `dense_vector` mapping 会用于：
 
-- `semantic_profile_vector`：整体能力画像。
 - `skills_vector`：技能画像。
 - `projects_vector`：项目画像。
 - `internships_vector`：实习/工作经历画像。
 - `education_vector`：教育、专业、研究方向画像。
-- `role_vector`：岗位和求职方向画像。
+
+岗位名称、岗位编号和求职意向不再单独向量化，主要由 BM25、keyword 和 phrase 查询负责。
 
 设计含义：
 
@@ -494,14 +494,12 @@ resume_search 产生:
 embedding_model_id: IEITYuan/Yuan-embedding-2.0-zh
 embedding_vector_dims: 1792
 embedding_normalized: true
-semantic_profile_version: semantic-profile-v3
+semantic_profile_version: semantic-profile-v5
 embedding_vector_fields:
-  - semantic_profile_vector
   - skills_vector
   - projects_vector
   - internships_vector
   - education_vector
-  - role_vector
 ```
 
 每条文档也写入：
@@ -527,14 +525,20 @@ embedding.semantic_profile_version
 - 联系方式、城市、学校、公司等实体进入向量后会污染语义检索。
 - 简历中很多内容是结构化字段，应该分别服务过滤、精确匹配和语义匹配。
 
-当前向量输入是抽取式多画像：
+当前向量输入是抽取式分字段画像：
 
-- 整体画像：项目、实习、技能、教育方向、目标岗位、专业背景。
 - 技能画像：技能标签。
 - 项目画像：项目名称、描述、职责。
 - 实习画像：实习部门、职位、描述。
 - 教育画像：教育专业、研究方向、实验室方向。
-- 岗位画像：目标岗位、求职意向、专业背景。
+
+岗位相关字段不进入 dense 向量：
+
+- 目标岗位。
+- 求职意向。
+- 岗位编号。
+
+这些字段更适合通过 BM25、keyword 或 phrase 做明确匹配。
 
 明确排除：
 
@@ -650,7 +654,7 @@ embedding.semantic_profile_version
     }
   },
   "_source": {
-    "excludes": ["raw_text", "raw_sections", "search_text", "skills_text", "..._vector"]
+    "excludes": ["raw_text", "raw_sections", "skills_text", "..._vector"]
   }
 }
 ```
@@ -856,7 +860,7 @@ BM25 retriever:
   keyword + phrase + BM25 + filter
 
 Dense retriever:
-  根据 query 意图选择技能、项目、实习、教育、岗位或整体画像 kNN + 同一组 filter
+  根据 query 意图选择技能、项目、实习或教育画像 kNN + 同一组 filter
   多个向量通道先在 Dense 内部融合
 ```
 
@@ -891,13 +895,13 @@ Dense rank = 5 -> 1.0 / (60 + 5) = 0.01538
 Dense 侧虽然会同时查多个画像向量，但不会把多个向量通道直接累加到最终 RRF。流程是：
 
 ```text
-1. 项目向量、技能向量、岗位向量等分别返回自己的 kNN rank。
+1. 项目向量、技能向量、实习向量、教育向量分别返回自己的 kNN rank。
 2. 查询意图只决定选择哪些向量通道；被选中的向量通道权重统一为 1.0。
 3. 按内部合计分得到一个统一的 dense_rank。
 4. 外层 RRF 只使用 1.0 / (60 + dense_rank) 作为 Dense 贡献。
 ```
 
-这样做可以避免“项目向量 + 技能向量 + 岗位向量 + 实习向量”在最终排序里变成多张 Dense 票，从而稀释 BM25 的字段命中证据。
+这样做可以避免“项目向量 + 技能向量 + 教育向量 + 实习向量”等在最终排序里变成多张 Dense 票，从而稀释 BM25 的字段命中证据。
 
 为什么不用 BM25 `_score` + dense `_score` 直接相加？
 
@@ -1541,14 +1545,14 @@ DENSE_ONLY_MIN_SCORE = 0.860
 
 ```text
 threshold  judged  P@5    P@10   R@5    R@10   MRR@10 NDCG@10 empty_acc forbidden@10
-0.860      117     0.937  0.862  0.325  0.512  0.970  0.952   1.000     0
+0.860      117     0.923  0.854  0.322  0.509  0.968  0.944   1.000     0
 ```
 
 专业回归结果：
 
 ```text
-entity_major: P@5=1.000, R@10=0.800, NDCG@10=0.870
-phrase_major: P@5=1.000, R@10=0.800, NDCG@10=0.855
+entity_major: P@5=1.000, R@10=0.900, NDCG@10=0.934
+phrase_major: P@5=1.000, R@10=0.700, NDCG@10=0.801
 ```
 
 ### 11.4 指标含义
@@ -1625,7 +1629,7 @@ props = next(iter(mapping.values()))['mappings']['properties']
 print(props['candidate']['properties']['major']['fields'])
 print(props['education']['properties']['major']['fields'])
 print(props['projects']['properties']['name']['fields'])
-print(props['semantic_profile_vector']['type'])
+print(props['projects_vector']['type'])
 PY
 ```
 
@@ -1635,7 +1639,7 @@ PY
 candidate.major 有 keyword 和 phrase
 education.major 有 keyword 和 phrase
 projects.name 有 keyword 和 phrase
-semantic_profile_vector 是 dense_vector
+projects_vector 是 dense_vector
 ```
 
 ### 12.6 验证搜索行为
