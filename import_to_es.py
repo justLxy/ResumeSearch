@@ -15,21 +15,27 @@ from resume_parser import discover_doc_files, parse_resume_batch
 DEFAULT_ES_URL = "http://localhost:9200"
 DEFAULT_INDEX = "resumes_v1"
 DEFAULT_ALIAS = "resumes_current"
+DEFAULT_EVIDENCE_INDEX = "resume_evidence_v1"
+DEFAULT_EVIDENCE_ALIAS = "resume_evidence_current"
 BULK_BATCH_SIZE = 100
 REQUEST_TIMEOUT_SECONDS = 90
 SECTION_SEMANTIC_CHAR_BUDGET = 512
 SKILLS_SEMANTIC_CHAR_BUDGET = 256
+PROFILE_LEXICAL_CHAR_BUDGET = 768
 SEMANTIC_PROFILE_VERSION = "semantic-profile-v5"
 EMBEDDING_NORMALIZED = True
-VECTOR_FIELDS = (
+LEGACY_CANDIDATE_VECTOR_FIELDS = (
     "skills_vector",
     "projects_vector",
     "internships_vector",
     "education_vector",
 )
+EVIDENCE_VECTOR_FIELD = "evidence_vector"
+VECTOR_EVIDENCE_SECTION_TYPES = {"skills", "project", "internship", "education"}
 OBSOLETE_VECTOR_FIELDS = (
     "semantic_profile_vector",
     "role_vector",
+    *LEGACY_CANDIDATE_VECTOR_FIELDS,
 )
 
 
@@ -69,24 +75,14 @@ INDEX_BODY: dict[str, Any] = {
     "mappings": {
         "dynamic": False,
         "_meta": {
-            "embedding_model_id": MODEL_ID,
-            "embedding_vector_dims": VECTOR_DIMS,
-            "embedding_normalized": EMBEDDING_NORMALIZED,
+            "index_role": "candidate_profile",
             "semantic_profile_version": SEMANTIC_PROFILE_VERSION,
-            "embedding_vector_fields": list(VECTOR_FIELDS),
+            "embedding_vector_fields": [],
         },
         "properties": {
             "resume_id": {"type": "keyword"},
             "parse_status": {"type": "keyword"},
             "parser_version": {"type": "keyword"},
-            "embedding": {
-                "properties": {
-                    "model_id": {"type": "keyword"},
-                    "vector_dims": {"type": "integer"},
-                    "normalized": {"type": "boolean"},
-                    "semantic_profile_version": {"type": "keyword"},
-                }
-            },
             "file": {
                 "properties": {
                     "path": {"type": "keyword"},
@@ -421,11 +417,129 @@ INDEX_BODY: dict[str, Any] = {
                 "type": "text",
                 "index": False,
             },
-            "skills_vector": _dense_vector_mapping(),
-            "projects_vector": _dense_vector_mapping(),
-            "internships_vector": _dense_vector_mapping(),
-            "education_vector": _dense_vector_mapping(),
         }
+    },
+}
+
+
+EVIDENCE_INDEX_BODY: dict[str, Any] = {
+    "settings": INDEX_BODY["settings"],
+    "mappings": {
+        "dynamic": False,
+        "_meta": {
+            "embedding_model_id": MODEL_ID,
+            "embedding_vector_dims": VECTOR_DIMS,
+            "embedding_normalized": EMBEDDING_NORMALIZED,
+            "semantic_profile_version": SEMANTIC_PROFILE_VERSION,
+            "embedding_vector_fields": [EVIDENCE_VECTOR_FIELD],
+            "vectorized_section_types": sorted(VECTOR_EVIDENCE_SECTION_TYPES),
+        },
+        "properties": {
+            "evidence_id": {"type": "keyword"},
+            "resume_id": {"type": "keyword"},
+            "section_type": {"type": "keyword"},
+            "ordinal": {"type": "integer"},
+            "title": {
+                "type": "text",
+                "analyzer": "resume_text",
+                "search_analyzer": "resume_search",
+                "fields": {
+                    "keyword": {"type": "keyword"},
+                    "phrase": {
+                        "type": "text",
+                        "analyzer": "resume_search",
+                        "search_analyzer": "resume_search",
+                    },
+                },
+            },
+            "text": {
+                "type": "text",
+                "analyzer": "resume_text",
+                "search_analyzer": "resume_search",
+                "fields": {
+                    "phrase": {
+                        "type": "text",
+                        "analyzer": "resume_search",
+                        "search_analyzer": "resume_search",
+                    },
+                },
+            },
+            "skills_text": {
+                "type": "text",
+                "analyzer": "resume_search",
+            },
+            "skills": {"type": "keyword"},
+            "candidate": {
+                "properties": {
+                    "name": {
+                        "type": "text",
+                        "analyzer": "resume_text",
+                        "search_analyzer": "resume_search",
+                        "fields": {"keyword": {"type": "keyword"}},
+                    },
+                    "highest_degree": {"type": "keyword"},
+                    "years_experience": {"type": "float"},
+                    "major": {
+                        "type": "text",
+                        "analyzer": "resume_text",
+                        "search_analyzer": "resume_search",
+                        "fields": {
+                            "keyword": {"type": "keyword"},
+                            "phrase": {
+                                "type": "text",
+                                "analyzer": "resume_search",
+                                "search_analyzer": "resume_search",
+                            },
+                        },
+                    },
+                    "school": {
+                        "type": "text",
+                        "analyzer": "resume_text",
+                        "search_analyzer": "resume_search",
+                        "fields": {
+                            "keyword": {"type": "keyword"},
+                            "phrase": {
+                                "type": "text",
+                                "analyzer": "resume_search",
+                                "search_analyzer": "resume_search",
+                            },
+                        },
+                    },
+                    "phone": {"type": "keyword"},
+                    "email": {"type": "keyword"},
+                }
+            },
+            "application": {
+                "properties": {
+                    "candidate_no": {"type": "keyword"},
+                    "company": {"type": "keyword"},
+                    "position_code": {"type": "keyword"},
+                    "position_name": {
+                        "type": "text",
+                        "analyzer": "resume_text",
+                        "search_analyzer": "resume_search",
+                        "fields": {
+                            "keyword": {"type": "keyword"},
+                            "phrase": {
+                                "type": "text",
+                                "analyzer": "resume_search",
+                                "search_analyzer": "resume_search",
+                            },
+                        },
+                    },
+                    "expected_work_cities": {"type": "keyword"},
+                }
+            },
+            "embedding": {
+                "properties": {
+                    "model_id": {"type": "keyword"},
+                    "vector_dims": {"type": "integer"},
+                    "normalized": {"type": "boolean"},
+                    "semantic_profile_version": {"type": "keyword"},
+                }
+            },
+            EVIDENCE_VECTOR_FIELD: _dense_vector_mapping(),
+        },
     },
 }
 
@@ -435,6 +549,8 @@ def import_resumes(
     es_url: str = DEFAULT_ES_URL,
     index: str = DEFAULT_INDEX,
     alias: str = DEFAULT_ALIAS,
+    evidence_index: str = DEFAULT_EVIDENCE_INDEX,
+    evidence_alias: str = DEFAULT_EVIDENCE_ALIAS,
     recreate: bool = True,
     delete_missing: bool = False,
 ) -> dict[str, Any]:
@@ -442,35 +558,79 @@ def import_resumes(
     docs = [_enrich_doc(doc) for doc in docs if doc.get("parse_status") == "ok"]
     if recreate and not docs:
         raise RuntimeError("no parsed documents; aborting index rebuild")
-    add_doc_embeddings(docs)
+    evidence_docs = _build_evidence_docs(docs)
+    add_evidence_embeddings(evidence_docs)
 
     target_index = _versioned_index_name(index) if recreate else _write_target(es_url, index, alias)
+    target_evidence_index = (
+        _versioned_index_name(evidence_index)
+        if recreate
+        else _write_target(es_url, evidence_index, evidence_alias)
+    )
     if recreate:
         _request("PUT", f"{es_url}/{target_index}", json_body=INDEX_BODY, ok_statuses={200})
+        _request(
+            "PUT",
+            f"{es_url}/{target_evidence_index}",
+            json_body=EVIDENCE_INDEX_BODY,
+            ok_statuses={200},
+        )
     elif not _target_exists(es_url, target_index):
         _request("PUT", f"{es_url}/{target_index}", json_body=INDEX_BODY, ok_statuses={200})
+    if not recreate and not _target_exists(es_url, target_evidence_index):
+        _request(
+            "PUT",
+            f"{es_url}/{target_evidence_index}",
+            json_body=EVIDENCE_INDEX_BODY,
+            ok_statuses={200},
+        )
 
     if docs:
-        _bulk_index(es_url, target_index, docs)
+        _bulk_index(es_url, target_index, docs, id_field="resume_id")
         _request("POST", f"{es_url}/{target_index}/_refresh", ok_statuses={200})
+    if evidence_docs:
+        _bulk_index(es_url, target_evidence_index, evidence_docs, id_field="evidence_id")
+        _request("POST", f"{es_url}/{target_evidence_index}/_refresh", ok_statuses={200})
 
     if delete_missing and not recreate:
-        _delete_missing_docs(es_url, target_index, {doc["resume_id"] for doc in docs})
+        live_ids = {doc["resume_id"] for doc in docs}
+        _delete_missing_docs(es_url, target_index, live_ids)
+        _delete_missing_evidence_docs(es_url, target_evidence_index, live_ids)
 
     count = _request("GET", f"{es_url}/{target_index}/_count", ok_statuses={200})["count"]
     if recreate and count != len(docs):
         raise RuntimeError(f"indexed count mismatch: expected {len(docs)}, got {count}")
+    evidence_count = _request(
+        "GET",
+        f"{es_url}/{target_evidence_index}/_count",
+        ok_statuses={200},
+    )["count"]
+    if recreate and evidence_count != len(evidence_docs):
+        raise RuntimeError(
+            f"indexed evidence count mismatch: expected {len(evidence_docs)}, got {evidence_count}"
+        )
 
     if recreate or not _target_exists(es_url, alias):
         _switch_alias(es_url, target_index, alias)
+    if recreate or not _target_exists(es_url, evidence_alias):
+        _switch_alias(es_url, target_evidence_index, evidence_alias)
 
     alias_count = _request("GET", f"{es_url}/{alias}/_count", ok_statuses={200})["count"]
+    evidence_alias_count = _request(
+        "GET",
+        f"{es_url}/{evidence_alias}/_count",
+        ok_statuses={200},
+    )["count"]
     return {
         "index": target_index,
         "alias": alias,
+        "evidence_index": target_evidence_index,
+        "evidence_alias": evidence_alias,
         "parsed": len(docs),
         "indexed": count,
+        "evidence_indexed": evidence_count,
         "alias_count": alias_count,
+        "evidence_alias_count": evidence_alias_count,
     }
 
 
@@ -510,6 +670,7 @@ def _enrich_doc(doc: dict[str, Any]) -> dict[str, Any]:
     for field in OBSOLETE_VECTOR_FIELDS:
         doc.pop(field, None)
     doc.pop("search_text", None)
+    doc.pop("embedding", None)
     candidate = doc.setdefault("candidate", {})
     years_experience = _estimate_years_experience(doc)
     if years_experience is None:
@@ -517,39 +678,147 @@ def _enrich_doc(doc: dict[str, Any]) -> dict[str, Any]:
     else:
         candidate["years_experience"] = years_experience
     doc["skills_text"] = " ".join(doc.get("skills") or [])
-    doc["embedding"] = {
-        "model_id": MODEL_ID,
-        "vector_dims": VECTOR_DIMS,
-        "normalized": EMBEDDING_NORMALIZED,
-        "semantic_profile_version": SEMANTIC_PROFILE_VERSION,
-    }
     _drop_index_debug_fields(doc)
     return doc
 
 
-def add_doc_embeddings(docs: list[dict[str, Any]]) -> None:
-    entries: list[tuple[dict[str, Any], str, str]] = []
-    for doc in docs:
-        for field, text in _embedding_inputs(doc).items():
-            if text.strip():
-                entries.append((doc, field, text))
-
-    vectors = encode_batch([text for _, _, text in entries])
-    for (doc, field, _), vector in zip(entries, vectors):
+def add_evidence_embeddings(docs: list[dict[str, Any]]) -> None:
+    texts = [str(doc.get("text") or "").strip() for doc in docs]
+    entries = [
+        (doc, text)
+        for doc, text in zip(docs, texts)
+        if text and doc.get("section_type") in VECTOR_EVIDENCE_SECTION_TYPES
+    ]
+    vectors = encode_batch([text for _, text in entries])
+    for (doc, _), vector in zip(entries, vectors):
         if len(vector) != VECTOR_DIMS:
             raise RuntimeError(
-                f"embedding dimension mismatch for {field}: expected {VECTOR_DIMS}, got {len(vector)}"
+                f"embedding dimension mismatch for {EVIDENCE_VECTOR_FIELD}: "
+                f"expected {VECTOR_DIMS}, got {len(vector)}"
             )
-        doc[field] = vector
+        doc[EVIDENCE_VECTOR_FIELD] = vector
 
 
-def _embedding_inputs(doc: dict[str, Any]) -> dict[str, str]:
-    return {
-        "skills_vector": _skills_semantic_text(doc),
-        "projects_vector": _project_semantic_text(doc),
-        "internships_vector": _internship_semantic_text(doc),
-        "education_vector": _education_semantic_text(doc),
+def _build_evidence_docs(docs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    evidence_docs: list[dict[str, Any]] = []
+    for doc in docs:
+        evidence_docs.extend(_resume_evidence_docs(doc))
+    return evidence_docs
+
+
+def _resume_evidence_docs(doc: dict[str, Any]) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    resume_id = str(doc.get("resume_id") or "").strip()
+    if not resume_id:
+        return items
+
+    profile_text = _profile_lexical_text(doc)
+    if profile_text:
+        items.append(
+            _evidence_doc(
+                doc,
+                "profile",
+                0,
+                "候选人档案",
+                profile_text,
+                vector_enabled=False,
+            )
+        )
+
+    skills_text = _skills_semantic_text(doc)
+    if skills_text:
+        items.append(_evidence_doc(doc, "skills", 0, "能力标签", skills_text))
+
+    for index, item in enumerate(doc.get("projects") or [], start=1):
+        text = _semantic_text(
+            doc,
+            [
+                _profile_line("项目名称", item.get("name")),
+                _profile_line("项目描述", item.get("description")),
+                _profile_line("项目职责", item.get("responsibility")),
+            ],
+            SECTION_SEMANTIC_CHAR_BUDGET,
+        )
+        if text:
+            items.append(_evidence_doc(doc, "project", index, item.get("name") or "项目经历", text))
+
+    for index, item in enumerate(doc.get("internships") or [], start=1):
+        text = _semantic_text(
+            doc,
+            [
+                _profile_line("实习部门", item.get("department")),
+                _profile_line("实习职位", item.get("title")),
+                _profile_line("实习描述", item.get("description")),
+            ],
+            SECTION_SEMANTIC_CHAR_BUDGET,
+        )
+        title = " / ".join(value for value in [item.get("company"), item.get("title")] if value)
+        if text:
+            items.append(_evidence_doc(doc, "internship", index, title or "实习经历", text))
+
+    for index, item in enumerate(doc.get("education") or [], start=1):
+        text = _semantic_text(
+            doc,
+            [
+                _profile_line("教育专业", item.get("major")),
+                _profile_line("研究方向", item.get("research_direction")),
+                _profile_line("实验室方向", item.get("lab_name")),
+            ],
+            SECTION_SEMANTIC_CHAR_BUDGET,
+        )
+        title = " / ".join(value for value in [item.get("school"), item.get("major")] if value)
+        if text:
+            items.append(_evidence_doc(doc, "education", index, title or "教育经历", text))
+
+    return items
+
+
+def _evidence_doc(
+    doc: dict[str, Any],
+    section_type: str,
+    ordinal: int,
+    title: Any,
+    text: str,
+    *,
+    vector_enabled: bool = True,
+) -> dict[str, Any]:
+    resume_id = str(doc.get("resume_id") or "").strip()
+    candidate = doc.get("candidate") or {}
+    application = doc.get("application") or {}
+    evidence = {
+        "evidence_id": f"{resume_id}:{section_type}:{ordinal}",
+        "resume_id": resume_id,
+        "section_type": section_type,
+        "ordinal": ordinal,
+        "title": str(title or "").strip() or section_type,
+        "text": text,
+        "skills_text": " ".join(doc.get("skills") or []),
+        "skills": doc.get("skills") or [],
+        "candidate": {
+            "name": candidate.get("name"),
+            "highest_degree": candidate.get("highest_degree"),
+            "years_experience": candidate.get("years_experience"),
+            "major": candidate.get("major"),
+            "school": candidate.get("school"),
+            "phone": candidate.get("phone"),
+            "email": candidate.get("email"),
+        },
+        "application": {
+            "candidate_no": application.get("candidate_no"),
+            "company": application.get("company"),
+            "position_code": application.get("position_code"),
+            "position_name": application.get("position_name"),
+            "expected_work_cities": application.get("expected_work_cities") or [],
+        },
     }
+    if vector_enabled:
+        evidence["embedding"] = {
+            "model_id": MODEL_ID,
+            "vector_dims": VECTOR_DIMS,
+            "normalized": EMBEDDING_NORMALIZED,
+            "semantic_profile_version": SEMANTIC_PROFILE_VERSION,
+        }
+    return evidence
 
 
 def _drop_index_debug_fields(value: Any) -> Any:
@@ -607,51 +876,65 @@ def _semantic_text(doc: dict[str, Any], lines: list[Any], max_chars: int) -> str
     return _budgeted_join(cleaned.splitlines(), max_chars)
 
 
-def _education_semantic_text(doc: dict[str, Any]) -> str:
-    lines: list[str] = []
-    for item in doc.get("education") or []:
-        lines.extend(
-            [
-                _profile_line("教育专业", item.get("major")),
-                _profile_line("研究方向", item.get("research_direction")),
-                _profile_line("实验室方向", item.get("lab_name")),
-            ]
-        )
-    return _semantic_text(doc, lines, SECTION_SEMANTIC_CHAR_BUDGET)
-
-
-def _internship_semantic_text(doc: dict[str, Any]) -> str:
-    lines: list[str] = []
-    for item in doc.get("internships") or []:
-        lines.extend(
-            [
-                _profile_line("实习部门", item.get("department")),
-                _profile_line("实习职位", item.get("title")),
-                _profile_line("实习描述", item.get("description")),
-            ]
-        )
-    return _semantic_text(doc, lines, SECTION_SEMANTIC_CHAR_BUDGET)
-
-
-def _project_semantic_text(doc: dict[str, Any]) -> str:
-    lines: list[str] = []
-    for item in doc.get("projects") or []:
-        lines.extend(
-            [
-                _profile_line("项目名称", item.get("name")),
-                _profile_line("项目描述", item.get("description")),
-                _profile_line("项目职责", item.get("responsibility")),
-            ]
-        )
-    return _semantic_text(doc, lines, SECTION_SEMANTIC_CHAR_BUDGET)
-
-
 def _skills_semantic_text(doc: dict[str, Any]) -> str:
     return _semantic_text(
         doc,
         [_profile_line("能力标签", "，".join(doc.get("skills") or []))],
         SKILLS_SEMANTIC_CHAR_BUDGET,
     )
+
+
+def _profile_lexical_text(doc: dict[str, Any]) -> str:
+    candidate = doc.get("candidate") or {}
+    application = doc.get("application") or {}
+    wish_lines = [
+        _profile_line(
+            "志愿",
+            " / ".join(
+                str(value)
+                for value in [item.get("company"), item.get("position_name")]
+                if value
+            ),
+        )
+        for item in application.get("wishes") or []
+        if isinstance(item, dict)
+    ]
+    education_lines = [
+        _profile_line(
+            "教育",
+            " / ".join(
+                str(value)
+                for value in [
+                    item.get("school"),
+                    item.get("college"),
+                    item.get("major"),
+                    item.get("education_level"),
+                    item.get("degree"),
+                ]
+                if value
+            ),
+        )
+        for item in doc.get("education") or []
+        if isinstance(item, dict)
+    ]
+    lines = [
+        _profile_line("候选人编号", application.get("candidate_no")),
+        _profile_line("岗位编号", application.get("position_code")),
+        _profile_line("候选人姓名", candidate.get("name")),
+        _profile_line("手机号", candidate.get("phone")),
+        _profile_line("邮箱", candidate.get("email")),
+        _profile_line("招聘公司", application.get("company")),
+        _profile_line("投递岗位", application.get("position_name")),
+        _profile_line("最高学历", candidate.get("highest_degree")),
+        _profile_line("毕业院校", candidate.get("school")),
+        _profile_line("专业", candidate.get("major")),
+        _profile_line("当前城市", candidate.get("current_city")),
+        _profile_line("期望工作城市", application.get("expected_work_cities") or []),
+        _profile_line("技能标签", "，".join(doc.get("skills") or [])),
+        *wish_lines,
+        *education_lines,
+    ]
+    return _budgeted_join(_compact_join(lines).splitlines(), PROFILE_LEXICAL_CHAR_BUDGET)
 
 
 def _profile_line(label: str, value: Any) -> str:
@@ -764,14 +1047,23 @@ def _target_exists(es_url: str, target: str) -> bool:
     return response.status_code == 200
 
 
-def _bulk_index(es_url: str, index: str, docs: list[dict[str, Any]]) -> None:
+def _bulk_index(
+    es_url: str,
+    index: str,
+    docs: list[dict[str, Any]],
+    *,
+    id_field: str,
+) -> None:
     for start in range(0, len(docs), BULK_BATCH_SIZE):
         batch = docs[start : start + BULK_BATCH_SIZE]
         lines = []
         for doc in batch:
+            doc_id = doc.get(id_field)
+            if not doc_id:
+                raise ValueError(f"document is missing required id field: {id_field}")
             lines.append(
                 json.dumps(
-                    {"index": {"_index": index, "_id": doc["resume_id"]}},
+                    {"index": {"_index": index, "_id": str(doc_id)}},
                     ensure_ascii=False,
                 )
             )
@@ -803,6 +1095,25 @@ def _delete_missing_docs(es_url: str, target: str, live_ids: set[str]) -> None:
                 "bool": {
                     "must_not": {
                         "ids": {"values": sorted(live_ids)}
+                    }
+                }
+            }
+        },
+        ok_statuses={200},
+    )
+
+
+def _delete_missing_evidence_docs(es_url: str, target: str, live_resume_ids: set[str]) -> None:
+    if not live_resume_ids:
+        return
+    _request(
+        "POST",
+        f"{es_url}/{target}/_delete_by_query?refresh=true",
+        json_body={
+            "query": {
+                "bool": {
+                    "must_not": {
+                        "terms": {"resume_id": sorted(live_resume_ids)}
                     }
                 }
             }
@@ -855,6 +1166,8 @@ def main() -> int:
     parser.add_argument("--es-url", default=DEFAULT_ES_URL)
     parser.add_argument("--index", default=DEFAULT_INDEX)
     parser.add_argument("--alias", default=DEFAULT_ALIAS)
+    parser.add_argument("--evidence-index", default=DEFAULT_EVIDENCE_INDEX)
+    parser.add_argument("--evidence-alias", default=DEFAULT_EVIDENCE_ALIAS)
     parser.add_argument("--no-recreate", action="store_true")
     parser.add_argument(
         "--delete-missing",
@@ -868,6 +1181,8 @@ def main() -> int:
         es_url=args.es_url,
         index=args.index,
         alias=args.alias,
+        evidence_index=args.evidence_index,
+        evidence_alias=args.evidence_alias,
         recreate=not args.no_recreate,
         delete_missing=args.delete_missing,
     )

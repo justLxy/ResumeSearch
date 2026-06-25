@@ -14,9 +14,6 @@ from fastapi.testclient import TestClient
 import app as search_app
 
 
-DEFAULT_THRESHOLDS = (0.82, 0.835, 0.845, 0.855, 0.86, 0.875, 0.89)
-
-
 @dataclass(frozen=True)
 class EvalCase:
     case_id: str
@@ -43,53 +40,35 @@ class QueryResult:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Evaluate resume search quality while sweeping dense-only thresholds."
+        description="Evaluate resume search quality for the current retrieval configuration."
     )
     parser.add_argument("--qrels", default="eval_queries.jsonl", help="JSONL qrels file.")
     parser.add_argument("--limit", type=int, default=10, help="Search result window.")
     parser.add_argument(
-        "--thresholds",
-        default=",".join(str(item) for item in DEFAULT_THRESHOLDS),
-        help="Comma-separated DENSE_ONLY_MIN_SCORE values.",
-    )
-    parser.add_argument(
         "--details",
         action="store_true",
-        help="Print per-query result ids for each threshold.",
+        help="Print per-query result ids.",
     )
     parser.add_argument(
         "--type-summary",
         action="store_true",
-        help="Print metrics grouped by eval case type for the suggested threshold.",
+        help="Print metrics grouped by eval case type.",
     )
     args = parser.parse_args()
 
-    thresholds = _parse_thresholds(args.thresholds)
     cases = load_cases(Path(args.qrels))
     if not cases:
         raise SystemExit(f"No eval cases found in {args.qrels}")
 
     client = TestClient(search_app.app)
-    original_threshold = search_app.DENSE_ONLY_MIN_SCORE
-    try:
-        summaries: list[dict[str, Any]] = []
-        all_results: dict[float, list[QueryResult]] = {}
-        for threshold in thresholds:
-            search_app.DENSE_ONLY_MIN_SCORE = threshold
-            results = [evaluate_case(client, case, args.limit) for case in cases]
-            summary = summarize(threshold, results)
-            summaries.append(summary)
-            all_results[threshold] = results
+    results = [evaluate_case(client, case, args.limit) for case in cases]
+    summary = summarize(results)
 
-        print_summary_table(summaries)
-        best_threshold = print_best_threshold(summaries)
-        if args.type_summary:
-            print_type_summary(best_threshold, all_results[best_threshold])
-        if args.details:
-            for threshold in thresholds:
-                print_details(threshold, all_results[threshold])
-    finally:
-        search_app.DENSE_ONLY_MIN_SCORE = original_threshold
+    print_summary_table(summary)
+    if args.type_summary:
+        print_type_summary(results)
+    if args.details:
+        print_details(results)
 
 
 def load_cases(path: Path) -> list[EvalCase]:
@@ -199,11 +178,10 @@ def _hits_at(returned_ids: list[str], relevant_ids: set[str], k: int) -> int:
     return sum(1 for doc_id in returned_ids[:k] if doc_id in relevant_ids)
 
 
-def summarize(threshold: float, results: list[QueryResult]) -> dict[str, Any]:
+def summarize(results: list[QueryResult]) -> dict[str, Any]:
     judged = [result for result in results if result.case.relevant_ids]
     empty_cases = [result for result in results if result.empty_success is not None]
     return {
-        "threshold": threshold,
         "queries": len(results),
         "judged": len(judged),
         "p5": _mean_metric(judged, "precision_at_5"),
@@ -227,53 +205,32 @@ def _mean_metric(results: list[QueryResult], attr: str) -> float:
     return mean(float(getattr(result, attr)) for result in results)
 
 
-def print_summary_table(summaries: list[dict[str, Any]]) -> None:
-    print("\nDense-only threshold sweep")
+def print_summary_table(row: dict[str, Any]) -> None:
+    print("\nSearch quality summary")
     print(
-        "threshold  judged  P@5    P@10   R@5    R@10   MRR@10 NDCG@10 empty_acc forbidden@10"
+        "queries judged  P@5    P@10   R@5    R@10   MRR@10 NDCG@10 empty_acc forbidden@10"
     )
-    for row in summaries:
-        empty = "-" if row["empty_accuracy"] is None else f"{row['empty_accuracy']:.3f}"
-        print(
-            f"{row['threshold']:>9.3f}  "
-            f"{row['judged']:>6}  "
-            f"{row['p5']:.3f}  "
-            f"{row['p10']:.3f}  "
-            f"{row['r5']:.3f}  "
-            f"{row['r10']:.3f}  "
-            f"{row['mrr10']:.3f}  "
-            f"{row['ndcg10']:.3f}  "
-            f"{empty:>9}  "
-            f"{row['forbidden10']:>12}"
-        )
-
-
-def print_best_threshold(summaries: list[dict[str, Any]]) -> float:
-    def calibration_score(row: dict[str, Any]) -> tuple[float, float, float]:
-        empty_accuracy = row["empty_accuracy"] if row["empty_accuracy"] is not None else 1.0
-        return (
-            row["ndcg10"] + 0.10 * empty_accuracy - 0.005 * row["forbidden10"],
-            row["r10"],
-            -row["threshold"],
-        )
-
-    best = max(summaries, key=calibration_score)
+    empty = "-" if row["empty_accuracy"] is None else f"{row['empty_accuracy']:.3f}"
     print(
-        "\nSuggested threshold: "
-        f"{best['threshold']:.3f} "
-        f"(NDCG@10={best['ndcg10']:.3f}, R@10={best['r10']:.3f}, "
-        f"empty_acc={best['empty_accuracy'] if best['empty_accuracy'] is not None else '-'}, "
-        f"forbidden@10={best['forbidden10']})"
+        f"{row['queries']:>7} "
+        f"{row['judged']:>6}  "
+        f"{row['p5']:.3f}  "
+        f"{row['p10']:.3f}  "
+        f"{row['r5']:.3f}  "
+        f"{row['r10']:.3f}  "
+        f"{row['mrr10']:.3f}  "
+        f"{row['ndcg10']:.3f}  "
+        f"{empty:>9}  "
+        f"{row['forbidden10']:>12}"
     )
-    return float(best["threshold"])
 
 
-def print_type_summary(threshold: float, results: list[QueryResult]) -> None:
+def print_type_summary(results: list[QueryResult]) -> None:
     grouped: dict[str, list[QueryResult]] = {}
     for result in results:
         grouped.setdefault(result.case.case_type, []).append(result)
 
-    print(f"\nType summary for threshold={threshold:.3f}")
+    print("\nType summary")
     print("type                    queries judged P@5   R@10  NDCG@10 empty_acc forbidden@10")
     for case_type in sorted(grouped):
         rows = grouped[case_type]
@@ -296,8 +253,8 @@ def print_type_summary(threshold: float, results: list[QueryResult]) -> None:
         )
 
 
-def print_details(threshold: float, results: list[QueryResult]) -> None:
-    print(f"\nDetails for threshold={threshold:.3f}")
+def print_details(results: list[QueryResult]) -> None:
+    print("\nDetails")
     for result in results:
         relevant_hits = [doc_id for doc_id in result.returned_ids[:10] if doc_id in result.case.relevant_ids]
         forbidden_hits = [
@@ -308,13 +265,6 @@ def print_details(threshold: float, results: list[QueryResult]) -> None:
             f"NDCG@10={result.ndcg_at_10:.3f} R@10={result.recall_at_10:.3f} "
             f"hits={relevant_hits} forbidden={forbidden_hits} returned={result.returned_ids[:10]}"
         )
-
-
-def _parse_thresholds(value: str) -> list[float]:
-    thresholds = [float(item.strip()) for item in value.split(",") if item.strip()]
-    if not thresholds:
-        raise ValueError("At least one threshold is required")
-    return thresholds
 
 
 if __name__ == "__main__":

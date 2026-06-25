@@ -96,6 +96,12 @@ function renderFacets(facets) {
     renderChipGroup(els.skillFilters, facets.skills || [], state.skills, runSearch);
     els.skillFilters.dataset.ready = "1";
   }
+  if (facets.max_years != null) {
+    const maxYears = Math.floor(facets.max_years);
+    if (maxYears > 0 && els.yearsRange.max !== String(maxYears)) {
+      els.yearsRange.max = maxYears;
+    }
+  }
 }
 
 function renderChipGroup(root, items, selectedSet, onChange) {
@@ -152,6 +158,21 @@ const queryNameMap = {
   "project_name": "项目-名称",
   "project_description": "项目-描述",
   "project_responsibility": "项目-职责",
+  "evidence_title": "证据-标题",
+  "evidence_text": "证据-正文",
+  "evidence_candidate_no": "档案-候选人编号",
+  "evidence_position_code": "档案-岗位编号",
+  "evidence_candidate_name": "档案-姓名",
+  "evidence_candidate_phone": "档案-手机",
+  "evidence_candidate_email": "档案-邮箱",
+  "evidence_candidate_school": "档案-学校",
+  "evidence_candidate_major": "档案-专业",
+  "evidence_application_company": "档案-公司",
+  "evidence_highest_degree": "档案-学历",
+  "evidence_skills": "档案-技能",
+  "evidence_position_name": "证据-岗位",
+  "evidence_all_terms": "证据-全部词命中",
+  "evidence_partial_terms": "证据-部分词命中",
   "section_education": "简历正文-教育",
   "section_projects": "简历正文-项目",
   "section_internships": "简历正文-实习"
@@ -183,6 +204,18 @@ function formatMatchedQuery(q) {
     type = "[普通匹配]";
     typeClass = "term";
     key = key.replace("lexical_term:", "");
+  } else if (key.startsWith("evidence_exact:")) {
+    type = "[证据精确]";
+    typeClass = "exact";
+    key = `evidence_${key.replace("evidence_exact:", "")}`;
+  } else if (key.startsWith("evidence_phrase:")) {
+    type = "[证据短语]";
+    typeClass = "phrase";
+    key = `evidence_${key.replace("evidence_phrase:", "")}`;
+  } else if (key.startsWith("evidence_term:")) {
+    type = "[证据词面]";
+    typeClass = "term";
+    key = `evidence_${key.replace("evidence_term:", "")}`;
   }
   
   const fieldName = queryNameMap[key] || key;
@@ -191,10 +224,19 @@ function formatMatchedQuery(q) {
 }
 
 const denseFieldNameMap = {
+  evidence_vector: "证据向量",
   skills_vector: "技能向量",
   projects_vector: "项目向量",
   internships_vector: "实习向量",
   education_vector: "教育向量",
+};
+
+const evidenceSectionNameMap = {
+  profile: "候选人档案",
+  skills: "技能标签",
+  project: "项目经历",
+  internship: "实习经历",
+  education: "教育经历",
 };
 
 function isDenseSource(source) {
@@ -206,6 +248,19 @@ function denseFieldLabel(field, retriever) {
   const name = String(retriever || "").replace("dense:", "");
   if (name && name !== retriever) return `${name} 向量`;
   return "Dense 向量";
+}
+
+function evidenceSectionLabel(sectionType) {
+  return evidenceSectionNameMap[sectionType] || "证据片段";
+}
+
+function denseMatchLabel(match) {
+  if (match?.section_type) {
+    const section = evidenceSectionLabel(match.section_type);
+    const title = String(match.title || "").trim();
+    return title && title !== section ? `${section}｜${title}` : section;
+  }
+  return denseFieldLabel(match?.field, match?.retriever);
 }
 
 function formatScore(value, digits = 6) {
@@ -266,21 +321,27 @@ function renderResults() {
         
       const debug = item.retrieval_debug || {};
       const sources = debug.retrieval_sources || [];
-      const hasBm25 = sources.includes("bm25");
+      const hasEvidenceLexical = sources.includes("evidence") && debug.evidence_rank;
+      const hasLexical = hasEvidenceLexical;
       const hasDense = sources.some(isDenseSource);
       const rrfScore = debug.rrf_score ?? 0;
       const denseMatches = denseMatchesForDebug(debug);
       const denseOuterWeight = Number(debug.dense_outer_weight ?? 1);
       const denseGroupRank = debug.dense_group_rank ?? debug.dense_rank;
-      const bm25Weight = Number(debug.bm25_weight ?? 1.5);
       const bestDenseRouteRank = debug.dense_route_rank ?? denseMatches[0]?.rank ?? debug.dense_rank;
+      const bestDenseLabel = denseMatches[0] ? denseMatchLabel(denseMatches[0]) : denseFieldLabel(debug.dense_field, null);
 
-      const bm25Html = hasBm25 
-        ? `<div class="debug-item"><span class="debug-label" title="Elasticsearch BM25 原生打分&#10;计算公式: ∑ (词频TF × 逆文档频率IDF × 字段权重Boost)&#10;此分数为下方命中详情中所有匹配特征的得分总和" style="cursor: help; text-decoration: underline dotted var(--muted); text-underline-offset: 4px;">BM25 排名：</span> <span class="debug-value">${debug.bm25_rank} <span class="tier-desc">(分数: ${debug.bm25_score || 0})</span></span></div>` 
-        : `<div class="debug-item warning"><span class="debug-label">BM25 命中：</span> <span class="debug-value">否 (未召回)</span></div>`;
+      const lexicalStatusRows = [
+        hasEvidenceLexical
+          ? `<div class="debug-item"><span class="debug-label" title="证据索引中的 BM25 / phrase 词面召回&#10;先命中候选人档案、项目、实习、教育或技能证据片段，再按候选人聚合" style="cursor: help; text-decoration: underline dotted var(--muted); text-underline-offset: 4px;">词面证据排名：</span> <span class="debug-value">${debug.evidence_rank} <span class="tier-desc">(分数: ${formatScore(debug.evidence_score || 0, 4)})</span></span></div>`
+          : "",
+      ].filter(Boolean).join("");
+      const bm25Html = hasLexical
+        ? lexicalStatusRows
+        : `<div class="debug-item warning"><span class="debug-label">词面证据命中：</span> <span class="debug-value">否 (未召回)</span></div>`;
         
       const denseHtml = hasDense 
-        ? `<div class="debug-item"><span class="debug-label">Dense 排名：</span> <span class="debug-value">${denseGroupRank} <span class="tier-desc">(最佳 ${denseFieldLabel(debug.dense_field, denseMatches[0]?.retriever)} #${bestDenseRouteRank}，分数: ${debug.dense_score || 0})</span></span></div>` 
+        ? `<div class="debug-item"><span class="debug-label" title="先在 evidence_vector 中检索证据片段，再按 resume_id 在完整向量结果中聚合成候选人排名&#10;括号里的 # 是最佳证据片段在原始 kNN 结果里的名次">全局向量聚合排名：</span> <span class="debug-value">${denseGroupRank} <span class="tier-desc">(最佳证据 ${escapeHtml(bestDenseLabel)} 原始 #${bestDenseRouteRank}，分数: ${formatScore(debug.dense_score || 0, 4)})</span></span></div>`
         : `<div class="debug-item warning"><span class="debug-label">Dense 命中：</span> <span class="debug-value">否 (未召回)</span></div>`;
 
       const denseMatchesHtml = denseMatches.length
@@ -288,8 +349,11 @@ function renderResults() {
              <div class="dense-match-list">
                ${denseMatches.map((match) => `
                  <div class="dense-match-item">
-                   <span class="dense-match-name">${escapeHtml(denseFieldLabel(match.field, match.retriever))} #${escapeHtml(match.rank)}</span>
-                   <span>分数 ${escapeHtml(formatScore(match.score, 4))}</span>
+                   <div class="dense-match-main">
+                     <span class="dense-match-name">${escapeHtml(denseMatchLabel(match))} #${escapeHtml(match.rank)}</span>
+                     <span class="dense-match-score">分数 ${escapeHtml(formatScore(match.score, 4))}</span>
+                   </div>
+                   ${match.snippet ? `<div class="dense-match-snippet">${match.snippet}</div>` : ""}
                  </div>
                `).join("")}
              </div>
@@ -319,7 +383,14 @@ function renderResults() {
            </div>`
         : '';
 
-      const bm25Contrib = hasBm25 ? (bm25Weight / (60 + debug.bm25_rank)).toFixed(6) : "0";
+      const evidenceLexicalContrib = hasEvidenceLexical
+        ? (Number(debug.evidence_weight ?? 1.2) / (60 + Number(debug.evidence_rank))).toFixed(6)
+        : "0";
+      const lexicalFormulaRowsHtml = `
+        <div class="formula-row">
+          <span class="formula-label">词面证据贡献：</span>
+          <span class="formula-calc">${hasEvidenceLexical ? formatScore(debug.evidence_weight ?? 1.2, 2) + " / (60 + " + debug.evidence_rank + ")" : '0 (未命中)'} <span class="formula-eq">=</span> <span class="formula-val">${evidenceLexicalContrib}</span></span>
+        </div>`;
       const denseContrib = hasDense ? denseOuterContribution(debug).toFixed(6) : "0";
       const denseFormulaHtml = hasDense
         ? `<div class="formula-row">
@@ -350,10 +421,7 @@ function renderResults() {
             <div class="debug-group rrf-group">
               <div class="debug-title">RRF 融合分数计算过程</div>
               <div class="debug-formula-box">
-                <div class="formula-row">
-                  <span class="formula-label">BM25 贡献：</span>
-                  <span class="formula-calc">${hasBm25 ? formatScore(bm25Weight, 2) + " / (60 + " + debug.bm25_rank + ")" : '0 (未命中)'} <span class="formula-eq">=</span> <span class="formula-val">${bm25Contrib}</span></span>
-                </div>
+                ${lexicalFormulaRowsHtml}
                 ${denseFormulaHtml}
                 <div class="formula-divider"></div>
                 <div class="formula-row highlight-row">
@@ -477,10 +545,7 @@ function renderDetails(source) {
         ${detail("邮箱", candidate.email)}
         ${detail("当前城市", candidate.current_city)}
         ${detail("入学前户口所在城市", candidate.pre_college_residence_city)}
-        ${detail("最高学位", candidate.highest_degree)}
-        ${detail("毕业院校", candidate.school)}
-        ${detail("专业", candidate.major)}
-        ${detail("毕业时间", candidate.graduation_date)}
+
         ${detail("是否接受调剂", candidate.accept_transfer)}
         ${detail("可面试城市", candidate.interview_city)}
         ${detail("招聘信息来源", candidate.recruiting_source)}
@@ -501,35 +566,34 @@ function renderDetails(source) {
     ${timeline("教育经历", educations, (item) => ({
       title: [item.school, item.degree || item.education_level, item.major].filter(Boolean).join(" / "),
       meta: `${item.start_date_raw || item.start_date || ""} - ${item.end_date_raw || item.end_date || ""}`,
-      body: [
-        item.college ? "学院: " + item.college : "",
-        item.research_direction ? "研究方向: " + item.research_direction : "",
-        item.lab_name ? "实验室: " + item.lab_name : "",
-        item.advisor_name ? "导师: " + item.advisor_name : "",
-        item.advisor_contact ? "导师联系方式: " + item.advisor_contact : "",
-        item.courses ? "主修课程: " + item.courses : "",
-        item.paper_level ? "论文发表等级: " + item.paper_level : "",
-        item.github ? "GitHub: " + item.github : "",
-      ].filter(Boolean).join(" · "),
+      attrs: [
+        item.college ? ["学院", item.college] : null,
+        item.research_direction ? ["研究方向", item.research_direction] : null,
+        item.lab_name ? ["实验室", item.lab_name] : null,
+        item.advisor_name ? ["导师", item.advisor_name] : null,
+        item.advisor_contact ? ["导师联系方式", item.advisor_contact] : null,
+        item.paper_level ? ["论文发表等级", item.paper_level] : null,
+      ].filter(Boolean),
+      desc: item.courses ? "主修课程: " + item.courses : "",
     }))}
     ${timeline("实习经历", internships, (item) => ({
       title: [item.company, item.title].filter(Boolean).join(" / "),
       meta: `${item.start_date_raw || item.start_date || ""} - ${item.end_date_raw || item.end_date || ""}`,
-      body: [
-        item.department ? "部门: " + item.department : "",
-        item.work_type ? "工作性质: " + item.work_type : "",
-        item.company_type ? "企业性质: " + item.company_type : "",
-        item.company_size ? "企业规模: " + item.company_size : "",
-        item.description,
-      ].filter(Boolean).join(" · "),
+      attrs: [
+        item.department ? ["部门", item.department] : null,
+        item.work_type ? ["工作性质", item.work_type] : null,
+        item.company_type ? ["企业性质", item.company_type] : null,
+        item.company_size ? ["企业规模", item.company_size] : null,
+      ].filter(Boolean),
+      desc: item.description || "",
     }))}
     ${timeline("项目经验", projects, (item) => ({
       title: item.name,
       meta: `${item.start_date_raw || item.start_date || ""} - ${item.end_date_raw || item.end_date || ""}`,
-      body: [
-        item.description,
-        item.responsibility ? "项目职责: " + item.responsibility : "",
-      ].filter(Boolean).join(" "),
+      attrs: [
+        item.project_type ? ["项目类型", item.project_type] : null,
+      ].filter(Boolean),
+      desc: [item.description, item.responsibility ? "项目职责: " + item.responsibility : ""].filter(Boolean).join("\n"),
     }))}
     ${timeline("奖项与活动", awards, (item) => ({
       title: item.name || "未命名奖项",
@@ -538,13 +602,22 @@ function renderDetails(source) {
     }))}
     <section class="detail-section">
       <h3>IT 技能</h3>
-      ${itSkillItems.length ? itSkillItems.map((item) => `
-        <div class="timeline-item">
-          <div class="timeline-title">${escapeHtml(item.skill_name || "未命名技能")}</div>
-          <div class="timeline-meta">${escapeHtml([item.duration, item.proficiency].filter(Boolean).join(" · "))}</div>
-          <div class="timeline-body">${escapeHtml([item.primary_languages ? "主要语言: " + item.primary_languages : "", item.other_languages ? "其它语言: " + item.other_languages : ""].filter(Boolean).join(" · ") || "暂无描述")}</div>
-        </div>
-      `).join("") : `<div class="timeline-item"><div class="timeline-body">暂无记录</div></div>`}
+      ${(() => {
+        if (!itSkillItems.length) return '<div class="timeline-body">暂无记录</div>';
+        const first = itSkillItems[0] || {};
+        const langParts = [
+          first.primary_languages ? "主要语言: " + first.primary_languages : "",
+          first.other_languages ? "其它语言: " + first.other_languages : "",
+        ].filter(Boolean);
+        const langHtml = langParts.length
+          ? `<div class="it-skill-langs">${escapeHtml(langParts.join(" · "))}</div>`
+          : "";
+        const skillsHtml = `<div class="it-skill-grid">${itSkillItems.map((item) => {
+          const meta = [item.duration, item.proficiency].filter(Boolean).join(" · ");
+          return `<span class="it-skill-chip"><span class="it-skill-name">${escapeHtml(item.skill_name || "未命名")}</span>${meta ? `<span class="it-skill-meta">${escapeHtml(meta)}</span>` : ""}</span>`;
+        }).join("")}</div>`;
+        return langHtml + skillsHtml;
+      })()}
     </section>
     <section class="detail-section">
       <h3>语言能力</h3>
@@ -563,23 +636,7 @@ function renderDetails(source) {
         ${detail("可实习周期", offerInternship.internship_period)}
       </div>
     </section>
-    <section class="detail-section">
-      <h3>上传简历</h3>
-      <div class="detail-grid">
-        ${detail("中文简历", uploadedResume.chinese_resume)}
-      </div>
-    </section>
-    ${skills.length ? `
-    <section class="detail-section">
-      <h3>技能标签</h3>
-      <div class="detail-grid">
-        <div class="detail-item" style="grid-column: 1 / -1;">
-          <div class="detail-label">技能列表</div>
-          <div class="detail-value">${escapeHtml(skills.join("、"))}</div>
-        </div>
-      </div>
-    </section>
-    ` : ""}
+
   `;
 }
 
@@ -597,11 +654,24 @@ function timeline(title, items, mapper) {
     ? items
         .map((item) => {
           const row = mapper(item);
+          const attrsHtml = (row.attrs || []).length
+            ? `<div class="timeline-attrs">${row.attrs.map(([label, value]) =>
+                `<span class="timeline-attr"><span class="timeline-attr-label">${escapeHtml(label)}</span>${escapeHtml(value)}</span>`
+              ).join("")}</div>`
+            : "";
+          const descHtml = row.desc
+            ? `<div class="timeline-body">${escapeHtml(row.desc)}</div>`
+            : "";
+          // Fallback: support legacy plain-string body
+          const legacyBodyHtml = (!row.attrs && !row.desc && row.body)
+            ? `<div class="timeline-body">${escapeHtml(row.body)}</div>`
+            : "";
+          const hasContent = attrsHtml || descHtml || legacyBodyHtml;
           return `
             <div class="timeline-item">
               <div class="timeline-title">${escapeHtml(row.title || "未命名")}</div>
               <div class="timeline-meta">${escapeHtml(row.meta || "")}</div>
-              <div class="timeline-body">${escapeHtml(row.body || "暂无描述")}</div>
+              ${hasContent ? (attrsHtml + descHtml + legacyBodyHtml) : '<div class="timeline-body">暂无描述</div>'}
             </div>
           `;
         })

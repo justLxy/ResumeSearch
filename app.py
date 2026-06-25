@@ -18,6 +18,7 @@ from embedding_service import encode_single
 
 ES_URL = "http://localhost:9200"
 INDEX_ALIAS = "resumes_current"
+EVIDENCE_INDEX_ALIAS = "resume_evidence_current"
 BASE_DIR = Path(__file__).resolve().parent
 WEB_DIR = BASE_DIR / "web"
 logger = logging.getLogger(__name__)
@@ -32,81 +33,36 @@ SKILL_FACET_AGG_SIZE = 200
 SKILL_FACET_DISPLAY_SIZE = 30
 BM25_RETRIEVER = "bm25"
 DENSE_RETRIEVER = "dense"
-BM25_RRF_WEIGHT = 1.5
+EVIDENCE_RETRIEVER = "evidence"
+EVIDENCE_DENSE_RETRIEVER = "evidence_dense"
 DENSE_RRF_WEIGHT = 1.0
+EVIDENCE_RRF_WEIGHT = 1.2
+EVIDENCE_DENSE_RRF_WEIGHT = 1.0
 DENSE_RANK_WINDOW_SIZE = 300
-DENSE_ONLY_MIN_SCORE = 0.860
-DENSE_ONLY_SCORE_BAND = 0.02
-DENSE_ONLY_MAX_RESULTS = 8
 QUERY_TERM_COVERAGE_BOOST = 0.001
 MAX_QUERY_COVERAGE_TERMS = 8
 COVERAGE_QUERY_PREFIX = "query_term:"
 LEXICAL_EXACT_QUERY_PREFIX = "lexical_exact:"
 LEXICAL_PHRASE_QUERY_PREFIX = "lexical_phrase:"
-VECTOR_FIELDS = (
+EVIDENCE_EXACT_QUERY_PREFIX = "evidence_exact:"
+EVIDENCE_PHRASE_QUERY_PREFIX = "evidence_phrase:"
+EVIDENCE_TERM_QUERY_PREFIX = "evidence_term:"
+LEGACY_CANDIDATE_VECTOR_FIELDS = (
     "skills_vector",
     "projects_vector",
     "internships_vector",
     "education_vector",
 )
-DENSE_ROUTE_MAX_FIELDS = 4
-DENSE_ROUTE_BASE_PRIORITIES = {
-    "skills_vector": 0.80,
-    "projects_vector": 0.85,
-    "internships_vector": 0.75,
-    "education_vector": 0.55,
-}
-PROJECT_INTENT_TERMS = (
-    "项目",
-    "系统",
-    "平台",
-    "知识库",
-    "召回",
-    "排序",
-    "模型",
-    "落地",
-    "服务化",
-    "可视化",
-    "看板",
-    "漏洞复现",
-    "数据仓库",
-    "问答",
-    "推荐",
-)
-WORK_INTENT_TERMS = (
-    "实习",
-    "工作",
-    "经验",
-    "负责",
-    "参与",
-    "上线",
-    "优化",
-    "治理",
-    "运维",
-    "测试",
-    "应急响应",
-    "告警",
-    "接口",
-    "缓存",
-)
-EDUCATION_INTENT_TERMS = (
-    "专业",
-    "研究方向",
-    "实验室",
-    "计算机科学",
-    "人工智能",
-    "自然语言处理",
-    "图像识别",
-    "数据挖掘",
-)
+EVIDENCE_VECTOR_FIELD = "evidence_vector"
 SOURCE_EXCLUDES = [
     "raw_text",
     "raw_sections",
     "skills_text",
     "semantic_profile_vector",
     "role_vector",
-    *VECTOR_FIELDS,
+    *LEGACY_CANDIDATE_VECTOR_FIELDS,
 ]
+EVIDENCE_SOURCE_EXCLUDES = [EVIDENCE_VECTOR_FIELD]
 EXACT_LOOKUP_RE = re.compile(
     r"^(?:[A-Za-z]\d{3,}|M\d{6,}|\d{6,}|1[3-9]\d{9}|[^@\s]+@[^@\s]+\.[^@\s]+)$",
     re.I,
@@ -177,15 +133,12 @@ def search(
     retrieval_warnings: list[str] = []
 
     if query_text:
-        # Hybrid: BM25 + routed profile kNN merged with manual RRF.
+        # Evidence-first retrieval: search evidence chunks, then aggregate back to resumes.
         use_dense = _use_dense(query_text)
         query_vector: list[float] = []
-        dense_routes: list[dict[str, Any]] = []
         if use_dense:
             try:
                 query_vector = encode_single(query_text)
-                route_skill_vocab = skill_vocab if skill_vocab is not None else _load_filter_vocab()["skills"]
-                dense_routes = _infer_dense_routes(query_text, route_skill_vocab)
             except Exception as exc:
                 logger.exception("query embedding failed")
                 retrieval_warnings.append(f"dense embedding failed: {exc}")
@@ -196,13 +149,12 @@ def search(
             query_vector,
             filters,
             rank_window_size,
-            dense_routes if use_dense else [],
+            use_dense=use_dense,
         )
         retrieval_warnings.extend(retriever_warnings)
         matched_total = _lexical_total(responses)
-        allow_dense_only = use_dense and _allow_dense_only(query_text)
-        candidate_total = _hybrid_total(responses, allow_dense_only)
-        results = _rrf_merge(responses, size, allow_dense_only, query_text=query_text)
+        candidate_total = _hybrid_total(responses)
+        results = _rrf_merge(responses, size, query_text=query_text)
     elif filters:
         browse_size = MAX_BROWSE_RESULT_SIZE
         body = _bm25_body(query_text, filters, browse_size)
@@ -522,6 +474,111 @@ def _bm25_body(query_text: str, filters: list[dict[str, Any]], size: int) -> dic
         },
     }
     return body
+
+
+def _evidence_body(query_text: str, filters: list[dict[str, Any]], size: int) -> dict[str, Any]:
+    return {
+        "size": size,
+        "query": {
+            "bool": {
+                "must": [_evidence_lexical_query(query_text)],
+                "filter": filters,
+            }
+        },
+        "highlight": {
+            "pre_tags": ["<mark>"],
+            "post_tags": ["</mark>"],
+            "fields": {
+                "title": {"fragment_size": 80, "number_of_fragments": 1},
+                "text": {"fragment_size": 80, "number_of_fragments": 1},
+                "skills_text": {"fragment_size": 80, "number_of_fragments": 1},
+                "candidate.name": {"fragment_size": 80, "number_of_fragments": 1},
+                "candidate.school": {"fragment_size": 80, "number_of_fragments": 1},
+                "candidate.major": {"fragment_size": 80, "number_of_fragments": 1},
+                "application.position_name": {"fragment_size": 120, "number_of_fragments": 1},
+            },
+        },
+        "_source": {"excludes": EVIDENCE_SOURCE_EXCLUDES},
+    }
+
+
+def _evidence_lexical_query(query_text: str) -> dict[str, Any]:
+    normalized_degree = _normalize_highest_degree(query_text)
+    scoring_query = {
+        "dis_max": {
+            "tie_breaker": 0.0,
+            "queries": [
+                _term_query("application.candidate_no", query_text.upper(), 60, "evidence_exact:candidate_no"),
+                _term_query("application.position_code", query_text.upper(), 55, "evidence_exact:position_code"),
+                _term_query("candidate.name.keyword", query_text, 45, "evidence_exact:candidate_name"),
+                _term_query("candidate.phone", query_text, 45, "evidence_exact:candidate_phone"),
+                _term_query("candidate.email", query_text, 45, "evidence_exact:candidate_email"),
+                _term_query("skills", query_text, 40, "evidence_exact:skills"),
+                _term_query("candidate.school.keyword", query_text, 36, "evidence_exact:candidate_school"),
+                _term_query("candidate.major.keyword", query_text, 34, "evidence_exact:candidate_major"),
+                _term_query("application.company", query_text, 30, "evidence_exact:application_company"),
+                _term_query("application.position_name.keyword", query_text, 30, "evidence_exact:position_name"),
+                _term_query("candidate.highest_degree", normalized_degree, 15, "evidence_exact:highest_degree"),
+                _term_query("title.keyword", query_text, 18, "evidence_exact:title"),
+                _match_phrase_query("candidate.major.phrase", query_text, 24, "evidence_phrase:candidate_major"),
+                _match_phrase_query("candidate.school.phrase", query_text, 18, "evidence_phrase:candidate_school"),
+                _match_phrase_query(
+                    "application.position_name.phrase",
+                    query_text,
+                    18,
+                    "evidence_phrase:position_name",
+                ),
+                _match_phrase_query("title.phrase", query_text, 12, "evidence_phrase:title"),
+                _match_phrase_query("text.phrase", query_text, 10, "evidence_phrase:text"),
+                {
+                    "multi_match": {
+                        "_name": "evidence_term:all_terms:W4",
+                        "query": query_text,
+                        "fields": [
+                            "candidate.name^4",
+                            "candidate.school^3",
+                            "candidate.major^4",
+                            "application.position_name^4",
+                            "title^5",
+                            "text^4",
+                            "skills_text^5",
+                        ],
+                        "type": "best_fields",
+                        "operator": "and",
+                        "boost": 4,
+                    }
+                },
+                {
+                    "multi_match": {
+                        "_name": "evidence_term:partial_terms:W1",
+                        "query": query_text,
+                        "fields": [
+                            "candidate.name^4",
+                            "candidate.school^3",
+                            "candidate.major^4",
+                            "application.position_name^4",
+                            "title^5",
+                            "text^4",
+                            "skills_text^5",
+                        ],
+                        "type": "best_fields",
+                        "operator": "or",
+                        "minimum_should_match": "2<70%",
+                        "boost": 1,
+                    }
+                },
+            ],
+        }
+    }
+    coverage_should = _evidence_term_coverage_queries(query_text)
+    if not coverage_should:
+        return scoring_query
+    return {
+        "bool": {
+            "must": [scoring_query],
+            "should": coverage_should,
+        }
+    }
 
 
 def _lexical_query(query_text: str) -> dict[str, Any]:
@@ -886,6 +943,58 @@ def _term_coverage_queries(query_text: str) -> list[dict[str, Any]]:
     ]
 
 
+def _evidence_term_coverage_queries(query_text: str) -> list[dict[str, Any]]:
+    tokens = _coverage_tokens(query_text)
+    if len(tokens) < 2:
+        return []
+    return [
+        {
+            "constant_score": {
+                "_name": f"{COVERAGE_QUERY_PREFIX}{index}",
+                "filter": _evidence_term_coverage_filter(token),
+                "boost": QUERY_TERM_COVERAGE_BOOST,
+            }
+        }
+        for index, token in enumerate(tokens)
+    ]
+
+
+def _evidence_term_coverage_filter(token: str) -> dict[str, Any]:
+    return {
+        "bool": {
+            "should": [
+                {"term": {"application.candidate_no": token.upper()}},
+                {"term": {"application.position_code": token.upper()}},
+                {"term": {"candidate.name.keyword": token}},
+                {"term": {"candidate.phone": token}},
+                {"term": {"candidate.email": token}},
+                {"term": {"candidate.school.keyword": token}},
+                {"term": {"candidate.major.keyword": token}},
+                {"term": {"application.company": token}},
+                {"term": {"application.position_name.keyword": token}},
+                {"term": {"skills": token}},
+                {"term": {"candidate.highest_degree": _normalize_highest_degree(token)}},
+                {
+                    "multi_match": {
+                        "query": token,
+                        "fields": [
+                            "candidate.name",
+                            "candidate.school",
+                            "candidate.major",
+                            "application.position_name",
+                            "title",
+                            "text",
+                            "skills_text",
+                        ],
+                        "type": "best_fields",
+                    }
+                },
+            ],
+            "minimum_should_match": 1,
+        }
+    }
+
+
 def _term_coverage_filter(token: str) -> dict[str, Any]:
     return {
         "bool": {
@@ -1006,82 +1115,11 @@ def _term_coverage_filter(token: str) -> dict[str, Any]:
     }
 
 
-def _infer_dense_routes(
-    query_text: str,
-    skill_vocab: set[str] | None = None,
-) -> list[dict[str, Any]]:
-    tokens = _query_tokens(query_text)
-    skill_mentions = _known_skill_mentions(query_text, tokens, skill_vocab)
-    priorities = dict(DENSE_ROUTE_BASE_PRIORITIES)
-
-    if skill_mentions:
-        priorities["skills_vector"] += min(0.60, 0.20 * len(skill_mentions))
-        priorities["projects_vector"] += 0.15
-        priorities["internships_vector"] += 0.10
-
-    if _contains_any(query_text, PROJECT_INTENT_TERMS):
-        priorities["projects_vector"] += 0.50
-        priorities["skills_vector"] += 0.15
-        priorities["internships_vector"] += 0.10
-
-    if _contains_any(query_text, WORK_INTENT_TERMS):
-        priorities["internships_vector"] += 0.45
-        priorities["projects_vector"] += 0.25
-        priorities["skills_vector"] += 0.10
-
-    if _contains_any(query_text, EDUCATION_INTENT_TERMS):
-        priorities["education_vector"] += 0.45
-
-    selected = sorted(
-        ((field, priority) for field, priority in priorities.items() if field in VECTOR_FIELDS),
-        key=lambda item: (-item[1], item[0]),
-    )[:DENSE_ROUTE_MAX_FIELDS]
-
-    return [
-        {
-            "field": field,
-            "retriever_name": _dense_retriever_name(field),
-            "weight": DENSE_RRF_WEIGHT,
-            "priority": round(priority, 3),
-        }
-        for field, priority in selected
-    ]
-
-
-def _known_skill_mentions(
-    query_text: str,
-    tokens: list[str],
-    skill_vocab: set[str] | None,
-) -> set[str]:
-    token_keys = {_casefold_key(token) for token in tokens}
-    mentions: set[str] = set()
-    for skill in skill_vocab or set():
-        cleaned = str(skill).strip()
-        if not cleaned:
-            continue
-        key = _casefold_key(cleaned)
-        if key in token_keys:
-            mentions.add(cleaned)
-        elif len(cleaned) >= 2 and cleaned in query_text:
-            mentions.add(cleaned)
-    return mentions
-
-
-def _contains_any(text: str, terms: tuple[str, ...]) -> bool:
-    return any(term in text for term in terms)
-
-
-def _dense_retriever_name(field: str) -> str:
-    label = field.removesuffix("_vector")
-    return f"{DENSE_RETRIEVER}:{label}"
-
-
 def _is_dense_retriever(name: Any) -> bool:
-    return name == DENSE_RETRIEVER or str(name).startswith(f"{DENSE_RETRIEVER}:")
+    return name == EVIDENCE_DENSE_RETRIEVER
 
 
-def _knn_body(
-    field: str,
+def _evidence_knn_body(
     query_vector: list[float],
     filters: list[dict[str, Any]],
     size: int,
@@ -1089,14 +1127,12 @@ def _knn_body(
     body: dict[str, Any] = {
         "size": size,
         "knn": {
-            "field": field,
+            "field": EVIDENCE_VECTOR_FIELD,
             "query_vector": query_vector,
             "k": size,
             "num_candidates": max(size, min(KNN_NUM_CANDIDATES, max(size * 3, 50))),
         },
-        "_source": {
-            "excludes": SOURCE_EXCLUDES,
-        },
+        "_source": {"excludes": EVIDENCE_SOURCE_EXCLUDES},
     }
     if filters:
         body["knn"]["filter"] = {"bool": {"filter": filters}}
@@ -1108,24 +1144,25 @@ def _run_hybrid_search(
     query_vector: list[float],
     filters: list[dict[str, Any]],
     rank_window_size: int,
-    dense_routes: list[dict[str, Any]] | None = None,
+    *,
+    use_dense: bool,
 ) -> tuple[list[dict[str, Any]], list[str]]:
     requests_to_run = [
         (
-            BM25_RETRIEVER,
-            BM25_RRF_WEIGHT,
-            _bm25_body(query_text, filters, rank_window_size),
+            EVIDENCE_RETRIEVER,
+            EVIDENCE_RRF_WEIGHT,
+            _evidence_body(query_text, filters, rank_window_size),
             None,
         ),
     ]
     dense_size = min(rank_window_size, DENSE_RANK_WINDOW_SIZE)
-    for route in dense_routes or []:
+    if use_dense and query_vector:
         requests_to_run.append(
             (
-                route["retriever_name"],
-                route["weight"],
-                _knn_body(route["field"], query_vector, filters, dense_size),
-                route["field"],
+                EVIDENCE_DENSE_RETRIEVER,
+                EVIDENCE_DENSE_RRF_WEIGHT,
+                _evidence_knn_body(query_vector, filters, dense_size),
+                EVIDENCE_VECTOR_FIELD,
             )
         )
 
@@ -1133,7 +1170,12 @@ def _run_hybrid_search(
     warnings: list[str] = []
     with ThreadPoolExecutor(max_workers=len(requests_to_run)) as executor:
         futures = {
-            executor.submit(_es, "POST", f"/{INDEX_ALIAS}/_search", body): (name, weight, field)
+            executor.submit(
+                _es,
+                "POST",
+                f"/{_retriever_index_alias(name)}/_search",
+                body,
+            ): (name, weight, field)
             for name, weight, body, field in requests_to_run
         }
         for future in as_completed(futures):
@@ -1153,36 +1195,68 @@ def _run_hybrid_search(
             responses.append(response)
     return responses, warnings
 
+
+def _retriever_index_alias(retriever_name: str) -> str:
+    if retriever_name in {EVIDENCE_RETRIEVER, EVIDENCE_DENSE_RETRIEVER}:
+        return EVIDENCE_INDEX_ALIAS
+    return INDEX_ALIAS
+
 # ---------------------------------------------------------------------------
 # manual RRF merge  (ES Basic license does not include built-in RRF)
 # ---------------------------------------------------------------------------
 
+def _is_evidence_retriever(name: Any) -> bool:
+    return name in {EVIDENCE_RETRIEVER, EVIDENCE_DENSE_RETRIEVER}
+
+
+def _hit_resume_id(hit: dict[str, Any], response: dict[str, Any] | None = None) -> str:
+    retriever_name = response.get("_retriever_name") if response else None
+    if _is_evidence_retriever(retriever_name):
+        source = hit.get("_source") or {}
+        return str(source.get("resume_id") or hit.get("_id"))
+    return str(hit.get("_id"))
+
+
+def _is_evidence_hit(hit: dict[str, Any] | None) -> bool:
+    if not hit:
+        return False
+    source = hit.get("_source") or {}
+    return bool(source.get("evidence_id") or source.get("section_type"))
+
+
 def _hybrid_total(
     responses: list[dict[str, Any]],
-    allow_dense_only: bool = True,
 ) -> int:
     ids: set[str] = set()
-    lexical_ids = _lexical_doc_ids(responses)
     for response in responses:
-        for _rank, hit, _debug in _accepted_hits(response, lexical_ids, allow_dense_only):
-            ids.add(hit["_id"])
+        for _rank, hit, _debug in _accepted_hits(response):
+            ids.add(_hit_resume_id(hit, response))
     return len(ids)
 
 
 def _lexical_total(responses: list[dict[str, Any]]) -> int:
-    for response in responses:
-        if response.get("_retriever_name") != BM25_RETRIEVER:
-            continue
+    lexical_responses = [
+        response
+        for response in responses
+        if response.get("_retriever_name") in {EVIDENCE_RETRIEVER, BM25_RETRIEVER}
+    ]
+    if not lexical_responses:
+        return 0
+    if len(lexical_responses) == 1 and lexical_responses[0].get("_retriever_name") == BM25_RETRIEVER:
+        response = lexical_responses[0]
         total = response.get("hits", {}).get("total", {})
         if isinstance(total, dict):
             return int(total.get("value") or 0)
         return int(total or 0)
-    return 0
+    ids: set[str] = set()
+    for response in lexical_responses:
+        for hit in response.get("hits", {}).get("hits", []):
+            ids.add(_hit_resume_id(hit, response))
+    return len(ids)
 
 def _rrf_merge(
     responses: list[dict[str, Any]],
     limit: int,
-    allow_dense_only: bool = True,
     query_text: str = "",
 ) -> list[dict[str, Any]]:
     rrf_scores: dict[str, float] = {}
@@ -1194,15 +1268,45 @@ def _rrf_merge(
     term_coverage: dict[str, int] = {}
     lexical_tier: dict[str, int] = {}
     retrieval_debug: dict[str, dict[str, Any]] = {}
-    lexical_ids = _lexical_doc_ids(responses)
     coverage_enabled = len(_coverage_tokens(query_text)) >= 2
+    all_dense_inner_scores: dict[str, float] = {}
+    all_dense_best_route_rank: dict[str, int] = {}
+
+    for response in responses:
+        if not _is_dense_retriever(response.get("_retriever_name")):
+            continue
+        weight = float(response.get("_rrf_weight", 1.0))
+        for rank, hit in enumerate(response.get("hits", {}).get("hits", []), start=1):
+            doc_id = _hit_resume_id(hit, response)
+            route_contribution = weight / (RRF_RANK_CONSTANT + rank)
+            all_dense_inner_scores[doc_id] = (
+                all_dense_inner_scores.get(doc_id, 0) + route_contribution
+            )
+            all_dense_best_route_rank[doc_id] = min(
+                all_dense_best_route_rank.get(doc_id, rank),
+                rank,
+            )
+
+    all_dense_group_ids = sorted(
+        all_dense_inner_scores.keys(),
+        key=lambda doc_id: (
+            -all_dense_inner_scores[doc_id],
+            all_dense_best_route_rank.get(doc_id, 10**9),
+            doc_id,
+        ),
+    )
+    all_dense_group_rank = {
+        doc_id: rank
+        for rank, doc_id in enumerate(all_dense_group_ids, start=1)
+    }
 
     for response in responses:
         retriever_name = response.get("_retriever_name")
         weight = float(response.get("_rrf_weight", 1.0))
         is_dense = _is_dense_retriever(retriever_name)
-        for rank, hit, dense_debug in _accepted_hits(response, lexical_ids, allow_dense_only):
-            doc_id = hit["_id"]
+        is_evidence = _is_evidence_retriever(retriever_name)
+        for rank, hit, dense_debug in _accepted_hits(response):
+            doc_id = _hit_resume_id(hit, response)
             route_contribution = weight / (RRF_RANK_CONSTANT + rank)
             if is_dense:
                 dense_inner_scores[doc_id] = dense_inner_scores.get(doc_id, 0) + route_contribution
@@ -1210,7 +1314,7 @@ def _rrf_merge(
             else:
                 rrf_scores[doc_id] = rrf_scores.get(doc_id, 0) + route_contribution
                 best_rank[doc_id] = min(best_rank.get(doc_id, rank), rank)
-            if coverage_enabled and retriever_name == BM25_RETRIEVER:
+            if coverage_enabled and retriever_name in {BM25_RETRIEVER, EVIDENCE_RETRIEVER}:
                 term_coverage[doc_id] = max(
                     term_coverage.get(doc_id, 0),
                     _matched_term_coverage(hit),
@@ -1221,7 +1325,9 @@ def _rrf_merge(
                     lexical_tier.get(doc_id, 0),
                     _matched_lexical_tier(hit),
                 )
-            if doc_id not in hit_map or hit.get("highlight"):
+            if is_evidence:
+                hit_map.setdefault(doc_id, hit)
+            elif doc_id not in hit_map or hit.get("highlight") or _is_evidence_hit(hit_map.get(doc_id)):
                 hit_map[doc_id] = hit
             debug = retrieval_debug.setdefault(
                 doc_id,
@@ -1238,31 +1344,47 @@ def _rrf_merge(
                 debug["bm25_score"] = round(float(hit.get("_score") or 0), 4)
                 debug["bm25_weight"] = round(weight, 3)
                 debug["matched_queries"] = hit.get("matched_queries") or []
-            elif is_dense:
-                debug.setdefault("dense_matches", []).append(
-                    {
-                        "retriever": retriever_name,
-                        "field": dense_debug.get("dense_field"),
-                        "rank": rank,
-                        "score": dense_debug.get("dense_score"),
-                        "weight": dense_debug.get("dense_weight"),
-                        "contribution": round(route_contribution, 6),
-                    }
-                )
-                debug["dense_only_threshold"] = dense_debug.get("dense_only_threshold")
-                debug["dense_only_accepted"] = bool(debug.get("dense_only_accepted")) or bool(
-                    dense_debug.get("dense_only_accepted")
-                )
+            if is_evidence:
+                if not is_dense:
+                    if EVIDENCE_RETRIEVER not in debug["retrieval_sources"]:
+                        debug["retrieval_sources"].append(EVIDENCE_RETRIEVER)
+                    debug["evidence_weight"] = round(weight, 3)
+                    debug["matched_queries"] = hit.get("matched_queries") or []
+                    lexical_tier[doc_id] = max(
+                        lexical_tier.get(doc_id, 0),
+                        _matched_lexical_tier(hit),
+                    )
+                    debug["evidence_rank"] = min(debug.get("evidence_rank") or rank, rank)
+                    debug["evidence_score"] = max(
+                        float(debug.get("evidence_score") or 0),
+                        float(hit.get("_score") or 0),
+                    )
+                    matches = debug.setdefault("evidence_matches", [])
+                    if len(matches) < 3:
+                        matches.append(_evidence_match_debug(hit, retriever_name, rank))
+            if is_dense:
+                dense_match = {
+                    "retriever": retriever_name,
+                    "field": dense_debug.get("dense_field"),
+                    "rank": rank,
+                    "score": dense_debug.get("dense_score"),
+                    "weight": dense_debug.get("dense_weight"),
+                    "contribution": round(route_contribution, 6),
+                }
+                if is_evidence:
+                    dense_match.update(_evidence_match_debug(hit, retriever_name, rank))
+                debug.setdefault("dense_matches", []).append(dense_match)
 
     dense_group_ids = sorted(
         dense_inner_scores.keys(),
         key=lambda doc_id: (
-            -dense_inner_scores[doc_id],
+            all_dense_group_rank.get(doc_id, 10**9),
             dense_best_route_rank.get(doc_id, 10**9),
             doc_id,
         ),
     )
-    for dense_rank, doc_id in enumerate(dense_group_ids, start=1):
+    for doc_id in dense_group_ids:
+        dense_rank = all_dense_group_rank.get(doc_id, dense_best_route_rank.get(doc_id, 10**9))
         dense_contribution = DENSE_RRF_WEIGHT / (RRF_RANK_CONSTANT + dense_rank)
         rrf_scores[doc_id] = rrf_scores.get(doc_id, 0) + dense_contribution
         best_rank[doc_id] = min(best_rank.get(doc_id, dense_rank), dense_rank)
@@ -1286,7 +1408,7 @@ def _rrf_merge(
         ) if dense_matches else {}
         debug["dense_rank"] = dense_rank
         debug["dense_group_rank"] = dense_rank
-        debug["dense_inner_score"] = round(dense_inner_scores[doc_id], 6)
+        debug["dense_inner_score"] = round(all_dense_inner_scores.get(doc_id, dense_inner_scores[doc_id]), 6)
         debug["dense_outer_weight"] = round(DENSE_RRF_WEIGHT, 3)
         debug["dense_rrf_contribution"] = round(dense_contribution, 6)
         debug["dense_route_rank"] = best_dense_match.get("rank")
@@ -1311,10 +1433,11 @@ def _rrf_merge(
             k,
         ),
     )[:limit]
+    fetched_resume_hits = _fetch_resume_hits_for_evidence(sorted_ids, hit_map)
 
     results = []
     for doc_id in sorted_ids:
-        hit = dict(hit_map[doc_id])
+        hit = dict(fetched_resume_hits.get(doc_id) or hit_map[doc_id])
         hit["_retrieval_debug"] = {
             **retrieval_debug.get(doc_id, {}),
             "raw_rrf_score": round(rrf_scores[doc_id], 6),
@@ -1326,6 +1449,100 @@ def _rrf_merge(
             hit["_retrieval_debug"]["term_coverage"] = term_coverage.get(doc_id, 0)
         results.append(_format_hit(hit, final_scores[doc_id]))
     return results
+
+
+def _fetch_resume_hits_for_evidence(
+    doc_ids: list[str],
+    hit_map: dict[str, dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    missing_ids = [
+        doc_id
+        for doc_id in doc_ids
+        if _is_evidence_hit(hit_map.get(doc_id))
+    ]
+    if not missing_ids:
+        return {}
+
+    body = {
+        "size": len(missing_ids),
+        "query": {"ids": {"values": missing_ids}},
+        "_source": {"excludes": SOURCE_EXCLUDES},
+    }
+    try:
+        result = _es("POST", f"/{INDEX_ALIAS}/_search", body)
+    except Exception:
+        logger.exception("fetching parent resumes for evidence hits failed")
+        return {}
+    return {
+        hit["_id"]: hit
+        for hit in result.get("hits", {}).get("hits", [])
+    }
+
+
+def _evidence_match_debug(
+    hit: dict[str, Any],
+    retriever_name: Any,
+    rank: int,
+) -> dict[str, Any]:
+    source = hit.get("_source") or {}
+    return {
+        "retriever": retriever_name,
+        "rank": rank,
+        "score": round(float(hit.get("_score") or 0), 4),
+        "evidence_id": source.get("evidence_id"),
+        "section_type": source.get("section_type"),
+        "title": source.get("title"),
+        "snippet": _evidence_snippet(hit),
+    }
+
+
+def _evidence_snippet(hit: dict[str, Any]) -> str:
+    highlight = hit.get("highlight") or {}
+    snippets: list[str] = []
+    
+    field_labels = {
+        "title": "标题",
+        "text": "正文",
+        "skills_text": "技能词",
+        "candidate.name": "姓名",
+        "candidate.school": "学校",
+        "candidate.major": "专业",
+        "application.position_name": "期望岗位",
+    }
+    
+    import re
+    def _clean(s: str) -> str:
+        return re.sub(r'\W+', '', re.sub(r'<[^>]+>', '', s))
+        
+    seen_fragments: set[str] = set()
+    
+    for field, label in field_labels.items():
+        if field in highlight and highlight[field]:
+            fragments = [str(item).strip() for item in highlight[field] if str(item).strip()]
+            if fragments:
+                joined_fragments = " ... ".join(fragments)
+                clean_frag = _clean(joined_fragments)
+                is_duplicate = False
+                for seen in seen_fragments:
+                    if clean_frag in seen or seen in clean_frag:
+                        is_duplicate = True
+                        break
+                if not is_duplicate:
+                    snippets.append(f'<span class="snippet-label">{label}</span> ' + joined_fragments)
+                    seen_fragments.add(clean_frag)
+                
+    if snippets:
+        return _safe_snippet(" <span class=\"snippet-sep\">|</span> ".join(snippets))
+
+    source = hit.get("_source") or {}
+    title = str(source.get("title") or "").strip()
+    text = str(source.get("text") or "").strip()
+    if title and text.startswith(title):
+        raw = text
+    else:
+        raw = f"{title}：{text}" if title else text
+    escaped_raw = html.escape(raw[:100] + ("..." if len(raw) > 100 else ""))
+    return f'<span class="snippet-label dense-label">Dense 匹配</span> {escaped_raw}'
 
 def _matched_term_coverage(hit: dict[str, Any]) -> int:
     matched_queries = hit.get("matched_queries") or []
@@ -1341,70 +1558,50 @@ def _matched_term_coverage(hit: dict[str, Any]) -> int:
 def _matched_lexical_tier(hit: dict[str, Any]) -> int:
     matched_queries = hit.get("matched_queries") or []
     if any(
-        isinstance(query_name, str) and query_name.startswith(LEXICAL_EXACT_QUERY_PREFIX)
+        isinstance(query_name, str)
+        and (
+            query_name.startswith(LEXICAL_EXACT_QUERY_PREFIX)
+            or query_name.startswith(EVIDENCE_EXACT_QUERY_PREFIX)
+        )
         for query_name in matched_queries
     ):
         return 3
     if any(
-        isinstance(query_name, str) and query_name.startswith(LEXICAL_PHRASE_QUERY_PREFIX)
+        isinstance(query_name, str)
+        and (
+            query_name.startswith(LEXICAL_PHRASE_QUERY_PREFIX)
+            or query_name.startswith(EVIDENCE_PHRASE_QUERY_PREFIX)
+        )
         for query_name in matched_queries
     ):
         return 2
     return 1 if matched_queries else 0
 
 
-def _accepted_hits(
-    response: dict[str, Any],
-    lexical_ids: set[str],
-    allow_dense_only: bool,
-) -> list[tuple[int, dict[str, Any], dict[str, Any]]]:
+def _accepted_hits(response: dict[str, Any]) -> list[tuple[int, dict[str, Any], dict[str, Any]]]:
     hits = response.get("hits", {}).get("hits", [])
     if not _is_dense_retriever(response.get("_retriever_name")):
         return [(rank, hit, {}) for rank, hit in enumerate(hits, start=1)]
 
-    threshold = _dense_only_threshold(response)
     accepted: list[tuple[int, dict[str, Any], dict[str, Any]]] = []
-    dense_only_count = 0
     for rank, hit in enumerate(hits, start=1):
-        doc_id = hit["_id"]
         raw_score = float(hit.get("_score") or 0)
         dense_debug = {
             "dense_score": round(raw_score, 6),
-            "dense_only_threshold": round(threshold, 6) if threshold is not None else None,
             "dense_field": response.get("_vector_field"),
             "dense_weight": round(float(response.get("_rrf_weight", 1.0)), 3),
         }
-        if doc_id in lexical_ids:
-            dense_debug["dense_only_accepted"] = False
-            accepted.append((rank, hit, dense_debug))
-            continue
-        if not allow_dense_only or threshold is None or raw_score < threshold:
-            continue
-        if dense_only_count >= DENSE_ONLY_MAX_RESULTS:
-            continue
-        dense_only_count += 1
-        dense_debug["dense_only_accepted"] = True
         accepted.append((rank, hit, dense_debug))
     return accepted
-
-
-def _dense_only_threshold(response: dict[str, Any]) -> float | None:
-    hits = response.get("hits", {}).get("hits", [])
-    if not hits:
-        return None
-    top_score = float(hits[0].get("_score") or 0)
-    if top_score < DENSE_ONLY_MIN_SCORE:
-        return None
-    return max(DENSE_ONLY_MIN_SCORE, top_score - DENSE_ONLY_SCORE_BAND)
 
 
 def _lexical_doc_ids(responses: list[dict[str, Any]]) -> set[str]:
     ids: set[str] = set()
     for response in responses:
-        if response.get("_retriever_name") != BM25_RETRIEVER:
+        if response.get("_retriever_name") not in {BM25_RETRIEVER, EVIDENCE_RETRIEVER}:
             continue
         for hit in response.get("hits", {}).get("hits", []):
-            ids.add(hit["_id"])
+            ids.add(_hit_resume_id(hit, response))
     return ids
 
 
@@ -1415,11 +1612,6 @@ def _use_dense(query_text: str) -> bool:
     if len(query_text.split()) >= 2:
         return True
     return len(compact) >= 4
-
-
-def _allow_dense_only(query_text: str) -> bool:
-    compact = "".join(query_text.split())
-    return bool(compact) and not _looks_like_exact_lookup(compact)
 
 
 def _looks_like_exact_lookup(compact_query: str) -> bool:
@@ -1440,8 +1632,13 @@ def _format_hit(hit: dict[str, Any], rrf_score: float | None = None) -> dict[str
     projects = source.get("projects") or []
     internships = source.get("internships") or []
     highlight = hit.get("highlight", {})
+    retrieval_debug = hit.get("_retrieval_debug", {})
 
-    snippets = _highlight_snippets(highlight) or [_default_snippet(projects, internships)]
+    snippets = (
+        _highlight_snippets(highlight)
+        or _debug_evidence_snippets(retrieval_debug)
+        or [_default_snippet(projects, internships)]
+    )
     years_experience = candidate.get("years_experience")
 
     return {
@@ -1450,13 +1647,56 @@ def _format_hit(hit: dict[str, Any], rrf_score: float | None = None) -> dict[str
         "candidate": candidate,
         "application": source.get("application", {}),
         "education_summary": _education_summary(candidate, education),
-        "project_snippet": _safe_snippet(" ... ".join(snippets)),
+        "project_snippet": _safe_snippet("".join(f'<div style="margin-bottom: 6px;">{s}</div>' for s in snippets)) if snippets else "",
         "skills": source.get("skills", []),
         "years_experience": years_experience,
         "experience_display": _experience_display(years_experience),
-        "retrieval_debug": hit.get("_retrieval_debug", {}),
+        "retrieval_debug": retrieval_debug,
         "source": source,
     }
+
+
+def _debug_evidence_snippets(debug: dict[str, Any]) -> list[str]:
+    seen_evidence_ids: set[str] = set()
+    seen_clean_texts: set[str] = set()
+    snippets: list[str] = []
+    
+    import re
+    def _clean(s: str) -> str:
+        s = re.sub(r'<span class="snippet-label[^>]*>.*?</span>', '', s)
+        s = re.sub(r'\[.*?\]', '', s)
+        s = re.sub(r'<[^>]+>', '', s)
+        return re.sub(r'\W+', '', s)
+        
+    def _add_matches(matches: list[dict[str, Any]]) -> None:
+        for item in matches:
+            ev_id = item.get("evidence_id")
+            snippet = str(item.get("snippet") or "").strip()
+            if snippet and ev_id not in seen_evidence_ids:
+                sub_snippets = [s.strip() for s in snippet.split('<span class="snippet-sep">|</span>')]
+                surviving_subs = []
+                for sub in sub_snippets:
+                    if not sub:
+                        continue
+                    clean_text = _clean(sub)
+                    is_duplicate = False
+                    if clean_text:
+                        for seen in seen_clean_texts:
+                            if clean_text in seen or seen in clean_text:
+                                is_duplicate = True
+                                break
+                    if not is_duplicate:
+                        surviving_subs.append(sub)
+                        if clean_text:
+                            seen_clean_texts.add(clean_text)
+                if surviving_subs:
+                    snippets.append(' <span class="snippet-sep">|</span> '.join(surviving_subs))
+                if ev_id:
+                    seen_evidence_ids.add(ev_id)
+                    
+    _add_matches(debug.get("evidence_matches") or [])
+    _add_matches(debug.get("dense_matches") or [])
+    return snippets
 
 
 def _highlight_snippets(highlight: dict[str, list[str]]) -> list[str]:
@@ -1567,6 +1807,7 @@ def _load_facets() -> dict[str, Any]:
             "cities": {"terms": {"field": "application.expected_work_cities", "size": 20}},
             "skills": {"terms": {"field": "skills", "size": SKILL_FACET_AGG_SIZE}},
             "positions": {"terms": {"field": "application.position_name.keyword", "size": 20}},
+            "max_years": {"max": {"field": "candidate.years_experience"}},
         },
     }
     result = _es("POST", f"/{INDEX_ALIAS}/_search", body)
@@ -1583,6 +1824,8 @@ def _load_facets() -> dict[str, Any]:
         aggs.get("skills", {}).get("buckets", []),
         SKILL_FACET_DISPLAY_SIZE,
     )
+    max_years_val = aggs.get("max_years", {}).get("value")
+    facets["max_years"] = round(max_years_val, 1) if max_years_val else 5
     _facets_cache = (now + FACETS_CACHE_TTL_SECONDS, facets)
     return facets
 

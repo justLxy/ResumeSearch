@@ -838,6 +838,73 @@ mark {
   line-height: 1.7;
   font-size: 14px;
   overflow-wrap: anywhere;
+  white-space: pre-line;
+}
+
+.timeline-attrs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  margin-top: 8px;
+}
+
+.timeline-attr {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 13px;
+  color: var(--subtext);
+  background: var(--bg-card, #f4f5f7);
+  border: 1px solid var(--line-soft, #e8e8e8);
+  border-radius: 4px;
+  padding: 2px 8px;
+  line-height: 1.5;
+}
+
+.timeline-attr-label {
+  color: var(--muted);
+  font-size: 12px;
+  margin-right: 2px;
+}
+
+.timeline-attr-label::after {
+  content: ":";
+}
+
+/* IT Skill Chips */
+.it-skill-langs {
+  color: var(--subtext);
+  font-size: 13px;
+  line-height: 1.6;
+  margin-bottom: 10px;
+}
+
+.it-skill-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.it-skill-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--bg-card, #f4f5f7);
+  border: 1px solid var(--line-soft, #e8e8e8);
+  border-radius: 6px;
+  padding: 5px 12px;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.it-skill-name {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.it-skill-meta {
+  color: var(--muted);
+  font-size: 12px;
 }
 
 /* Debug Panel Styles */
@@ -1002,9 +1069,8 @@ mark {
 
 .dense-match-item {
   display: grid;
-  grid-template-columns: minmax(120px, 1fr) minmax(90px, auto);
-  gap: 10px;
-  padding: 3px 0;
+  gap: 5px;
+  padding: 6px 0;
   border-bottom: 1px solid var(--line-soft);
   color: var(--subtext);
   font-size: 12px;
@@ -1017,6 +1083,32 @@ mark {
 .dense-match-name {
   color: var(--text);
   font-weight: 650;
+}
+
+.dense-match-main {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+.dense-match-score {
+  color: var(--subtext);
+  white-space: nowrap;
+}
+
+.dense-match-snippet {
+  color: #64748b;
+  line-height: 1.55;
+  word-break: break-word;
+}
+
+.dense-match-snippet mark {
+  background: #fef3c7;
+  color: #92400e;
+  border-radius: 3px;
+  padding: 0 2px;
 }
 
 /* Formula box */
@@ -1214,4 +1306,27 @@ mark {
     animation-iteration-count: 1 !important;
     scroll-behavior: auto !important;
   }
+}
+
+/* Snippet Field Labels */
+.snippet-label {
+  display: inline-block;
+  padding: 2px 6px;
+  background-color: var(--primary);
+  color: #fff;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  margin-right: 6px;
+  vertical-align: middle;
+  line-height: 1.2;
+}
+
+.snippet-label.dense-label {
+  background-color: #059669;
+}
+
+.snippet-sep {
+  color: var(--border-color);
+  margin: 0 4px;
 }

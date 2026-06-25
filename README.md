@@ -757,7 +757,7 @@ filter 的特点：
 | `match_phrase` | text 连续短语匹配 | `candidate.major.phrase` | 是 | 是 |
 | `multi_match` | 多 text 字段同时检索 | 岗位、姓名、学校、专业、项目、实习、技能文本 | 是 | 是 |
 | `nested` | 检索数组对象内部字段 | `education`、`internships`、`projects` | 取决于内部 query | 是 |
-| `knn` | 向量近邻检索 | 多路画像向量 | 否 | 返回向量相似度分 |
+| `knn` | 向量近邻检索 | 证据片段 `evidence_vector` | 否 | 返回向量相似度分 |
 
 ### 6.6 exact、phrase、BM25 的分层
 
@@ -779,7 +779,7 @@ term_should:
 排序证据强度：
 
 ```text
-exact field > phrase > all terms > broad terms > dense-only
+exact field > phrase > all terms > broad terms > vector-only
 ```
 
 这不是为某个具体词写规则，而是符合通用搜索系统的相关性层级。
@@ -851,20 +851,24 @@ nested：
 
 ## 7. 排序与融合逻辑
 
-### 7.1 两路检索
+### 7.1 三路召回
 
-当启用 dense 时，系统在外层仍按两路搜索理解：
+当前搜索不再直接对候选人画像向量做 kNN，而是先检索 `resume_evidence_current` 里的证据片段，再按 `resume_id` 聚合回候选人。
+
+当启用 dense 时，系统在外层按三路搜索理解：
 
 ```text
-BM25 retriever:
-  keyword + phrase + BM25 + filter
+Candidate lexical retriever:
+  候选人索引中的编号、姓名、学校、公司、岗位、技能等字段词面召回
 
-Dense retriever:
-  根据 query 意图选择技能、项目、实习或教育画像 kNN + 同一组 filter
-  多个向量通道先在 Dense 内部融合
+Evidence lexical retriever:
+  title/text/skills_text/position/major 上的 exact + phrase + BM25 + filter
+
+Evidence dense retriever:
+  evidence_vector kNN + 同一组 filter
 ```
 
-并发执行由 `ThreadPoolExecutor` 完成。这样 BM25 和多路 dense kNN 的耗时可以重叠。
+并发执行由 `ThreadPoolExecutor` 完成。这样候选人词面、证据词面和向量证据召回的耗时可以重叠。
 
 ### 7.2 RRF 融合
 
@@ -879,7 +883,8 @@ rrf_score = weight / (rank_constant + rank)
 当前配置：
 
 ```text
-BM25_RRF_WEIGHT = 1.5
+BM25_RRF_WEIGHT = 1.0
+EVIDENCE_RRF_WEIGHT = 1.2
 DENSE_RRF_WEIGHT = 1.0
 RRF_RANK_CONSTANT = 60
 ```
@@ -887,21 +892,22 @@ RRF_RANK_CONSTANT = 60
 例子：
 
 ```text
-BM25 rank = 1  -> 1.5 / (60 + 1) = 0.02459
-Dense rank = 1 -> 1.0 / (60 + 1) = 0.01639
-Dense rank = 5 -> 1.0 / (60 + 5) = 0.01538
+Candidate lexical rank = 1 -> 1.0 / (60 + 1) = 0.01639
+Evidence lexical rank = 1  -> 1.2 / (60 + 1) = 0.01967
+Dense rank = 1             -> 1.0 / (60 + 1) = 0.01639
+Dense rank = 5             -> 1.0 / (60 + 5) = 0.01538
 ```
 
-Dense 侧虽然会同时查多个画像向量，但不会把多个向量通道直接累加到最终 RRF。流程是：
+Dense 侧返回的是证据片段，不是候选人。流程是：
 
 ```text
-1. 项目向量、技能向量、实习向量、教育向量分别返回自己的 kNN rank。
-2. 查询意图只决定选择哪些向量通道；被选中的向量通道权重统一为 1.0。
-3. 按内部合计分得到一个统一的 dense_rank。
-4. 外层 RRF 只使用 1.0 / (60 + dense_rank) 作为 Dense 贡献。
+1. evidence_vector 返回若干项目、实习、教育、技能证据片段。
+2. 同一个候选人的多个证据片段先在 dense 内部聚合。
+3. 聚合后得到候选人级 `dense_group_rank`。
+4. 外层 RRF 只使用 `1.0 / (60 + dense_group_rank)` 作为 Dense 贡献。
 ```
 
-这样做可以避免“项目向量 + 技能向量 + 教育向量 + 实习向量”等在最终排序里变成多张 Dense 票，从而稀释 BM25 的字段命中证据。
+这样做可以避免一个候选人因为命中多个证据片段就在最终排序里获得多张 Dense 票，同时又保留“多个证据都相似”的覆盖度信号。
 
 为什么不用 BM25 `_score` + dense `_score` 直接相加？
 
@@ -927,29 +933,25 @@ RRF 只看名次，能更稳定地融合不同检索器。
 1. **匹配层级奖励 (`lexical_tier`)**：
    - `3`：exact field 命中（奖励 +0.45）
    - `2`：phrase 命中（奖励 +0.30）
-   - `1`：普通 BM25 综合命中（奖励 +0.15）
-   - `0`：dense-only（无奖励）
+   - `1`：普通词面证据命中（奖励 +0.15）
+   - `0`：vector-only（无奖励）
 2. **多词覆盖奖励 (`term_coverage`)**：
    对于多词查询，每多覆盖一个 query token，奖励系数增加 0.05。
 
 这套逻辑的目标是：强字段证据通过奖励系数体现在最终分数里，同时普通关键词命中不会无条件压过高质量语义匹配。
 
-### 7.4 dense-only gate
+### 7.4 独立向量召回
 
-BM25 没命中的 dense-only 候选不能无条件进入结果，否则向量 top-k 会把结果页填满。
+当前没有 dense-only 分数阈值。只要 evidence dense kNN 召回到证据片段，候选人就可以进入 RRF 融合。
 
-当前规则：
+这么做的原因是：向量 `_score` 不是跨 query 稳定校准的业务置信度，用固定阈值控制准入会让不同查询之间的召回行为不一致。更标准的做法是让词面证据和向量证据独立召回，再通过排名融合、召回窗口和评估集校准整体效果。
 
-```text
-dense top1 _score 必须 >= 0.860
-dense-only 候选 _score 必须 >= max(0.860, dense_top1_score - 0.02)
-每次最多补 8 个 dense-only 候选
-```
+相关性控制来自四处：
 
-含义：
-- dense-only 只补高置信语义候选。
-- 必须接近 dense top1，避免弱相关长尾进入。
-- 限制数量，避免语义召回淹没明确词面命中。
+- `rank_window_size` 和 `DENSE_RANK_WINDOW_SIZE` 控制向量召回窗口。
+- 结构化 filter 同时作用于词面证据检索和 dense kNN。
+- `lexical_tier` 与 `term_coverage` 只奖励明确词面证据，vector-only 不拿这部分奖励。
+- 明显精确查询会跳过 dense，例如候选人编号、岗位编号、邮箱，以及以“大学 / 学院 / 公司 / 集团”结尾的实体查询。
 
 ### 7.5 最终排序键
 
@@ -1446,7 +1448,7 @@ NLP 项目经验
 
 ```text
 同时有 BM25 命中和 dense 语义支持的候选人会上升。
-只有 dense 命中的候选人必须通过 dense-only gate。
+只有 dense 命中的候选人也可以进入融合，但不会获得词面证据奖励。
 ```
 
 ### 10.5 示例五：多词覆盖度
@@ -1527,26 +1529,15 @@ python evaluate_search.py --type-summary
 python evaluate_search.py --details
 ```
 
-指定 dense-only 阈值：
-
-```bash
-python evaluate_search.py --thresholds 0.84,0.845,0.855,0.86,0.875
-```
-
 ### 11.3 当前评估结果
 
-当前推荐阈值：
+评估脚本会输出当前检索策略的整体指标：
 
 ```text
-DENSE_ONLY_MIN_SCORE = 0.860
+queries judged  P@5    P@10   R@5    R@10   MRR@10 NDCG@10 empty_acc forbidden@10
 ```
 
-单阈值评估：
-
-```text
-threshold  judged  P@5    P@10   R@5    R@10   MRR@10 NDCG@10 empty_acc forbidden@10
-0.860      117     0.923  0.854  0.322  0.509  0.968  0.944   1.000     0
-```
+具体数值会随 mock 数据、embedding 模型和检索参数变化，以本地运行 `python evaluate_search.py` 的输出为准。
 
 专业回归结果：
 
@@ -1820,7 +1811,7 @@ python -m pytest -q
    用 RRF 融合 BM25 和 dense rank。
    再乘以 lexical_tier 与 term_coverage 奖励系数。
    最终按 Debug 中展示的最终加权得分降序排序。
-   dense-only 需要高置信 gate。
+   vector-only 可以独立进入融合，但不拿词面奖励。
 
 5. 评估:
    用 eval_queries.jsonl 固定评估集看 P@K、R@K、MRR、NDCG 和负例误召回。
@@ -1838,8 +1829,8 @@ python -m pytest -q
 
 - 搜索 API、ES mapping、BM25 查询、phrase 查询、filter、dense kNN、RRF 融合、评估脚本都在仓库中。
 - 当前索引设计只支持最新 mapping，不兼容旧索引。
-- 当前向量字段包括整体、技能、项目、实习、教育、岗位多路画像。
-- 当前默认 dense-only 阈值是 `0.860`。
+- 当前候选人索引不保存 dense 向量；项目、实习、教育、技能被拆成证据文档，并在证据索引中保存 `evidence_vector`。
+- 当前没有 dense-only 分数阈值；词面证据和向量证据独立召回后统一 RRF 融合。
 
 需要业务侧进一步补充的信息：
 
@@ -1851,3 +1842,23 @@ python -m pytest -q
 - 生产集群规模、数据量、QPS、延迟目标和磁盘保留策略。
 
 这些信息会影响后续是否需要引入多租户权限、在线学习排序、岗位定制化 query profile、索引生命周期管理和更严格的可观测性设计。
+
+## 15. 前端高亮与去重排版逻辑
+
+为了在保留底层混合检索（BM25 + Dense）透明度的同时，提供干净清爽的用户体验，系统对高亮切片（Snippet）进行了深度的处理与美化：
+
+### 15.1 后端打标与标签生成 (`app.py`)
+Elasticsearch 默认返回的高亮仅有 `<mark>` 标签。为了让用户知道“这个词是在哪个字段匹配上的”，后端 `_evidence_snippet` 进行了显式打标：
+- **词面匹配（BM25）**：遍历 `highlight`，将底层字段名映射为可读标签（如 `text` -> `正文`，`skills_text` -> `技能词`），并直接在后端拼接 HTML：`<span class="snippet-label">正文</span> ...`。
+- **向量匹配（Dense）**：当某段经历纯粹依靠向量相似度召回（无关键字高亮）时，系统提供 Fallback 兜底文本，并在最前方加上专属的绿色徽标：`<span class="snippet-label dense-label">Dense 匹配</span> ...`。
+
+### 15.2 强力文本去重机制
+由于 Elasticsearch 混合检索经常会导致**“同一段文本被不同字段（`text` 和 `skills_text`）重复召回”**或**“被不同经历分块重复命中”**，系统在后端实现了一套全文本覆盖式去重逻辑：
+- **过滤 HTML 与标点**：通过正则提取纯粹的字母、数字和中文字符串（`clean_frag`）。
+- **字段级子串去重**：如果 `[技能词]` 命中的纯文本内容，完全是 `[正文]` 高亮合并文本的子串（例如 `JavaSpring` 是 `能力标签JavaSpring` 的子集），系统会直接抛弃 `[技能词]` 标签，避免同一个简历片段里疯狂重复。
+- **跨块级去重**：如果在聚合不同 evidence chunk 时，发现两段经历产出了高度重合的 Snippet 文本，第二段也会被折叠。
+
+### 15.3 前端实体色块 UI (`web/styles.css`)
+后端返回的安全 HTML 片段，前端通过 `innerHTML` 渲染。标签 UI 采用了经典的**高对比度实体色块（Solid Block）**风格：
+- **普通 BM25 标签**：采用品牌主蓝底白字（`var(--primary)` + `#fff`），视觉结构扎实。
+- **Dense 向量标签**：采用极具辨识度的翡翠绿（Emerald Green, `#059669`），在不使用柔性或紫色调的前提下，与传统的蓝色词面召回形成极强对比，一目了然地区分两种召回机制。

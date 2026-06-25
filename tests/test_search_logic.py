@@ -1,29 +1,34 @@
 import json
 import unittest
+from unittest.mock import patch
 
 from app import (
     BM25_RETRIEVER,
     DENSE_RETRIEVER,
+    EVIDENCE_DENSE_RETRIEVER,
+    EVIDENCE_RETRIEVER,
     _build_filters,
     _default_snippet,
+    _evidence_lexical_query,
     _format_hit,
     _hybrid_total,
-    _infer_dense_routes,
     _lexical_query,
     _lexical_total,
     _merge_case_insensitive_skill_buckets,
     _normalize_limit,
     _parse_query_constraints,
     _rrf_merge,
+    _run_hybrid_search,
     _use_dense,
 )
 from import_to_es import (
     EMBEDDING_NORMALIZED,
+    EVIDENCE_INDEX_BODY,
+    EVIDENCE_VECTOR_FIELD,
     SEMANTIC_PROFILE_VERSION,
     VECTOR_DIMS,
-    VECTOR_FIELDS,
     INDEX_BODY,
-    _embedding_inputs,
+    _resume_evidence_docs,
     _estimate_years_experience,
 )
 
@@ -106,18 +111,41 @@ class SearchLogicTests(unittest.TestCase):
         self.assertIn("<mark>机器学习</mark>", formatted["project_snippet"])
         self.assertIn("<mark>百度</mark>", formatted["project_snippet"])
 
-    def test_hybrid_merge_allows_dense_only_for_semantic_queries(self) -> None:
+    def test_hybrid_merge_keeps_independent_dense_hits(self) -> None:
         vector_response = _response(
-            DENSE_RETRIEVER,
+            EVIDENCE_DENSE_RETRIEVER,
             [
                 _hit("vector-only", "向量候选"),
             ],
         )
 
-        self.assertEqual(_hybrid_total([vector_response], allow_dense_only=True), 1)
-        self.assertEqual(_rrf_merge([vector_response], 10, allow_dense_only=True)[0]["id"], "vector-only")
+        self.assertEqual(_hybrid_total([vector_response]), 1)
+        self.assertEqual(_rrf_merge([vector_response], 10)[0]["id"], "vector-only")
 
-    def test_hybrid_merge_blocks_dense_only_for_short_entity_queries(self) -> None:
+    def test_hybrid_search_uses_only_evidence_retrievers(self) -> None:
+        calls: list[str] = []
+
+        def fake_es(_method: str, path: str, _body: dict) -> dict:
+            calls.append(path)
+            return {"hits": {"total": {"value": 0}, "hits": []}}
+
+        with patch("app._es", side_effect=fake_es):
+            responses, warnings = _run_hybrid_search(
+                "推荐系统",
+                [0.1, 0.2, 0.3],
+                [],
+                10,
+                use_dense=True,
+            )
+
+        self.assertEqual(warnings, [])
+        self.assertEqual(
+            {response["_retriever_name"] for response in responses},
+            {EVIDENCE_RETRIEVER, EVIDENCE_DENSE_RETRIEVER},
+        )
+        self.assertTrue(all("resume_evidence_current" in path for path in calls))
+
+    def test_exact_entity_queries_skip_dense_before_merge(self) -> None:
         bm25_response = _response(
             BM25_RETRIEVER,
             [
@@ -126,13 +154,13 @@ class SearchLogicTests(unittest.TestCase):
             total=1,
         )
         vector_response = _response(
-            DENSE_RETRIEVER,
+            EVIDENCE_DENSE_RETRIEVER,
             [
                 _hit("vector-only", "向量候选"),
             ],
         )
 
-        results = _rrf_merge([bm25_response, vector_response], 10, allow_dense_only=False)
+        results = _rrf_merge([bm25_response, vector_response], 10)
 
         self.assertFalse(_use_dense("北京大学"))
         self.assertFalse(_use_dense("奇安信集团"))
@@ -141,8 +169,8 @@ class SearchLogicTests(unittest.TestCase):
         self.assertTrue(_use_dense("自然语言处理"))
         self.assertTrue(_use_dense("推荐召回"))
         self.assertTrue(_use_dense("做过推荐系统召回和 NLP 模型落地的人"))
-        self.assertEqual(_hybrid_total([bm25_response, vector_response], allow_dense_only=False), 1)
-        self.assertEqual([item["id"] for item in results], ["lexical-1"])
+        self.assertEqual(_hybrid_total([bm25_response, vector_response]), 2)
+        self.assertEqual([item["id"] for item in results], ["lexical-1", "vector-only"])
 
     def test_hybrid_merge_combines_bm25_and_dense_with_rrf(self) -> None:
         bm25_response = _response(
@@ -155,18 +183,50 @@ class SearchLogicTests(unittest.TestCase):
             total=7,
         )
         vector_response = _response(
-            DENSE_RETRIEVER,
+            EVIDENCE_DENSE_RETRIEVER,
             [
                 _hit("lexical-2", "词面第二"),
                 _hit("vector-only", "向量候选"),
             ],
         )
 
-        results = _rrf_merge([bm25_response, vector_response], 10, allow_dense_only=True)
+        results = _rrf_merge([bm25_response, vector_response], 10)
 
-        self.assertEqual(_hybrid_total([bm25_response, vector_response], allow_dense_only=True), 3)
+        self.assertEqual(_hybrid_total([bm25_response, vector_response]), 3)
         self.assertEqual([item["id"] for item in results], ["lexical-2", "lexical-1", "vector-only"])
         self.assertEqual(results[0]["retrieval_debug"]["retrieval_sources"], [BM25_RETRIEVER, DENSE_RETRIEVER])
+
+    def test_evidence_hits_are_collapsed_to_resume_results(self) -> None:
+        evidence_response = _response(
+            EVIDENCE_RETRIEVER,
+            [
+                _evidence_hit(
+                    "resume-1:project:1",
+                    "resume-1",
+                    "推荐系统召回项目",
+                    "项目职责：负责推荐系统召回和 NLP 模型落地。",
+                    matched_queries=["evidence_phrase:text:W10"],
+                )
+            ],
+            weight=1.2,
+        )
+
+        with patch(
+            "app._fetch_resume_hits_for_evidence",
+            return_value={"resume-1": _hit("resume-1", "候选人")},
+        ):
+            results = _rrf_merge([evidence_response], 10)
+
+        self.assertEqual([item["id"] for item in results], ["resume-1"])
+        self.assertIn(EVIDENCE_RETRIEVER, results[0]["retrieval_debug"]["retrieval_sources"])
+        self.assertEqual(
+            results[0]["retrieval_debug"]["evidence_matches"][0]["section_type"],
+            "project",
+        )
+        self.assertEqual(results[0]["retrieval_debug"]["matched_queries"], ["evidence_phrase:text:W10"])
+        self.assertEqual(results[0]["retrieval_debug"]["lexical_tier"], 2)
+        self.assertIn("<mark>推荐系统</mark>", results[0]["project_snippet"])
+        self.assertIn("召回", results[0]["project_snippet"])
 
     def test_multi_term_coverage_boost_is_reflected_in_final_score(self) -> None:
         bm25_response = _response(
@@ -178,7 +238,7 @@ class SearchLogicTests(unittest.TestCase):
             ],
         )
         vector_response = _response(
-            DENSE_RETRIEVER,
+            EVIDENCE_DENSE_RETRIEVER,
             [
                 _hit("a-many", "A A A 0", score=1.0),
                 _hit("zero", "0 0 0 0", score=0.99),
@@ -188,7 +248,6 @@ class SearchLogicTests(unittest.TestCase):
         results = _rrf_merge(
             [bm25_response, vector_response],
             10,
-            allow_dense_only=True,
             query_text="A B",
         )
 
@@ -206,7 +265,7 @@ class SearchLogicTests(unittest.TestCase):
             ],
         )
         vector_response = _response(
-            DENSE_RETRIEVER,
+            EVIDENCE_DENSE_RETRIEVER,
             [
                 _hit("split-and-dense", "计算机 与 科学", score=0.9),
             ],
@@ -215,7 +274,6 @@ class SearchLogicTests(unittest.TestCase):
         results = _rrf_merge(
             [bm25_response, vector_response],
             10,
-            allow_dense_only=True,
             query_text="计算机科学",
         )
 
@@ -232,7 +290,7 @@ class SearchLogicTests(unittest.TestCase):
             ],
         )
         vector_response = _response(
-            DENSE_RETRIEVER,
+            EVIDENCE_DENSE_RETRIEVER,
             [
                 _hit("weak-field-phrase", "弱字段短语", score=0.9),
             ],
@@ -241,14 +299,13 @@ class SearchLogicTests(unittest.TestCase):
         results = _rrf_merge(
             [bm25_response, vector_response],
             10,
-            allow_dense_only=True,
             query_text="计算机科学",
         )
 
         self.assertEqual([item["id"] for item in results], ["weak-field-phrase", "major-phrase"])
         self.assertGreaterEqual(results[0]["retrieval_debug"]["rrf_score"], results[1]["retrieval_debug"]["rrf_score"])
 
-    def test_dense_only_hits_need_similarity_gate(self) -> None:
+    def test_dense_hits_do_not_need_lexical_support_or_similarity_gate(self) -> None:
         bm25_response = _response(
             BM25_RETRIEVER,
             [
@@ -257,24 +314,25 @@ class SearchLogicTests(unittest.TestCase):
             total=1,
         )
         vector_response = _response(
-            DENSE_RETRIEVER,
+            EVIDENCE_DENSE_RETRIEVER,
             [
                 _hit("weak-vector-only", "弱语义候选", score=0.79),
                 _hit("lexical-1", "词面第一", score=0.78),
             ],
         )
 
-        results = _rrf_merge([bm25_response, vector_response], 10, allow_dense_only=True)
+        results = _rrf_merge([bm25_response, vector_response], 10)
 
-        self.assertEqual(_hybrid_total([bm25_response, vector_response], allow_dense_only=True), 1)
-        self.assertEqual([item["id"] for item in results], ["lexical-1"])
-        self.assertEqual(results[0]["retrieval_debug"]["dense_rank"], 1)
+        self.assertEqual(_hybrid_total([bm25_response, vector_response]), 2)
+        self.assertEqual([item["id"] for item in results], ["lexical-1", "weak-vector-only"])
+        self.assertEqual(results[0]["retrieval_debug"]["dense_rank"], 2)
         self.assertEqual(results[0]["retrieval_debug"]["dense_route_rank"], 2)
-        self.assertIsNone(results[0]["retrieval_debug"]["dense_only_threshold"])
+        self.assertEqual(results[1]["retrieval_debug"]["retrieval_sources"], [DENSE_RETRIEVER])
+        self.assertNotIn("dense_only_threshold", results[1]["retrieval_debug"])
 
-    def test_dense_only_gate_keeps_high_confidence_semantic_hits(self) -> None:
+    def test_dense_hits_are_not_threshold_filtered(self) -> None:
         vector_response = _response(
-            DENSE_RETRIEVER,
+            EVIDENCE_DENSE_RETRIEVER,
             [
                 _hit("vector-1", "强语义候选", score=0.88),
                 _hit("vector-2", "近邻语义候选", score=0.865),
@@ -282,50 +340,117 @@ class SearchLogicTests(unittest.TestCase):
             ],
         )
 
-        results = _rrf_merge([vector_response], 10, allow_dense_only=True)
+        results = _rrf_merge([vector_response], 10)
 
-        self.assertEqual([item["id"] for item in results], ["vector-1", "vector-2"])
-        self.assertEqual(results[0]["retrieval_debug"]["dense_only_threshold"], 0.86)
-        self.assertTrue(results[0]["retrieval_debug"]["dense_only_accepted"])
+        self.assertEqual([item["id"] for item in results], ["vector-1", "vector-2", "vector-3"])
+        self.assertEqual(results[2]["retrieval_debug"]["dense_rank"], 3)
+        self.assertNotIn("dense_only_accepted", results[0]["retrieval_debug"])
 
-    def test_dense_routes_are_group_normalized_before_outer_rrf(self) -> None:
-        bm25_response = _response(
-            BM25_RETRIEVER,
+    def test_evidence_dense_is_grouped_before_outer_rrf(self) -> None:
+        evidence_response = _response(
+            EVIDENCE_RETRIEVER,
             [
-                _hit("lexical-1", "词面候选"),
+                _evidence_hit(
+                    "lexical-1:project:1",
+                    "lexical-1",
+                    "词面证据",
+                    "项目职责：负责推荐系统召回。",
+                ),
             ],
-            weight=1.5,
+            weight=1.2,
             total=1,
         )
-        dense_projects_response = _response(
-            "dense:projects",
+        dense_response = _response(
+            EVIDENCE_DENSE_RETRIEVER,
             [
-                _hit("vector-1", "向量候选", score=0.92),
+                _evidence_hit(
+                    "vector-1:project:1",
+                    "vector-1",
+                    "向量证据",
+                    "项目职责：负责语义召回和排序模型。",
+                    score=0.92,
+                ),
             ],
-            weight=2.0,
+            weight=1.0,
         )
-        dense_skills_response = _response(
-            "dense:skills",
-            [
-                _hit("vector-1", "向量候选", score=0.91),
-            ],
-            weight=2.0,
-        )
+        dense_response["_vector_field"] = EVIDENCE_VECTOR_FIELD
 
-        results = _rrf_merge(
-            [bm25_response, dense_projects_response, dense_skills_response],
-            10,
-            allow_dense_only=True,
-        )
+        with patch(
+            "app._fetch_resume_hits_for_evidence",
+            return_value={
+                "lexical-1": _hit("lexical-1", "词面候选"),
+                "vector-1": _hit("vector-1", "向量候选"),
+            },
+        ):
+            results = _rrf_merge(
+                [evidence_response, dense_response],
+                10,
+            )
 
         self.assertEqual([item["id"] for item in results], ["lexical-1", "vector-1"])
         vector_debug = results[1]["retrieval_debug"]
         self.assertEqual(vector_debug["retrieval_sources"], [DENSE_RETRIEVER])
         self.assertEqual(vector_debug["dense_rank"], 1)
-        self.assertGreater(vector_debug["dense_inner_score"], vector_debug["raw_rrf_score"])
+        self.assertEqual(vector_debug["dense_retriever"], EVIDENCE_DENSE_RETRIEVER)
+        self.assertEqual(vector_debug["dense_field"], EVIDENCE_VECTOR_FIELD)
+        dense_match = vector_debug["dense_matches"][0]
+        self.assertEqual(dense_match["section_type"], "project")
+        self.assertEqual(dense_match["title"], "向量证据")
+        self.assertIn("语义召回", dense_match["snippet"])
+
+    def test_dense_group_rank_uses_global_vector_rank_not_filtered_rank(self) -> None:
+        evidence_response = _response(
+            EVIDENCE_RETRIEVER,
+            [
+                _evidence_hit(
+                    "target:project:1",
+                    "target",
+                    "词面证据",
+                    "项目职责：负责目标系统。",
+                ),
+            ],
+            weight=1.2,
+        )
+        dense_hits = [
+            _evidence_hit(
+                f"other-{index}:project:1",
+                f"other-{index}",
+                f"其它证据 {index}",
+                "项目职责：其它候选人的相似证据。",
+                score=0.9 - index * 0.001,
+            )
+            for index in range(1, 59)
+        ]
+        dense_hits.append(
+            _evidence_hit(
+                "target:project:2",
+                "target",
+                "目标向量证据",
+                "项目职责：负责目标系统的语义召回。",
+                score=0.75,
+            )
+        )
+        dense_response = _response(EVIDENCE_DENSE_RETRIEVER, dense_hits)
+        dense_response["_vector_field"] = EVIDENCE_VECTOR_FIELD
+
+        with patch(
+            "app._fetch_resume_hits_for_evidence",
+            return_value={"target": _hit("target", "目标候选人")},
+        ):
+            results = _rrf_merge(
+                [evidence_response, dense_response],
+                10,
+            )
+
+        debug = results[0]["retrieval_debug"]
+        self.assertEqual(debug["dense_route_rank"], 59)
+        self.assertEqual(debug["dense_rank"], 59)
+        self.assertEqual(debug["dense_group_rank"], 59)
+        self.assertEqual(debug["dense_rrf_contribution"], round(1 / (60 + 59), 6))
 
     def test_vector_text_excludes_entity_and_location_noise(self) -> None:
         doc = {
+            "resume_id": "resume-1",
             "application": {
                 "position_name": "机器学习工程师",
                 "expected_work_cities": ["北京"],
@@ -367,46 +492,93 @@ class SearchLogicTests(unittest.TestCase):
             ],
         }
 
-        embedding_inputs = _embedding_inputs(doc)
-        all_embedding_text = "\n".join(embedding_inputs.values())
+        evidence_docs = _resume_evidence_docs(doc)
+        all_embedding_text = "\n".join(
+            item["text"]
+            for item in evidence_docs
+            if item["section_type"] != "profile"
+        )
+        profile_text = "\n".join(
+            item["text"]
+            for item in evidence_docs
+            if item["section_type"] == "profile"
+        )
 
         self.assertNotIn("北京大学", all_embedding_text)
         self.assertNotIn("北京", all_embedding_text)
         self.assertNotIn("张三", all_embedding_text)
         self.assertNotIn("百度在线网络技术", all_embedding_text)
         self.assertNotIn("学士", all_embedding_text)
-        self.assertNotIn("semantic_profile_vector", embedding_inputs)
-        self.assertIn("机器学习", embedding_inputs["skills_vector"])
-        self.assertIn("自然语言处理", embedding_inputs["education_vector"])
-        self.assertIn("推荐系统", embedding_inputs["internships_vector"])
-        self.assertIn("医疗问答系统", embedding_inputs["projects_vector"])
-        self.assertNotIn("role_vector", embedding_inputs)
+        self.assertIn("机器学习", all_embedding_text)
+        self.assertIn("自然语言处理", all_embedding_text)
+        self.assertIn("推荐系统", all_embedding_text)
+        self.assertIn("医疗问答系统", all_embedding_text)
         self.assertNotIn("机器学习工程师", all_embedding_text)
+        self.assertIn("北京大学", profile_text)
+        self.assertIn("机器学习工程师", profile_text)
 
-    def test_dense_routes_prioritize_query_intent(self) -> None:
-        skill_routes = _infer_dense_routes(
-            "Python SQL 推荐系统",
-            {"Python", "SQL", "推荐系统"},
-        )
-        self.assertEqual(skill_routes[0]["field"], "skills_vector")
-        self.assertIn("projects_vector", [route["field"] for route in skill_routes])
+    def test_resume_evidence_docs_are_chunked_and_semantic_cleaned(self) -> None:
+        doc = {
+            "resume_id": "resume-1",
+            "application": {
+                "candidate_no": "M0001",
+                "position_code": "A0001",
+                "position_name": "机器学习工程师",
+                "expected_work_cities": ["北京"],
+            },
+            "candidate": {
+                "name": "张三",
+                "school": "北京大学",
+                "current_city": "北京",
+                "highest_degree": "本科",
+                "major": "人工智能",
+                "years_experience": 0.8,
+            },
+            "skills": ["Python", "推荐系统"],
+            "education": [
+                {
+                    "school": "北京大学",
+                    "college": "计算机学院",
+                    "major": "人工智能",
+                    "research_direction": "自然语言处理",
+                }
+            ],
+            "internships": [
+                {
+                    "company": "百度在线网络技术",
+                    "department": "搜索策略组",
+                    "title": "算法实习生",
+                    "description": "在百度在线网络技术北京团队负责推荐系统召回实验。",
+                }
+            ],
+            "projects": [
+                {
+                    "name": "推荐系统召回项目",
+                    "description": "构建推荐系统召回链路。",
+                    "responsibility": "负责 NLP 特征和离线评估。",
+                }
+            ],
+        }
 
-        project_routes = _infer_dense_routes(
-            "做过推荐系统召回和 NLP 模型落地的人",
-            {"推荐系统", "NLP"},
+        evidence_docs = _resume_evidence_docs(doc)
+        section_types = {item["section_type"] for item in evidence_docs}
+        vector_text = "\n".join(
+            item["text"]
+            for item in evidence_docs
+            if item["section_type"] != "profile"
         )
-        self.assertEqual(project_routes[0]["field"], "projects_vector")
-        self.assertIn("skills_vector", [route["field"] for route in project_routes])
+        profile_docs = [item for item in evidence_docs if item["section_type"] == "profile"]
 
-        role_like_routes = _infer_dense_routes(
-            "机器学习工程师 Python 推荐系统",
-            {"Python", "推荐系统"},
-        )
-        role_like_fields = [route["field"] for route in role_like_routes]
-        self.assertNotIn("role_vector", role_like_fields)
-        self.assertIn("skills_vector", role_like_fields)
-        self.assertTrue(all(route["weight"] == 1.0 for route in role_like_routes))
-        self.assertTrue(all("priority" in route for route in role_like_routes))
+        self.assertEqual(section_types, {"profile", "skills", "project", "internship", "education"})
+        self.assertTrue(all(item["resume_id"] == "resume-1" for item in evidence_docs))
+        self.assertNotIn("北京大学", vector_text)
+        self.assertNotIn("百度在线网络技术", vector_text)
+        self.assertIn("推荐系统召回", vector_text)
+        self.assertIn("自然语言处理", vector_text)
+        self.assertEqual(len(profile_docs), 1)
+        self.assertIn("北京大学", profile_docs[0]["text"])
+        self.assertIn("机器学习工程师", profile_docs[0]["text"])
+        self.assertNotIn(EVIDENCE_VECTOR_FIELD, profile_docs[0])
 
     def test_skill_filters_are_and_terms(self) -> None:
         filters = _build_filters("", [], ["Python", "NLP", "Python"], 0)
@@ -513,6 +685,16 @@ class SearchLogicTests(unittest.TestCase):
         self.assertIn("application.company", query_json)
         self.assertIn("application.wishes", query_json)
 
+    def test_evidence_lexical_query_covers_profile_fields(self) -> None:
+        query_json = json.dumps(_evidence_lexical_query("A0009"), ensure_ascii=False)
+
+        self.assertIn("application.candidate_no", query_json)
+        self.assertIn("application.position_code", query_json)
+        self.assertIn("candidate.name.keyword", query_json)
+        self.assertIn("candidate.school.keyword", query_json)
+        self.assertIn("application.company", query_json)
+        self.assertIn("evidence_exact:position_code", query_json)
+
     def test_lexical_query_prioritizes_exact_major_and_phrase_evidence(self) -> None:
         query_json = json.dumps(_lexical_query("计算机科学"), ensure_ascii=False)
 
@@ -556,26 +738,57 @@ class SearchLogicTests(unittest.TestCase):
             total=125,
         )
         vector_response = _response(
-            DENSE_RETRIEVER,
+            EVIDENCE_DENSE_RETRIEVER,
             [
                 _hit("vector-1", "向量第一"),
             ],
         )
 
         self.assertEqual(_lexical_total([bm25_response, vector_response]), 125)
-        self.assertEqual(_hybrid_total([bm25_response, vector_response], allow_dense_only=True), 2)
+        self.assertEqual(_hybrid_total([bm25_response, vector_response]), 2)
+
+    def test_lexical_total_deduplicates_candidate_and_evidence_sources(self) -> None:
+        bm25_response = _response(
+            BM25_RETRIEVER,
+            [
+                _hit("candidate-1", "候选人一"),
+                _hit("candidate-2", "候选人二"),
+            ],
+            total=125,
+        )
+        evidence_response = _response(
+            EVIDENCE_RETRIEVER,
+            [
+                _evidence_hit(
+                    "candidate-1:project:1",
+                    "candidate-1",
+                    "推荐系统",
+                    "项目职责：负责推荐系统召回。",
+                ),
+                _evidence_hit(
+                    "candidate-3:project:1",
+                    "candidate-3",
+                    "NLP 系统",
+                    "项目职责：负责 NLP 模型落地。",
+                ),
+            ],
+            total=80,
+        )
+
+        self.assertEqual(_lexical_total([bm25_response, evidence_response]), 3)
 
     def test_index_mapping_records_embedding_contract(self) -> None:
         meta = INDEX_BODY["mappings"]["_meta"]
 
-        self.assertEqual(meta["embedding_vector_dims"], VECTOR_DIMS)
+        self.assertEqual(meta["index_role"], "candidate_profile")
         self.assertEqual(meta["semantic_profile_version"], SEMANTIC_PROFILE_VERSION)
-        self.assertEqual(meta["embedding_normalized"], EMBEDDING_NORMALIZED)
-        self.assertEqual(tuple(meta["embedding_vector_fields"]), VECTOR_FIELDS)
-        self.assertIn("embedding", INDEX_BODY["mappings"]["properties"])
+        self.assertEqual(meta["embedding_vector_fields"], [])
         props = INDEX_BODY["mappings"]["properties"]
-        for field in VECTOR_FIELDS:
-            self.assertIn(field, props)
+        self.assertNotIn("embedding", props)
+        self.assertNotIn("skills_vector", props)
+        self.assertNotIn("projects_vector", props)
+        self.assertNotIn("internships_vector", props)
+        self.assertNotIn("education_vector", props)
         self.assertNotIn("semantic_profile_vector", props)
         self.assertNotIn("role_vector", props)
         self.assertIn("keyword", props["candidate"]["properties"]["major"]["fields"])
@@ -584,6 +797,22 @@ class SearchLogicTests(unittest.TestCase):
         self.assertIn("phrase", props["education"]["properties"]["major"]["fields"])
         self.assertIn("keyword", props["projects"]["properties"]["name"]["fields"])
         self.assertIn("phrase", props["projects"]["properties"]["name"]["fields"])
+        evidence_meta = EVIDENCE_INDEX_BODY["mappings"]["_meta"]
+        self.assertEqual(evidence_meta["embedding_vector_dims"], VECTOR_DIMS)
+        self.assertEqual(evidence_meta["semantic_profile_version"], SEMANTIC_PROFILE_VERSION)
+        self.assertEqual(evidence_meta["embedding_normalized"], EMBEDDING_NORMALIZED)
+        self.assertEqual(evidence_meta["embedding_vector_fields"], [EVIDENCE_VECTOR_FIELD])
+        self.assertEqual(
+            evidence_meta["vectorized_section_types"],
+            ["education", "internship", "project", "skills"],
+        )
+        evidence_props = EVIDENCE_INDEX_BODY["mappings"]["properties"]
+        self.assertIn(EVIDENCE_VECTOR_FIELD, evidence_props)
+        self.assertIn("embedding", evidence_props)
+        self.assertIn("phrase", evidence_props["text"]["fields"])
+        self.assertIn("keyword", evidence_props["title"]["fields"])
+        self.assertIn("name", evidence_props["candidate"]["properties"])
+        self.assertIn("company", evidence_props["application"]["properties"])
 
 
 def _response(
@@ -618,6 +847,34 @@ def _hit(
             "projects": [],
             "internships": [],
             "skills": [],
+        },
+    }
+    if matched_queries is not None:
+        hit["matched_queries"] = matched_queries
+    return hit
+
+
+def _evidence_hit(
+    evidence_id: str,
+    resume_id: str,
+    title: str,
+    text: str,
+    score: float = 1.0,
+    matched_queries: list[str] | None = None,
+) -> dict:
+    section_type = evidence_id.split(":")[1]
+    hit = {
+        "_id": evidence_id,
+        "_score": score,
+        "_source": {
+            "evidence_id": evidence_id,
+            "resume_id": resume_id,
+            "section_type": section_type,
+            "title": title,
+            "text": text,
+        },
+        "highlight": {
+            "text": [text.replace("推荐系统", "<mark>推荐系统</mark>")]
         },
     }
     if matched_queries is not None:
