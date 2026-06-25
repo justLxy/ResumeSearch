@@ -691,8 +691,8 @@ class SearchLogicTests(unittest.TestCase):
         self.assertIn("application.candidate_no", query_json)
         self.assertIn("application.position_code", query_json)
         self.assertIn("candidate.name.keyword", query_json)
-        self.assertIn("candidate.school.keyword", query_json)
-        self.assertIn("application.company", query_json)
+        self.assertIn("candidate.all_schools.keyword", query_json)
+        self.assertIn("candidate.major.keyword", query_json)
         self.assertIn("evidence_exact:position_code", query_json)
 
     def test_lexical_query_prioritizes_exact_major_and_phrase_evidence(self) -> None:

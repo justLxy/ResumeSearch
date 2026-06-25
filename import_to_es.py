@@ -505,6 +505,19 @@ EVIDENCE_INDEX_BODY: dict[str, Any] = {
                             },
                         },
                     },
+                    "all_schools": {
+                        "type": "text",
+                        "analyzer": "resume_text",
+                        "search_analyzer": "resume_search",
+                        "fields": {
+                            "keyword": {"type": "keyword"},
+                            "phrase": {
+                                "type": "text",
+                                "analyzer": "resume_search",
+                                "search_analyzer": "resume_search",
+                            },
+                        },
+                    },
                     "phone": {"type": "keyword"},
                     "email": {"type": "keyword"},
                 }
@@ -785,6 +798,17 @@ def _evidence_doc(
     resume_id = str(doc.get("resume_id") or "").strip()
     candidate = doc.get("candidate") or {}
     application = doc.get("application") or {}
+    
+    # Extract all schools from education history
+    all_schools = []
+    if candidate.get("school"):
+        all_schools.append(str(candidate.get("school")).strip())
+    for edu in doc.get("education") or []:
+        if isinstance(edu, dict) and edu.get("school"):
+            school_name = str(edu.get("school")).strip()
+            if school_name and school_name not in all_schools:
+                all_schools.append(school_name)
+                
     evidence = {
         "evidence_id": f"{resume_id}:{section_type}:{ordinal}",
         "resume_id": resume_id,
@@ -800,6 +824,7 @@ def _evidence_doc(
             "years_experience": candidate.get("years_experience"),
             "major": candidate.get("major"),
             "school": candidate.get("school"),
+            "all_schools": all_schools,
             "phone": candidate.get("phone"),
             "email": candidate.get("email"),
         },

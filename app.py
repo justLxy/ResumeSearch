@@ -514,14 +514,14 @@ def _evidence_lexical_query(query_text: str) -> dict[str, Any]:
                 _term_query("candidate.phone", query_text, 45, "evidence_exact:candidate_phone"),
                 _term_query("candidate.email", query_text, 45, "evidence_exact:candidate_email"),
                 _term_query("skills", query_text, 40, "evidence_exact:skills"),
-                _term_query("candidate.school.keyword", query_text, 36, "evidence_exact:candidate_school"),
+                _term_query("candidate.all_schools.keyword", query_text, 36, "evidence_exact:candidate_school"),
                 _term_query("candidate.major.keyword", query_text, 34, "evidence_exact:candidate_major"),
                 _term_query("application.company", query_text, 30, "evidence_exact:application_company"),
                 _term_query("application.position_name.keyword", query_text, 30, "evidence_exact:position_name"),
                 _term_query("candidate.highest_degree", normalized_degree, 15, "evidence_exact:highest_degree"),
                 _term_query("title.keyword", query_text, 18, "evidence_exact:title"),
                 _match_phrase_query("candidate.major.phrase", query_text, 24, "evidence_phrase:candidate_major"),
-                _match_phrase_query("candidate.school.phrase", query_text, 18, "evidence_phrase:candidate_school"),
+                _match_phrase_query("candidate.all_schools.phrase", query_text, 18, "evidence_phrase:candidate_school"),
                 _match_phrase_query(
                     "application.position_name.phrase",
                     query_text,
@@ -536,7 +536,7 @@ def _evidence_lexical_query(query_text: str) -> dict[str, Any]:
                         "query": query_text,
                         "fields": [
                             "candidate.name^4",
-                            "candidate.school^3",
+                            "candidate.all_schools^3",
                             "candidate.major^4",
                             "application.position_name^4",
                             "title^5",
@@ -554,7 +554,7 @@ def _evidence_lexical_query(query_text: str) -> dict[str, Any]:
                         "query": query_text,
                         "fields": [
                             "candidate.name^4",
-                            "candidate.school^3",
+                            "candidate.all_schools^3",
                             "candidate.major^4",
                             "application.position_name^4",
                             "title^5",
@@ -1524,11 +1524,10 @@ def _evidence_match_debug(
         "evidence_id": source.get("evidence_id"),
         "section_type": source.get("section_type"),
         "title": source.get("title"),
-        "snippet": _evidence_snippet(hit),
+        "snippet": _evidence_snippet(hit, retriever_name),
     }
 
-
-def _evidence_snippet(hit: dict[str, Any]) -> str:
+def _evidence_snippet(hit: dict[str, Any], retriever_name: str | None = None) -> str:
     highlight = hit.get("highlight") or {}
     snippets: list[str] = []
     
@@ -1574,7 +1573,9 @@ def _evidence_snippet(hit: dict[str, Any]) -> str:
     else:
         raw = f"{title}：{text}" if title else text
     escaped_raw = html.escape(raw[:100] + ("..." if len(raw) > 100 else ""))
-    return f'<span class="snippet-label dense-label">Dense 匹配</span> {escaped_raw}'
+    if retriever_name and _is_dense_retriever(retriever_name):
+        return f'<span class="snippet-label dense-label">Dense 匹配</span> {escaped_raw}'
+    return f'<span class="snippet-label">相关片段</span> {escaped_raw}'
 
 def _matched_term_coverage(hit: dict[str, Any]) -> int:
     matched_queries = hit.get("matched_queries") or []
