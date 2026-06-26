@@ -274,8 +274,15 @@ class SearchLogicTests(unittest.TestCase):
                     "resume-1",
                     "推荐系统召回项目",
                     "项目职责：负责推荐系统召回和 NLP 模型落地。",
-                    matched_queries=["evidence_phrase:text:W10"],
-                )
+                    matched_queries=["evidence_phrase:text:W10", "evidence_term:all_terms:W4"],
+                ),
+                _evidence_hit(
+                    "resume-1:internship:1",
+                    "resume-1",
+                    "推荐系统排序实习",
+                    "实习描述：负责召回策略。",
+                    matched_queries=["evidence_phrase:title:W12", "evidence_term:all_terms:W4"],
+                ),
             ],
             weight=1.2,
         )
@@ -292,7 +299,14 @@ class SearchLogicTests(unittest.TestCase):
             results[0]["retrieval_debug"]["evidence_matches"][0]["section_type"],
             "project",
         )
-        self.assertEqual(results[0]["retrieval_debug"]["matched_queries"], ["evidence_phrase:text:W10"])
+        self.assertEqual(
+            results[0]["retrieval_debug"]["matched_queries"],
+            [
+                "evidence_phrase:text:W10",
+                "evidence_term:all_terms:W4",
+                "evidence_phrase:title:W12",
+            ],
+        )
         self.assertEqual(results[0]["retrieval_debug"]["lexical_tier"], 2)
         self.assertIn("<mark>推荐系统</mark>", results[0]["project_snippet"])
         self.assertIn("召回", results[0]["project_snippet"])

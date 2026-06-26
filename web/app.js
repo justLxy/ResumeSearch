@@ -435,7 +435,7 @@ function renderResults() {
 
             ${debug.matched_queries && debug.matched_queries.length ? `
             <div class="debug-group queries-group">
-              <div class="debug-title">关键词与字段命中详情</div>
+              <div class="debug-title">候选人聚合命中详情</div>
               <div class="debug-list">
                 ${debug.term_coverage !== undefined ? `<div class="debug-item"><span class="debug-label">Term 覆盖：</span> <span class="debug-value">${debug.term_coverage}</span></div>` : ''}
                 <div class="debug-item"><span class="debug-label">匹配层级：</span> <span class="debug-value tier-${debug.lexical_tier || 0}">${debug.lexical_tier || 0} <span class="tier-desc">(${debug.lexical_tier === 3 ? '完全匹配' : debug.lexical_tier === 2 ? '短语部分匹配' : '普通匹配'})</span></span></div>

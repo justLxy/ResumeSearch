@@ -1042,7 +1042,10 @@ def _rrf_merge(
                     if EVIDENCE_RETRIEVER not in debug["retrieval_sources"]:
                         debug["retrieval_sources"].append(EVIDENCE_RETRIEVER)
                     debug["evidence_weight"] = round(weight, 3)
-                    debug["matched_queries"] = hit.get("matched_queries") or []
+                    debug["matched_queries"] = _merge_matched_queries(
+                        debug.get("matched_queries") or [],
+                        hit.get("matched_queries") or [],
+                    )
                     lexical_tier[doc_id] = max(
                         lexical_tier.get(doc_id, 0),
                         _matched_lexical_tier(hit),
@@ -1307,6 +1310,17 @@ def _matched_term_coverage(hit: dict[str, Any]) -> int:
             if isinstance(query_name, str) and query_name.startswith(COVERAGE_QUERY_PREFIX)
         }
     )
+
+
+def _merge_matched_queries(existing: list[Any], incoming: list[Any]) -> list[str]:
+    merged: list[str] = []
+    seen: set[str] = set()
+    for query_name in [*existing, *incoming]:
+        if not isinstance(query_name, str) or query_name in seen:
+            continue
+        merged.append(query_name)
+        seen.add(query_name)
+    return merged
 
 
 def _matched_lexical_tier(hit: dict[str, Any]) -> int:
