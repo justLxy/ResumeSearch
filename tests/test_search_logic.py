@@ -6,16 +6,20 @@ from app import (
     DENSE_RETRIEVER,
     EVIDENCE_DENSE_RETRIEVER,
     EVIDENCE_RETRIEVER,
+    INTENT_ENTITY,
+    INTENT_SEMANTIC,
+    INTENT_SKILL_COMBO,
+    INTENT_STRUCTURED,
     _build_filters,
     _default_snippet,
     _evidence_lexical_query,
     _format_hit,
     _hybrid_total,
-    _lexical_query,
     _lexical_total,
     _merge_case_insensitive_skill_buckets,
     _normalize_limit,
     _parse_query_constraints,
+    _plan_query,
     _rrf_merge,
     _run_hybrid_search,
     _use_dense,
@@ -260,7 +264,7 @@ class SearchLogicTests(unittest.TestCase):
             EVIDENCE_RETRIEVER,
             [
                 _hit("split-and-dense", "计算机 与 科学", matched_queries=["query_term:0"]),
-                _hit("phrase", "计算机科学", matched_queries=["lexical_phrase:candidate_major"]),
+                _hit("phrase", "计算机科学", matched_queries=["evidence_phrase:candidate_major"]),
             ],
         )
         vector_response = _response(
@@ -284,8 +288,8 @@ class SearchLogicTests(unittest.TestCase):
         lexical_response = _response(
             EVIDENCE_RETRIEVER,
             [
-                _hit("major-phrase", "专业短语", matched_queries=["lexical_phrase:candidate_major"]),
-                _hit("weak-field-phrase", "弱字段短语", matched_queries=["lexical_phrase:section_education"]),
+                _hit("major-phrase", "专业短语", matched_queries=["evidence_phrase:candidate_major"]),
+                _hit("weak-field-phrase", "弱字段短语", matched_queries=["evidence_phrase:section_education"]),
             ],
         )
         vector_response = _response(
@@ -676,13 +680,75 @@ class SearchLogicTests(unittest.TestCase):
         self.assertEqual(parsed["query_text"], "推荐系统 NLP SQL")
         self.assertEqual(parsed["filters"], [])
 
-    def test_lexical_query_covers_exact_recruiting_fields(self) -> None:
-        query_json = json.dumps(_lexical_query("A0009"), ensure_ascii=False)
+    def test_query_plan_routes_structured_query_without_rerank(self) -> None:
+        plan = _plan_query(
+            "0.5年以上 北京 本科 推荐系统",
+            [],
+            size=10,
+            facets={
+                "degrees": [{"key": "本科"}],
+                "cities": [{"key": "北京"}],
+                "skills": [{"key": "推荐系统"}],
+            },
+        )
 
-        self.assertIn("application.candidate_no", query_json)
-        self.assertIn("application.position_code", query_json)
-        self.assertIn("application.company", query_json)
-        self.assertIn("application.wishes", query_json)
+        self.assertEqual(plan.intent, INTENT_STRUCTURED)
+        self.assertEqual(plan.lexical_query, "推荐系统")
+        self.assertEqual(plan.semantic_query, "推荐系统")
+        self.assertTrue(plan.enable_dense)
+        self.assertFalse(plan.enable_rerank)
+        self.assertEqual(plan.must_terms, ["推荐系统"])
+        self.assertIn({"term": {"skills": "推荐系统"}}, plan.filters)
+
+    def test_query_plan_routes_skill_combo_as_broad_hybrid_query(self) -> None:
+        plan = _plan_query(
+            "推荐系统 NLP SQL",
+            [],
+            size=10,
+            facets={
+                "degrees": [{"key": "本科"}],
+                "cities": [{"key": "北京"}],
+                "skills": [{"key": "推荐系统"}, {"key": "NLP"}, {"key": "SQL"}],
+            },
+        )
+
+        self.assertEqual(plan.intent, INTENT_SKILL_COMBO)
+        self.assertEqual(plan.filters, [])
+        self.assertEqual(plan.must_terms, ["推荐系统", "NLP", "SQL"])
+        self.assertTrue(plan.enable_dense)
+
+    def test_query_plan_disables_dense_for_entity_queries(self) -> None:
+        plan = _plan_query(
+            "北京大学",
+            [],
+            size=10,
+            facets={
+                "degrees": [{"key": "本科"}],
+                "cities": [{"key": "北京"}],
+                "skills": [{"key": "Python"}],
+            },
+        )
+
+        self.assertEqual(plan.intent, INTENT_ENTITY)
+        self.assertEqual(plan.must_terms, ["北京大学"])
+        self.assertFalse(plan.enable_dense)
+
+    def test_query_plan_routes_natural_language_to_semantic(self) -> None:
+        plan = _plan_query(
+            "做过推荐系统召回和 NLP 模型落地的人",
+            [],
+            size=10,
+            facets={
+                "degrees": [{"key": "本科"}],
+                "cities": [{"key": "北京"}],
+                "skills": [{"key": "NLP"}],
+            },
+        )
+
+        self.assertEqual(plan.intent, INTENT_SEMANTIC)
+        self.assertEqual(plan.must_terms, [])
+        self.assertTrue(plan.enable_dense)
+        self.assertFalse(plan.enable_rerank)
 
     def test_evidence_lexical_query_covers_profile_fields(self) -> None:
         query_json = json.dumps(_evidence_lexical_query("A0009"), ensure_ascii=False)
@@ -693,40 +759,6 @@ class SearchLogicTests(unittest.TestCase):
         self.assertIn("candidate.all_schools.keyword", query_json)
         self.assertIn("candidate.major.keyword", query_json)
         self.assertIn("evidence_exact:position_code", query_json)
-
-    def test_lexical_query_prioritizes_exact_major_and_phrase_evidence(self) -> None:
-        query_json = json.dumps(_lexical_query("计算机科学"), ensure_ascii=False)
-
-        self.assertIn("candidate.major.keyword", query_json)
-        self.assertIn("education.major.keyword", query_json)
-        self.assertIn("projects.name.keyword", query_json)
-        self.assertIn("candidate.major.phrase", query_json)
-        self.assertIn("education.major.phrase", query_json)
-        self.assertIn("lexical_exact:candidate_major", query_json)
-        self.assertIn("lexical_phrase:candidate_major", query_json)
-        self.assertIn("lexical_phrase:education_major", query_json)
-        self.assertIn('"operator": "and"', query_json)
-
-    def test_lexical_query_adds_named_term_coverage_for_multi_term_queries(self) -> None:
-        single_term_json = json.dumps(_lexical_query("A"), ensure_ascii=False)
-        multi_term_json = json.dumps(_lexical_query("A B"), ensure_ascii=False)
-
-        self.assertNotIn("query_term:0", single_term_json)
-        self.assertIn("constant_score", multi_term_json)
-        self.assertIn("query_term:0", multi_term_json)
-        self.assertIn("query_term:1", multi_term_json)
-
-    def test_term_coverage_does_not_act_as_primary_recall_clause(self) -> None:
-        query = _lexical_query("A B")
-        bool_query = query["bool"]
-
-        self.assertIn("must", bool_query)
-        self.assertIn("should", bool_query)
-        scoring_query_json = json.dumps(bool_query["must"], ensure_ascii=False)
-        coverage_query_json = json.dumps(bool_query["should"], ensure_ascii=False)
-
-        self.assertNotIn("query_term:0", scoring_query_json)
-        self.assertIn("query_term:0", coverage_query_json)
 
     def test_lexical_total_counts_evidence_candidate_window(self) -> None:
         evidence_response = _response(

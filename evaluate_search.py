@@ -4,6 +4,7 @@ import argparse
 import json
 import math
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from statistics import mean
 from typing import Any
@@ -22,6 +23,21 @@ class EvalCase:
     relevant_ids: set[str]
     forbidden_ids: set[str]
     expect_empty: bool
+
+
+@dataclass(frozen=True)
+class SkippedCase:
+    case_id: str
+    line_no: int
+    query: str
+    case_type: str
+    reason: str
+
+
+@dataclass(frozen=True)
+class EvalCaseSet:
+    cases: list[EvalCase]
+    skipped: list[SkippedCase]
 
 
 @dataclass(frozen=True)
@@ -44,35 +60,45 @@ def main() -> None:
     )
     parser.add_argument("--qrels", default="eval_queries.jsonl", help="JSONL qrels file.")
     parser.add_argument("--limit", type=int, default=10, help="Search result window.")
+    parser.add_argument("--output", help="Write the full evaluation report as JSON.")
+    parser.add_argument("--compare-to", help="Compare this run with a previous JSON report.")
     parser.add_argument(
         "--details",
         action="store_true",
         help="Print per-query result ids.",
     )
-    parser.add_argument(
-        "--type-summary",
-        action="store_true",
-        help="Print metrics grouped by eval case type.",
-    )
     args = parser.parse_args()
 
-    cases = load_cases(Path(args.qrels))
+    case_set = load_cases(Path(args.qrels))
+    cases = case_set.cases
     if not cases:
         raise SystemExit(f"No eval cases found in {args.qrels}")
 
     client = TestClient(search_app.app)
     results = [evaluate_case(client, case, args.limit) for case in cases]
-    summary = summarize(results)
+    report = build_report(
+        results,
+        qrels_path=args.qrels,
+        limit=args.limit,
+        skipped_cases=case_set.skipped,
+    )
 
-    print_summary_table(summary)
-    if args.type_summary:
-        print_type_summary(results)
+    print_summary_table(report["overall"])
+    print_type_summary(report)
+    if case_set.skipped:
+        print_skipped_cases(case_set.skipped)
     if args.details:
         print_details(results)
+    if args.output:
+        write_report(report, Path(args.output))
+    if args.compare_to:
+        previous = load_report(Path(args.compare_to))
+        print_comparison_report(compare_reports(report, previous), Path(args.compare_to))
 
 
-def load_cases(path: Path) -> list[EvalCase]:
+def load_cases(path: Path) -> EvalCaseSet:
     cases: list[EvalCase] = []
+    skipped: list[SkippedCase] = []
     for line_no, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
         if not line.strip():
             continue
@@ -92,6 +118,17 @@ def load_cases(path: Path) -> list[EvalCase]:
         if raw.get("expect_empty") and relevant_ids:
             raise ValueError(f"{path}:{line_no} expects empty results but has relevant ids")
         if not raw.get("expect_empty") and not relevant_ids:
+            if "relevant_es_query" in raw and not raw.get("relevant_ids"):
+                skipped.append(
+                    SkippedCase(
+                        case_id=case_id,
+                        line_no=line_no,
+                        query=raw["query"],
+                        case_type=raw.get("type", "unknown"),
+                        reason="relevant_es_query matched no documents in current index",
+                    )
+                )
+                continue
             raise ValueError(f"{path}:{line_no} has no relevant ids")
 
         cases.append(
@@ -104,7 +141,7 @@ def load_cases(path: Path) -> list[EvalCase]:
                 expect_empty=bool(raw.get("expect_empty", False)),
             )
         )
-    return cases
+    return EvalCaseSet(cases=cases, skipped=skipped)
 
 
 def fetch_ids(query: dict[str, Any]) -> set[str]:
@@ -178,6 +215,30 @@ def _hits_at(returned_ids: list[str], relevant_ids: set[str], k: int) -> int:
     return sum(1 for doc_id in returned_ids[:k] if doc_id in relevant_ids)
 
 
+def build_report(
+    results: list[QueryResult],
+    *,
+    qrels_path: str,
+    limit: int,
+    skipped_cases: list[SkippedCase] | None = None,
+) -> dict[str, Any]:
+    skipped_cases = skipped_cases or []
+    return {
+        "meta": {
+            "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "qrels": qrels_path,
+            "limit": limit,
+            "index_alias": search_app.INDEX_ALIAS,
+            "evidence_index_alias": search_app.EVIDENCE_INDEX_ALIAS,
+            "skipped": len(skipped_cases),
+        },
+        "overall": summarize(results),
+        "by_type": summarize_by_type(results),
+        "details": [result_to_detail(result) for result in results],
+        "skipped": [skipped_case_to_detail(case) for case in skipped_cases],
+    }
+
+
 def summarize(results: list[QueryResult]) -> dict[str, Any]:
     judged = [result for result in results if result.case.relevant_ids]
     empty_cases = [result for result in results if result.empty_success is not None]
@@ -199,10 +260,121 @@ def summarize(results: list[QueryResult]) -> dict[str, Any]:
     }
 
 
+def summarize_by_type(results: list[QueryResult]) -> dict[str, dict[str, Any]]:
+    grouped: dict[str, list[QueryResult]] = {}
+    for result in results:
+        grouped.setdefault(result.case.case_type, []).append(result)
+    return {
+        case_type: summarize(rows)
+        for case_type, rows in sorted(grouped.items())
+    }
+
+
+def result_to_detail(result: QueryResult) -> dict[str, Any]:
+    return {
+        "id": result.case.case_id,
+        "type": result.case.case_type,
+        "query": result.case.query,
+        "returned_ids": result.returned_ids,
+        "relevant_hits_at_10": [
+            doc_id for doc_id in result.returned_ids[:10] if doc_id in result.case.relevant_ids
+        ],
+        "forbidden_hits_at_10": [
+            doc_id for doc_id in result.returned_ids[:10] if doc_id in result.case.forbidden_ids
+        ],
+        "p5": result.precision_at_5,
+        "p10": result.precision_at_10,
+        "r5": result.recall_at_5,
+        "r10": result.recall_at_10,
+        "mrr10": result.mrr_at_10,
+        "ndcg10": result.ndcg_at_10,
+        "forbidden10": result.forbidden_at_10,
+        "empty_success": result.empty_success,
+    }
+
+
+def skipped_case_to_detail(case: SkippedCase) -> dict[str, Any]:
+    return {
+        "id": case.case_id,
+        "line_no": case.line_no,
+        "type": case.case_type,
+        "query": case.query,
+        "reason": case.reason,
+    }
+
+
 def _mean_metric(results: list[QueryResult], attr: str) -> float:
     if not results:
         return 0.0
     return mean(float(getattr(result, attr)) for result in results)
+
+
+def write_report(report: dict[str, Any], path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+
+def load_report(path: Path) -> dict[str, Any]:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict) or "overall" not in payload:
+        raise ValueError(f"{path} is not an evaluation report JSON")
+    return payload
+
+
+COMPARISON_METRICS = (
+    "p5",
+    "p10",
+    "r5",
+    "r10",
+    "mrr10",
+    "ndcg10",
+    "empty_accuracy",
+    "forbidden10",
+)
+
+
+def compare_reports(current: dict[str, Any], previous: dict[str, Any]) -> dict[str, Any]:
+    current_by_type = current.get("by_type") or {}
+    previous_by_type = previous.get("by_type") or {}
+    case_types = sorted(set(current_by_type) | set(previous_by_type))
+    return {
+        "overall": compare_summary(current.get("overall") or {}, previous.get("overall") or {}),
+        "by_type": {
+            case_type: compare_summary(
+                current_by_type.get(case_type) or {},
+                previous_by_type.get(case_type) or {},
+            )
+            for case_type in case_types
+        },
+    }
+
+
+def compare_summary(current: dict[str, Any], previous: dict[str, Any]) -> dict[str, Any]:
+    comparison: dict[str, Any] = {
+        "queries": {
+            "previous": previous.get("queries", 0),
+            "current": current.get("queries", 0),
+            "delta": (current.get("queries", 0) or 0) - (previous.get("queries", 0) or 0),
+        }
+    }
+    for metric in COMPARISON_METRICS:
+        previous_value = previous.get(metric)
+        current_value = current.get(metric)
+        comparison[metric] = {
+            "previous": previous_value,
+            "current": current_value,
+            "delta": _metric_delta(current_value, previous_value),
+        }
+    return comparison
+
+
+def _metric_delta(current_value: Any, previous_value: Any) -> float | None:
+    if current_value is None or previous_value is None:
+        return None
+    return float(current_value) - float(previous_value)
 
 
 def print_summary_table(row: dict[str, Any]) -> None:
@@ -225,32 +397,58 @@ def print_summary_table(row: dict[str, Any]) -> None:
     )
 
 
-def print_type_summary(results: list[QueryResult]) -> None:
-    grouped: dict[str, list[QueryResult]] = {}
-    for result in results:
-        grouped.setdefault(result.case.case_type, []).append(result)
-
+def print_type_summary(report: dict[str, Any]) -> None:
     print("\nType summary")
     print("type                    queries judged P@5   R@10  NDCG@10 empty_acc forbidden@10")
-    for case_type in sorted(grouped):
-        rows = grouped[case_type]
-        judged = [row for row in rows if row.case.relevant_ids]
-        empty_cases = [row for row in rows if row.empty_success is not None]
-        empty = (
-            mean(1.0 if row.empty_success else 0.0 for row in empty_cases)
-            if empty_cases
-            else None
-        )
+    for case_type, row in (report.get("by_type") or {}).items():
+        empty = row.get("empty_accuracy")
         print(
             f"{case_type:<23} "
-            f"{len(rows):>7} "
-            f"{len(judged):>6} "
-            f"{_mean_metric(judged, 'precision_at_5'):.3f} "
-            f"{_mean_metric(judged, 'recall_at_10'):.3f} "
-            f"{_mean_metric(judged, 'ndcg_at_10'):.3f} "
+            f"{row['queries']:>7} "
+            f"{row['judged']:>6} "
+            f"{row['p5']:.3f} "
+            f"{row['r10']:.3f} "
+            f"{row['ndcg10']:.3f} "
             f"{'-' if empty is None else f'{empty:.3f}':>9} "
-            f"{sum(row.forbidden_at_10 for row in rows):>12}"
+            f"{row['forbidden10']:>12}"
         )
+
+
+def print_skipped_cases(skipped: list[SkippedCase]) -> None:
+    print(f"\nSkipped {len(skipped)} eval cases")
+    grouped: dict[str, int] = {}
+    for case in skipped:
+        grouped[case.case_type] = grouped.get(case.case_type, 0) + 1
+    for case_type, count in sorted(grouped.items()):
+        print(f"- {case_type}: {count}")
+
+
+def print_comparison_report(comparison: dict[str, Any], previous_path: Path) -> None:
+    print(f"\nComparison vs {previous_path}")
+    print("scope                   queriesΔ NDCG@10Δ MRR@10Δ R@10Δ  emptyΔ  forbiddenΔ")
+    print_comparison_row("overall", comparison["overall"])
+    for case_type, row in (comparison.get("by_type") or {}).items():
+        print_comparison_row(case_type, row)
+
+
+def print_comparison_row(label: str, row: dict[str, Any]) -> None:
+    print(
+        f"{label:<23} "
+        f"{_format_delta(row['queries']['delta'], digits=0):>8} "
+        f"{_format_delta(row['ndcg10']['delta']):>8} "
+        f"{_format_delta(row['mrr10']['delta']):>7} "
+        f"{_format_delta(row['r10']['delta']):>6} "
+        f"{_format_delta(row['empty_accuracy']['delta']):>7} "
+        f"{_format_delta(row['forbidden10']['delta'], digits=0):>10}"
+    )
+
+
+def _format_delta(value: float | int | None, *, digits: int = 3) -> str:
+    if value is None:
+        return "-"
+    if digits == 0:
+        return f"{int(value):+d}"
+    return f"{float(value):+.{digits}f}"
 
 
 def print_details(results: list[QueryResult]) -> None:

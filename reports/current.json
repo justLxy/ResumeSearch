@@ -1,0 +1,1882 @@
+{
+  "by_type": {
+    "entity_major": {
+      "empty_accuracy": null,
+      "forbidden10": 0,
+      "judged": 1,
+      "mrr10": 1.0,
+      "ndcg10": 1.0,
+      "p10": 1.0,
+      "p5": 1.0,
+      "queries": 1,
+      "r10": 0.3448275862068966,
+      "r5": 0.1724137931034483
+    },
+    "entity_school": {
+      "empty_accuracy": null,
+      "forbidden10": 0,
+      "judged": 7,
+      "mrr10": 0.8333333333333334,
+      "ndcg10": 0.8758471076530654,
+      "p10": 0.18571428571428572,
+      "p5": 0.37142857142857144,
+      "queries": 7,
+      "r10": 1.0,
+      "r5": 1.0
+    },
+    "exact_code": {
+      "empty_accuracy": null,
+      "forbidden10": 0,
+      "judged": 10,
+      "mrr10": 1.0,
+      "ndcg10": 1.0,
+      "p10": 0.16,
+      "p5": 0.28,
+      "queries": 10,
+      "r10": 1.0,
+      "r5": 0.9714285714285714
+    },
+    "filter_position": {
+      "empty_accuracy": null,
+      "forbidden10": 0,
+      "judged": 3,
+      "mrr10": 1.0,
+      "ndcg10": 1.0,
+      "p10": 0.1,
+      "p5": 0.2,
+      "queries": 3,
+      "r10": 1.0,
+      "r5": 1.0
+    },
+    "filter_skill": {
+      "empty_accuracy": null,
+      "forbidden10": 0,
+      "judged": 2,
+      "mrr10": 1.0,
+      "ndcg10": 1.0,
+      "p10": 0.1,
+      "p5": 0.2,
+      "queries": 2,
+      "r10": 1.0,
+      "r5": 1.0
+    },
+    "natural_semantic": {
+      "empty_accuracy": null,
+      "forbidden10": 0,
+      "judged": 3,
+      "mrr10": 0.0,
+      "ndcg10": 0.0,
+      "p10": 0.0,
+      "p5": 0.0,
+      "queries": 3,
+      "r10": 0.0,
+      "r5": 0.0
+    },
+    "natural_semantic_auto": {
+      "empty_accuracy": null,
+      "forbidden10": 0,
+      "judged": 1,
+      "mrr10": 0.2,
+      "ndcg10": 0.38685280723454163,
+      "p10": 0.1,
+      "p5": 0.2,
+      "queries": 1,
+      "r10": 1.0,
+      "r5": 1.0
+    },
+    "negative_entity": {
+      "empty_accuracy": 0.0,
+      "forbidden10": 0,
+      "judged": 0,
+      "mrr10": 0.0,
+      "ndcg10": 0.0,
+      "p10": 0.0,
+      "p5": 0.0,
+      "queries": 4,
+      "r10": 0.0,
+      "r5": 0.0
+    },
+    "negative_semantic": {
+      "empty_accuracy": 0.0,
+      "forbidden10": 0,
+      "judged": 0,
+      "mrr10": 0.0,
+      "ndcg10": 0.0,
+      "p10": 0.0,
+      "p5": 0.0,
+      "queries": 5,
+      "r10": 0.0,
+      "r5": 0.0
+    },
+    "phrase_major": {
+      "empty_accuracy": null,
+      "forbidden10": 0,
+      "judged": 1,
+      "mrr10": 1.0,
+      "ndcg10": 1.0,
+      "p10": 1.0,
+      "p5": 1.0,
+      "queries": 1,
+      "r10": 0.3448275862068966,
+      "r5": 0.1724137931034483
+    },
+    "position": {
+      "empty_accuracy": null,
+      "forbidden10": 0,
+      "judged": 4,
+      "mrr10": 1.0,
+      "ndcg10": 0.9992969100493025,
+      "p10": 0.575,
+      "p5": 0.7,
+      "queries": 4,
+      "r10": 1.0,
+      "r5": 0.7638888888888888
+    },
+    "position_skill": {
+      "empty_accuracy": null,
+      "forbidden10": 0,
+      "judged": 1,
+      "mrr10": 1.0,
+      "ndcg10": 1.0,
+      "p10": 0.1,
+      "p5": 0.2,
+      "queries": 1,
+      "r10": 1.0,
+      "r5": 1.0
+    },
+    "skill_combo": {
+      "empty_accuracy": null,
+      "forbidden10": 0,
+      "judged": 1,
+      "mrr10": 1.0,
+      "ndcg10": 1.0,
+      "p10": 0.3,
+      "p5": 0.6,
+      "queries": 1,
+      "r10": 1.0,
+      "r5": 1.0
+    }
+  },
+  "details": [
+    {
+      "empty_success": null,
+      "forbidden10": 0,
+      "forbidden_hits_at_10": [],
+      "id": "entity_school_bjtu",
+      "mrr10": 1.0,
+      "ndcg10": 1.0,
+      "p10": 0.2,
+      "p5": 0.4,
+      "query": "北京交通大学",
+      "r10": 1.0,
+      "r5": 1.0,
+      "relevant_hits_at_10": [
+        "M20260022",
+        "M20260066"
+      ],
+      "returned_ids": [
+        "M20260022",
+        "M20260066"
+      ],
+      "type": "entity_school"
+    },
+    {
+      "empty_success": null,
+      "forbidden10": 0,
+      "forbidden_hits_at_10": [],
+      "id": "entity_school_bjuu",
+      "mrr10": 1.0,
+      "ndcg10": 1.0,
+      "p10": 0.1,
+      "p5": 0.2,
+      "query": "北京联合大学",
+      "r10": 1.0,
+      "r5": 1.0,
+      "relevant_hits_at_10": [
+        "M20260054"
+      ],
+      "returned_ids": [
+        "M20260054",
+        "M20260016",
+        "M20260002",
+        "M20260029",
+        "M20260031",
+        "M20260070",
+        "M20260032",
+        "M20260044",
+        "M20260056",
+        "M20260066"
+      ],
+      "type": "entity_school"
+    },
+    {
+      "empty_success": null,
+      "forbidden10": 0,
+      "forbidden_hits_at_10": [],
+      "id": "entity_school_bitur",
+      "mrr10": 1.0,
+      "ndcg10": 1.0,
+      "p10": 0.3,
+      "p5": 0.6,
+      "query": "北京理工大学",
+      "r10": 1.0,
+      "r5": 1.0,
+      "relevant_hits_at_10": [
+        "M20260031",
+        "M20260079",
+        "M20260094"
+      ],
+      "returned_ids": [
+        "M20260031",
+        "M20260079",
+        "M20260094",
+        "M20260084",
+        "M20260013",
+        "M20260024"
+      ],
+      "type": "entity_school"
+    },
+    {
+      "empty_success": null,
+      "forbidden10": 0,
+      "forbidden_hits_at_10": [],
+      "id": "entity_school_scutech",
+      "mrr10": 0.5,
+      "ndcg10": 0.6309297535714575,
+      "p10": 0.1,
+      "p5": 0.2,
+      "query": "华南理工大学",
+      "r10": 1.0,
+      "r5": 1.0,
+      "relevant_hits_at_10": [
+        "M20260074"
+      ],
+      "returned_ids": [
+        "M20260023",
+        "M20260074"
+      ],
+      "type": "entity_school"
+    },
+    {
+      "empty_success": null,
+      "forbidden10": 0,
+      "forbidden_hits_at_10": [],
+      "id": "entity_school_hdu",
+      "mrr10": 1.0,
+      "ndcg10": 1.0,
+      "p10": 0.2,
+      "p5": 0.4,
+      "query": "杭州电子科技大学",
+      "r10": 1.0,
+      "r5": 1.0,
+      "relevant_hits_at_10": [
+        "M20260010",
+        "M20260038"
+      ],
+      "returned_ids": [
+        "M20260010",
+        "M20260038",
+        "M20260080",
+        "M20260018",
+        "M20260093",
+        "M20260002",
+        "M20260003",
+        "M20260031",
+        "M20260089",
+        "M20260076"
+      ],
+      "type": "entity_school"
+    },
+    {
+      "empty_success": null,
+      "forbidden10": 0,
+      "forbidden_hits_at_10": [],
+      "id": "entity_school_scuec",
+      "mrr10": 0.3333333333333333,
+      "ndcg10": 0.5,
+      "p10": 0.1,
+      "p5": 0.2,
+      "query": "哈尔滨工业大学",
+      "r10": 1.0,
+      "r5": 1.0,
+      "relevant_hits_at_10": [
+        "M20260062"
+      ],
+      "returned_ids": [
+        "M20260083",
+        "M20260005",
+        "M20260062"
+      ],
+      "type": "entity_school"
+    },
+    {
+      "empty_success": null,
+      "forbidden10": 0,
+      "forbidden_hits_at_10": [],
+      "id": "entity_school_ecnu",
+      "mrr10": 1.0,
+      "ndcg10": 1.0,
+      "p10": 0.3,
+      "p5": 0.6,
+      "query": "电子科技大学",
+      "r10": 1.0,
+      "r5": 1.0,
+      "relevant_hits_at_10": [
+        "M20260018",
+        "M20260080",
+        "M20260093"
+      ],
+      "returned_ids": [
+        "M20260018",
+        "M20260080",
+        "M20260093",
+        "M20260002",
+        "M20260010",
+        "M20260003",
+        "M20260031",
+        "M20260089",
+        "M20260076",
+        "M20260038"
+      ],
+      "type": "entity_school"
+    },
+    {
+      "empty_success": false,
+      "forbidden10": 0,
+      "forbidden_hits_at_10": [],
+      "id": "negative_school_peking",
+      "mrr10": 0.0,
+      "ndcg10": 0.0,
+      "p10": 0.0,
+      "p5": 0.0,
+      "query": "北京大学",
+      "r10": 0.0,
+      "r5": 0.0,
+      "relevant_hits_at_10": [],
+      "returned_ids": [
+        "M20260016",
+        "M20260070"
+      ],
+      "type": "negative_entity"
+    },
+    {
+      "empty_success": false,
+      "forbidden10": 0,
+      "forbidden_hits_at_10": [],
+      "id": "negative_school_tsinghua",
+      "mrr10": 0.0,
+      "ndcg10": 0.0,
+      "p10": 0.0,
+      "p5": 0.0,
+      "query": "清华大学",
+      "r10": 0.0,
+      "r5": 0.0,
+      "relevant_hits_at_10": [],
+      "returned_ids": [
+        "M20260001",
+        "M20260024",
+        "M20260051",
+        "M20260096"
+      ],
+      "type": "negative_entity"
+    },
+    {
+      "empty_success": false,
+      "forbidden10": 0,
+      "forbidden_hits_at_10": [],
+      "id": "negative_school_fudan",
+      "mrr10": 0.0,
+      "ndcg10": 0.0,
+      "p10": 0.0,
+      "p5": 0.0,
+      "query": "复旦大学",
+      "r10": 0.0,
+      "r5": 0.0,
+      "relevant_hits_at_10": [],
+      "returned_ids": [
+        "M20260083"
+      ],
+      "type": "negative_entity"
+    },
+    {
+      "empty_success": false,
+      "forbidden10": 0,
+      "forbidden_hits_at_10": [],
+      "id": "negative_school_zju",
+      "mrr10": 0.0,
+      "ndcg10": 0.0,
+      "p10": 0.0,
+      "p5": 0.0,
+      "query": "浙江大学",
+      "r10": 0.0,
+      "r5": 0.0,
+      "relevant_hits_at_10": [],
+      "returned_ids": [
+        "M20260005",
+        "M20260049",
+        "M20260070",
+        "M20260096",
+        "M20260100"
+      ],
+      "type": "negative_entity"
+    },
+    {
+      "empty_success": null,
+      "forbidden10": 0,
+      "forbidden_hits_at_10": [],
+      "id": "exact_position_a0009",
+      "mrr10": 1.0,
+      "ndcg10": 1.0000000000000002,
+      "p10": 0.7,
+      "p5": 1.0,
+      "query": "A0009",
+      "r10": 1.0,
+      "r5": 0.7142857142857143,
+      "relevant_hits_at_10": [
+        "M20260009",
+        "M20260044",
+        "M20260055",
+        "M20260067",
+        "M20260075",
+        "M20260081",
+        "M20260096"
+      ],
+      "returned_ids": [
+        "M20260009",
+        "M20260044",
+        "M20260055",
+        "M20260067",
+        "M20260075",
+        "M20260081",
+        "M20260096"
+      ],
+      "type": "exact_code"
+    },
+    {
+      "empty_success": null,
+      "forbidden10": 0,
+      "forbidden_hits_at_10": [],
+      "id": "exact_position_a0010",
+      "mrr10": 1.0,
+      "ndcg10": 1.0,
+      "p10": 0.1,
+      "p5": 0.2,
+      "query": "A0010",
+      "r10": 1.0,
+      "r5": 1.0,
+      "relevant_hits_at_10": [
+        "M20260010"
+      ],
+      "returned_ids": [
+        "M20260010"
+      ],
+      "type": "exact_code"
+    },
+    {
+      "empty_success": null,
+      "forbidden10": 0,
+      "forbidden_hits_at_10": [],
+      "id": "exact_position_a0011",
+      "mrr10": 1.0,
+      "ndcg10": 1.0,
+      "p10": 0.1,
+      "p5": 0.2,
+      "query": "A0011",
+      "r10": 1.0,
+      "r5": 1.0,
+      "relevant_hits_at_10": [
+        "M20260011"
+      ],
+      "returned_ids": [
+        "M20260011"
+      ],
+      "type": "exact_code"
+    },
+    {
+      "empty_success": null,
+      "forbidden10": 0,
+      "forbidden_hits_at_10": [],
+      "id": "exact_position_a0012",
+      "mrr10": 1.0,
+      "ndcg10": 1.0,
+      "p10": 0.1,
+      "p5": 0.2,
+      "query": "A0012",
+      "r10": 1.0,
+      "r5": 1.0,
+      "relevant_hits_at_10": [
+        "M20260012"
+      ],
+      "returned_ids": [
+        "M20260012"
+      ],
+      "type": "exact_code"
+    },
+    {
+      "empty_success": null,
+      "forbidden10": 0,
+      "forbidden_hits_at_10": [],
+      "id": "exact_position_a0013",
+      "mrr10": 1.0,
+      "ndcg10": 1.0,
+      "p10": 0.1,
+      "p5": 0.2,
+      "query": "A0013",
+      "r10": 1.0,
+      "r5": 1.0,
+      "relevant_hits_at_10": [
+        "M20260013"
+      ],
+      "returned_ids": [
+        "M20260013"
+      ],
+      "type": "exact_code"
+    },
+    {
+      "empty_success": null,
+      "forbidden10": 0,
+      "forbidden_hits_at_10": [],
+      "id": "exact_position_a0014",
+      "mrr10": 1.0,
+      "ndcg10": 1.0,
+      "p10": 0.1,
+      "p5": 0.2,
+      "query": "A0014",
+      "r10": 1.0,
+      "r5": 1.0,
+      "relevant_hits_at_10": [
+        "M20260014"
+      ],
+      "returned_ids": [
+        "M20260014"
+      ],
+      "type": "exact_code"
+    },
+    {
+      "empty_success": null,
+      "forbidden10": 0,
+      "forbidden_hits_at_10": [],
+      "id": "exact_position_a0015",
+      "mrr10": 1.0,
+      "ndcg10": 1.0,
+      "p10": 0.1,
+      "p5": 0.2,
+      "query": "A0015",
+      "r10": 1.0,
+      "r5": 1.0,
+      "relevant_hits_at_10": [
+        "M20260015"
+      ],
+      "returned_ids": [
+        "M20260015"
+      ],
+      "type": "exact_code"
+    },
+    {
+      "empty_success": null,
+      "forbidden10": 0,
+      "forbidden_hits_at_10": [],
+      "id": "exact_position_a0016",
+      "mrr10": 1.0,
+      "ndcg10": 1.0,
+      "p10": 0.1,
+      "p5": 0.2,
+      "query": "A0016",
+      "r10": 1.0,
+      "r5": 1.0,
+      "relevant_hits_at_10": [
+        "M20260016"
+      ],
+      "returned_ids": [
+        "M20260016"
+      ],
+      "type": "exact_code"
+    },
+    {
+      "empty_success": null,
+      "forbidden10": 0,
+      "forbidden_hits_at_10": [],
+      "id": "exact_position_a0017",
+      "mrr10": 1.0,
+      "ndcg10": 1.0,
+      "p10": 0.1,
+      "p5": 0.2,
+      "query": "A0017",
+      "r10": 1.0,
+      "r5": 1.0,
+      "relevant_hits_at_10": [
+        "M20260017"
+      ],
+      "returned_ids": [
+        "M20260017"
+      ],
+      "type": "exact_code"
+    },
+    {
+      "empty_success": null,
+      "forbidden10": 0,
+      "forbidden_hits_at_10": [],
+      "id": "exact_position_a0018",
+      "mrr10": 1.0,
+      "ndcg10": 1.0,
+      "p10": 0.1,
+      "p5": 0.2,
+      "query": "A0018",
+      "r10": 1.0,
+      "r5": 1.0,
+      "relevant_hits_at_10": [
+        "M20260018"
+      ],
+      "returned_ids": [
+        "M20260018"
+      ],
+      "type": "exact_code"
+    },
+    {
+      "empty_success": null,
+      "forbidden10": 0,
+      "forbidden_hits_at_10": [],
+      "id": "position_ml",
+      "mrr10": 1.0,
+      "ndcg10": 1.0,
+      "p10": 0.1,
+      "p5": 0.2,
+      "query": "机器学习工程师",
+      "r10": 1.0,
+      "r5": 1.0,
+      "relevant_hits_at_10": [
+        "M20260078"
+      ],
+      "returned_ids": [
+        "M20260078",
+        "M20260046",
+        "M20260013",
+        "M20260086",
+        "M20260005",
+        "M20260032",
+        "M20260070",
+        "M20260062",
+        "M20260024",
+        "M20260050"
+      ],
+      "type": "position"
+    },
+    {
+      "empty_success": null,
+      "forbidden10": 0,
+      "forbidden_hits_at_10": [],
+      "id": "position_security_researcher",
+      "mrr10": 1.0,
+      "ndcg10": 1.0,
+      "p10": 0.3,
+      "p5": 0.6,
+      "query": "安全研究员",
+      "r10": 1.0,
+      "r5": 1.0,
+      "relevant_hits_at_10": [
+        "M20260018",
+        "M20260051",
+        "M20260002"
+      ],
+      "returned_ids": [
+        "M20260018",
+        "M20260051",
+        "M20260002",
+        "M20260030",
+        "M20260072",
+        "M20260010",
+        "M20260083",
+        "M20260056",
+        "M20260093",
+        "M20260100"
+      ],
+      "type": "position"
+    },
+    {
+      "empty_success": null,
+      "forbidden10": 0,
+      "forbidden_hits_at_10": [],
+      "id": "position_data_analyst",
+      "mrr10": 1.0,
+      "ndcg10": 1.0,
+      "p10": 1.0,
+      "p5": 1.0,
+      "query": "数据分析师",
+      "r10": 1.0,
+      "r5": 0.5,
+      "relevant_hits_at_10": [
+        "M20260043",
+        "M20260074",
+        "M20260007",
+        "M20260090",
+        "M20260025",
+        "M20260082",
+        "M20260063",
+        "M20260034",
+        "M20260052",
+        "M20260016"
+      ],
+      "returned_ids": [
+        "M20260043",
+        "M20260074",
+        "M20260007",
+        "M20260090",
+        "M20260025",
+        "M20260082",
+        "M20260063",
+        "M20260034",
+        "M20260052",
+        "M20260016"
+      ],
+      "type": "position"
+    },
+    {
+      "empty_success": null,
+      "forbidden10": 0,
+      "forbidden_hits_at_10": [],
+      "id": "position_frontend",
+      "mrr10": 1.0,
+      "ndcg10": 0.9971876401972103,
+      "p10": 0.9,
+      "p5": 1.0,
+      "query": "前端开发工程师",
+      "r10": 1.0,
+      "r5": 0.5555555555555556,
+      "relevant_hits_at_10": [
+        "M20260035",
+        "M20260004",
+        "M20260053",
+        "M20260073",
+        "M20260041",
+        "M20260011",
+        "M20260066",
+        "M20260026",
+        "M20260088"
+      ],
+      "returned_ids": [
+        "M20260035",
+        "M20260004",
+        "M20260053",
+        "M20260073",
+        "M20260041",
+        "M20260011",
+        "M20260066",
+        "M20260026",
+        "M20260019",
+        "M20260088"
+      ],
+      "type": "position"
+    },
+    {
+      "empty_success": null,
+      "forbidden10": 0,
+      "forbidden_hits_at_10": [],
+      "id": "filter_beijing_bachelor_data",
+      "mrr10": 1.0,
+      "ndcg10": 1.0,
+      "p10": 0.1,
+      "p5": 0.2,
+      "query": "北京 本科 数据分析师",
+      "r10": 1.0,
+      "r5": 1.0,
+      "relevant_hits_at_10": [
+        "M20260090"
+      ],
+      "returned_ids": [
+        "M20260090",
+        "M20260018",
+        "M20260010",
+        "M20260048",
+        "M20260093",
+        "M20260084",
+        "M20260079",
+        "M20260039",
+        "M20260022",
+        "M20260072"
+      ],
+      "type": "filter_position"
+    },
+    {
+      "empty_success": null,
+      "forbidden10": 0,
+      "forbidden_hits_at_10": [],
+      "id": "filter_beijing_bachelor_secresearch",
+      "mrr10": 1.0,
+      "ndcg10": 1.0,
+      "p10": 0.1,
+      "p5": 0.2,
+      "query": "北京 本科 安全研究员",
+      "r10": 1.0,
+      "r5": 1.0,
+      "relevant_hits_at_10": [
+        "M20260018"
+      ],
+      "returned_ids": [
+        "M20260018",
+        "M20260072",
+        "M20260010",
+        "M20260093",
+        "M20260059",
+        "M20260022",
+        "M20260048",
+        "M20260036",
+        "M20260079",
+        "M20260054"
+      ],
+      "type": "filter_position"
+    },
+    {
+      "empty_success": null,
+      "forbidden10": 0,
+      "forbidden_hits_at_10": [],
+      "id": "filter_beijing_master_frontend",
+      "mrr10": 1.0,
+      "ndcg10": 1.0,
+      "p10": 0.1,
+      "p5": 0.2,
+      "query": "北京 硕士 前端开发工程师",
+      "r10": 1.0,
+      "r5": 1.0,
+      "relevant_hits_at_10": [
+        "M20260066"
+      ],
+      "returned_ids": [
+        "M20260066",
+        "M20260001",
+        "M20260029",
+        "M20260044",
+        "M20260089",
+        "M20260020",
+        "M20260083",
+        "M20260032",
+        "M20260062",
+        "M20260086"
+      ],
+      "type": "filter_position"
+    },
+    {
+      "empty_success": null,
+      "forbidden10": 0,
+      "forbidden_hits_at_10": [],
+      "id": "filter_beijing_bachelor_recsys",
+      "mrr10": 1.0,
+      "ndcg10": 1.0,
+      "p10": 0.1,
+      "p5": 0.2,
+      "query": "0.5年以上 北京 本科 推荐系统",
+      "r10": 1.0,
+      "r5": 1.0,
+      "relevant_hits_at_10": [
+        "M20260039"
+      ],
+      "returned_ids": [
+        "M20260039"
+      ],
+      "type": "filter_skill"
+    },
+    {
+      "empty_success": null,
+      "forbidden10": 0,
+      "forbidden_hits_at_10": [],
+      "id": "filter_beijing_java_redis",
+      "mrr10": 1.0,
+      "ndcg10": 1.0,
+      "p10": 0.1,
+      "p5": 0.2,
+      "query": "北京 Java Redis",
+      "r10": 1.0,
+      "r5": 1.0,
+      "relevant_hits_at_10": [
+        "M20260001"
+      ],
+      "returned_ids": [
+        "M20260001"
+      ],
+      "type": "filter_skill"
+    },
+    {
+      "empty_success": null,
+      "forbidden10": 0,
+      "forbidden_hits_at_10": [],
+      "id": "skill_python_pytorch",
+      "mrr10": 1.0,
+      "ndcg10": 1.0,
+      "p10": 0.3,
+      "p5": 0.6,
+      "query": "Python PyTorch",
+      "r10": 1.0,
+      "r5": 1.0,
+      "relevant_hits_at_10": [
+        "M20260046",
+        "M20260032",
+        "M20260013"
+      ],
+      "returned_ids": [
+        "M20260046",
+        "M20260032",
+        "M20260013",
+        "M20260005",
+        "M20260086",
+        "M20260093",
+        "M20260063",
+        "M20260007",
+        "M20260030",
+        "M20260043"
+      ],
+      "type": "skill_combo"
+    },
+    {
+      "empty_success": null,
+      "forbidden10": 0,
+      "forbidden_hits_at_10": [],
+      "id": "pos_skill_frontend_ts_webpack",
+      "mrr10": 1.0,
+      "ndcg10": 1.0,
+      "p10": 0.1,
+      "p5": 0.2,
+      "query": "前端开发工程师 TypeScript Webpack",
+      "r10": 1.0,
+      "r5": 1.0,
+      "relevant_hits_at_10": [
+        "M20260004"
+      ],
+      "returned_ids": [
+        "M20260004",
+        "M20260019",
+        "M20260088",
+        "M20260011",
+        "M20260035",
+        "M20260053",
+        "M20260073",
+        "M20260041",
+        "M20260097",
+        "M20260026"
+      ],
+      "type": "position_skill"
+    },
+    {
+      "empty_success": null,
+      "forbidden10": 0,
+      "forbidden_hits_at_10": [],
+      "id": "natural_recsys_nlp_model",
+      "mrr10": 0.0,
+      "ndcg10": 0.0,
+      "p10": 0.0,
+      "p5": 0.0,
+      "query": "做过推荐系统召回和 NLP 模型落地的人",
+      "r10": 0.0,
+      "r5": 0.0,
+      "relevant_hits_at_10": [],
+      "returned_ids": [
+        "M20260032",
+        "M20260086",
+        "M20260005",
+        "M20260062",
+        "M20260046",
+        "M20260070",
+        "M20260050",
+        "M20260013",
+        "M20260039",
+        "M20260016"
+      ],
+      "type": "natural_semantic"
+    },
+    {
+      "empty_success": null,
+      "forbidden10": 0,
+      "forbidden_hits_at_10": [],
+      "id": "natural_customer_service_nlp",
+      "mrr10": 0.0,
+      "ndcg10": 0.0,
+      "p10": 0.0,
+      "p5": 0.0,
+      "query": "有客服质检 NLP 项目经验",
+      "r10": 0.0,
+      "r5": 0.0,
+      "relevant_hits_at_10": [],
+      "returned_ids": [
+        "M20260086",
+        "M20260013",
+        "M20260046",
+        "M20260032",
+        "M20260048",
+        "M20260016",
+        "M20260043",
+        "M20260001",
+        "M20260069",
+        "M20260021"
+      ],
+      "type": "natural_semantic"
+    },
+    {
+      "empty_success": null,
+      "forbidden10": 0,
+      "forbidden_hits_at_10": [],
+      "id": "natural_vector_faiss",
+      "mrr10": 0.0,
+      "ndcg10": 0.0,
+      "p10": 0.0,
+      "p5": 0.0,
+      "query": "向量检索知识库 FAISS 项目",
+      "r10": 0.0,
+      "r5": 0.0,
+      "relevant_hits_at_10": [],
+      "returned_ids": [
+        "M20260046",
+        "M20260013",
+        "M20260032",
+        "M20260078",
+        "M20260044",
+        "M20260034",
+        "M20260030",
+        "M20260083",
+        "M20260100",
+        "M20260002"
+      ],
+      "type": "natural_semantic"
+    },
+    {
+      "empty_success": null,
+      "forbidden10": 0,
+      "forbidden_hits_at_10": [],
+      "id": "natural_frontend_engineering",
+      "mrr10": 0.2,
+      "ndcg10": 0.38685280723454163,
+      "p10": 0.1,
+      "p5": 0.2,
+      "query": "熟悉 TypeScript Webpack 前端工程化的人",
+      "r10": 1.0,
+      "r5": 1.0,
+      "relevant_hits_at_10": [
+        "M20260004"
+      ],
+      "returned_ids": [
+        "M20260088",
+        "M20260019",
+        "M20260011",
+        "M20260041",
+        "M20260004",
+        "M20260073",
+        "M20260053",
+        "M20260035",
+        "M20260097",
+        "M20260013"
+      ],
+      "type": "natural_semantic_auto"
+    },
+    {
+      "empty_success": false,
+      "forbidden10": 0,
+      "forbidden_hits_at_10": [],
+      "id": "negative_quantum_chip",
+      "mrr10": 0.0,
+      "ndcg10": 0.0,
+      "p10": 0.0,
+      "p5": 0.0,
+      "query": "量子计算芯片设计经验",
+      "r10": 0.0,
+      "r5": 0.0,
+      "relevant_hits_at_10": [],
+      "returned_ids": [
+        "M20260064",
+        "M20260096",
+        "M20260075",
+        "M20260009",
+        "M20260030",
+        "M20260070",
+        "M20260020",
+        "M20260092",
+        "M20260067",
+        "M20260029"
+      ],
+      "type": "negative_semantic"
+    },
+    {
+      "empty_success": false,
+      "forbidden10": 0,
+      "forbidden_hits_at_10": [],
+      "id": "negative_medical_doctor",
+      "mrr10": 0.0,
+      "ndcg10": 0.0,
+      "p10": 0.0,
+      "p5": 0.0,
+      "query": "医学影像放射科医生",
+      "r10": 0.0,
+      "r5": 0.0,
+      "relevant_hits_at_10": [],
+      "returned_ids": [
+        "M20260010",
+        "M20260069",
+        "M20260020",
+        "M20260043",
+        "M20260027",
+        "M20260081",
+        "M20260064",
+        "M20260066",
+        "M20260088",
+        "M20260097"
+      ],
+      "type": "negative_semantic"
+    },
+    {
+      "empty_success": false,
+      "forbidden10": 0,
+      "forbidden_hits_at_10": [],
+      "id": "negative_aero_engine",
+      "mrr10": 0.0,
+      "ndcg10": 0.0,
+      "p10": 0.0,
+      "p5": 0.0,
+      "query": "航空发动机结构设计",
+      "r10": 0.0,
+      "r5": 0.0,
+      "relevant_hits_at_10": [],
+      "returned_ids": [
+        "M20260092",
+        "M20260075",
+        "M20260064",
+        "M20260060",
+        "M20260014",
+        "M20260009",
+        "M20260027",
+        "M20260081",
+        "M20260044",
+        "M20260067"
+      ],
+      "type": "negative_semantic"
+    },
+    {
+      "empty_success": false,
+      "forbidden10": 0,
+      "forbidden_hits_at_10": [],
+      "id": "negative_legal",
+      "mrr10": 0.0,
+      "ndcg10": 0.0,
+      "p10": 0.0,
+      "p5": 0.0,
+      "query": "法务合同审查诉讼仲裁",
+      "r10": 0.0,
+      "r5": 0.0,
+      "relevant_hits_at_10": [],
+      "returned_ids": [
+        "M20260069",
+        "M20260034",
+        "M20260043",
+        "M20260054",
+        "M20260032",
+        "M20260003",
+        "M20260094",
+        "M20260056",
+        "M20260030",
+        "M20260002"
+      ],
+      "type": "negative_semantic"
+    },
+    {
+      "empty_success": false,
+      "forbidden10": 0,
+      "forbidden_hits_at_10": [],
+      "id": "negative_drug_registration",
+      "mrr10": 0.0,
+      "ndcg10": 0.0,
+      "p10": 0.0,
+      "p5": 0.0,
+      "query": "临床试验药物注册申报",
+      "r10": 0.0,
+      "r5": 0.0,
+      "relevant_hits_at_10": [],
+      "returned_ids": [
+        "M20260054",
+        "M20260003",
+        "M20260072",
+        "M20260007",
+        "M20260069",
+        "M20260038",
+        "M20260070",
+        "M20260002",
+        "M20260010",
+        "M20260043"
+      ],
+      "type": "negative_semantic"
+    },
+    {
+      "empty_success": null,
+      "forbidden10": 0,
+      "forbidden_hits_at_10": [],
+      "id": "entity_major_cs_full",
+      "mrr10": 1.0,
+      "ndcg10": 1.0,
+      "p10": 1.0,
+      "p5": 1.0,
+      "query": "计算机科学与技术",
+      "r10": 0.3448275862068966,
+      "r5": 0.1724137931034483,
+      "relevant_hits_at_10": [
+        "M20260001",
+        "M20260019",
+        "M20260024",
+        "M20260028",
+        "M20260035",
+        "M20260011",
+        "M20260008",
+        "M20260058",
+        "M20260003",
+        "M20260005"
+      ],
+      "returned_ids": [
+        "M20260001",
+        "M20260019",
+        "M20260024",
+        "M20260028",
+        "M20260035",
+        "M20260011",
+        "M20260008",
+        "M20260058",
+        "M20260003",
+        "M20260005"
+      ],
+      "type": "entity_major"
+    },
+    {
+      "empty_success": null,
+      "forbidden10": 0,
+      "forbidden_hits_at_10": [],
+      "id": "phrase_major_cs",
+      "mrr10": 1.0,
+      "ndcg10": 1.0,
+      "p10": 1.0,
+      "p5": 1.0,
+      "query": "计算机科学",
+      "r10": 0.3448275862068966,
+      "r5": 0.1724137931034483,
+      "relevant_hits_at_10": [
+        "M20260001",
+        "M20260019",
+        "M20260024",
+        "M20260028",
+        "M20260003",
+        "M20260037",
+        "M20260011",
+        "M20260012",
+        "M20260023",
+        "M20260058"
+      ],
+      "returned_ids": [
+        "M20260001",
+        "M20260019",
+        "M20260024",
+        "M20260028",
+        "M20260003",
+        "M20260037",
+        "M20260011",
+        "M20260012",
+        "M20260023",
+        "M20260058"
+      ],
+      "type": "phrase_major"
+    }
+  ],
+  "meta": {
+    "evidence_index_alias": "resume_evidence_current",
+    "generated_at": "2026-06-26T02:35:09+00:00",
+    "index_alias": "resumes_current",
+    "limit": 10,
+    "qrels": "eval_queries.jsonl",
+    "skipped": 83
+  },
+  "overall": {
+    "empty_accuracy": 0.0,
+    "forbidden10": 0,
+    "judged": 34,
+    "mrr10": 0.8539215686274509,
+    "ndcg10": 0.8680873588530356,
+    "p10": 0.2411764705882353,
+    "p5": 0.3588235294117647,
+    "queries": 43,
+    "r10": 0.8732251521298174,
+    "r5": 0.8269020251778872
+  },
+  "skipped": [
+    {
+      "id": "entity_school_hkcityu",
+      "line_no": 2,
+      "query": "香港城市大学",
+      "reason": "relevant_es_query matched no documents in current index",
+      "type": "entity_school"
+    },
+    {
+      "id": "entity_school_liaoning",
+      "line_no": 4,
+      "query": "辽宁大学",
+      "reason": "relevant_es_query matched no documents in current index",
+      "type": "entity_school"
+    },
+    {
+      "id": "entity_school_ouc",
+      "line_no": 5,
+      "query": "中国海洋大学",
+      "reason": "relevant_es_query matched no documents in current index",
+      "type": "entity_school"
+    },
+    {
+      "id": "entity_school_nankai",
+      "line_no": 8,
+      "query": "南开大学",
+      "reason": "relevant_es_query matched no documents in current index",
+      "type": "entity_school"
+    },
+    {
+      "id": "entity_school_sdust",
+      "line_no": 9,
+      "query": "山东科技大学",
+      "reason": "relevant_es_query matched no documents in current index",
+      "type": "entity_school"
+    },
+    {
+      "id": "position_backend",
+      "line_no": 28,
+      "query": "后端开发工程师",
+      "reason": "relevant_es_query matched no documents in current index",
+      "type": "position"
+    },
+    {
+      "id": "position_test",
+      "line_no": 32,
+      "query": "测试工程师",
+      "reason": "relevant_es_query matched no documents in current index",
+      "type": "position"
+    },
+    {
+      "id": "position_sre_dev",
+      "line_no": 33,
+      "query": "运维开发工程师",
+      "reason": "relevant_es_query matched no documents in current index",
+      "type": "position"
+    },
+    {
+      "id": "position_algorithm",
+      "line_no": 34,
+      "query": "算法工程师",
+      "reason": "relevant_es_query matched no documents in current index",
+      "type": "position"
+    },
+    {
+      "id": "position_java",
+      "line_no": 35,
+      "query": "Java开发工程师",
+      "reason": "relevant_es_query matched no documents in current index",
+      "type": "position"
+    },
+    {
+      "id": "position_secops",
+      "line_no": 36,
+      "query": "安全运营工程师",
+      "reason": "relevant_es_query matched no documents in current index",
+      "type": "position"
+    },
+    {
+      "id": "filter_beijing_bachelor_ml",
+      "line_no": 37,
+      "query": "北京 本科 机器学习工程师",
+      "reason": "relevant_es_query matched no documents in current index",
+      "type": "filter_position"
+    },
+    {
+      "id": "filter_beijing_bachelor_secops",
+      "line_no": 38,
+      "query": "北京 本科 安全运营工程师",
+      "reason": "relevant_es_query matched no documents in current index",
+      "type": "filter_position"
+    },
+    {
+      "id": "filter_beijing_bachelor_java",
+      "line_no": 40,
+      "query": "北京 本科 Java开发工程师",
+      "reason": "relevant_es_query matched no documents in current index",
+      "type": "filter_position"
+    },
+    {
+      "id": "filter_beijing_bachelor_sre",
+      "line_no": 41,
+      "query": "北京 本科 运维开发工程师",
+      "reason": "relevant_es_query matched no documents in current index",
+      "type": "filter_position"
+    },
+    {
+      "id": "filter_beijing_master_backend",
+      "line_no": 43,
+      "query": "北京 硕士 后端开发工程师",
+      "reason": "relevant_es_query matched no documents in current index",
+      "type": "filter_position"
+    },
+    {
+      "id": "filter_beijing_master_test",
+      "line_no": 45,
+      "query": "北京 硕士 测试工程师",
+      "reason": "relevant_es_query matched no documents in current index",
+      "type": "filter_position"
+    },
+    {
+      "id": "filter_shanghai_master_backend",
+      "line_no": 46,
+      "query": "上海 硕士 后端开发工程师",
+      "reason": "relevant_es_query matched no documents in current index",
+      "type": "filter_position"
+    },
+    {
+      "id": "filter_chengdu_master_test",
+      "line_no": 47,
+      "query": "成都 硕士 测试工程师",
+      "reason": "relevant_es_query matched no documents in current index",
+      "type": "filter_position"
+    },
+    {
+      "id": "filter_zhuhai_bachelor_algorithm",
+      "line_no": 48,
+      "query": "珠海 本科 算法工程师",
+      "reason": "relevant_es_query matched no documents in current index",
+      "type": "filter_position"
+    },
+    {
+      "id": "filter_xiamen_master_algorithm",
+      "line_no": 49,
+      "query": "厦门 硕士 算法工程师",
+      "reason": "relevant_es_query matched no documents in current index",
+      "type": "filter_position"
+    },
+    {
+      "id": "filter_hefei_bachelor_algorithm",
+      "line_no": 50,
+      "query": "合肥 本科 算法工程师",
+      "reason": "relevant_es_query matched no documents in current index",
+      "type": "filter_position"
+    },
+    {
+      "id": "filter_zhengzhou_bachelor_secresearch",
+      "line_no": 51,
+      "query": "郑州 本科 安全研究员",
+      "reason": "relevant_es_query matched no documents in current index",
+      "type": "filter_position"
+    },
+    {
+      "id": "filter_beijing_python_linux",
+      "line_no": 53,
+      "query": "北京 Python Linux",
+      "reason": "relevant_es_query matched no documents in current index",
+      "type": "filter_skill"
+    },
+    {
+      "id": "filter_beijing_vue_echarts",
+      "line_no": 55,
+      "query": "北京 Vue ECharts",
+      "reason": "relevant_es_query matched no documents in current index",
+      "type": "filter_skill"
+    },
+    {
+      "id": "filter_beijing_siem_response",
+      "line_no": 56,
+      "query": "北京 SIEM 应急响应",
+      "reason": "relevant_es_query matched no documents in current index",
+      "type": "filter_skill"
+    },
+    {
+      "id": "filter_beijing_k8s_prometheus",
+      "line_no": 57,
+      "query": "北京 Kubernetes Prometheus",
+      "reason": "relevant_es_query matched no documents in current index",
+      "type": "filter_skill"
+    },
+    {
+      "id": "filter_beijing_spark_tableau",
+      "line_no": 58,
+      "query": "北京 Spark Tableau",
+      "reason": "relevant_es_query matched no documents in current index",
+      "type": "filter_skill"
+    },
+    {
+      "id": "filter_beijing_websec_vuln",
+      "line_no": 59,
+      "query": "北京 Web安全 漏洞挖掘",
+      "reason": "relevant_es_query matched no documents in current index",
+      "type": "filter_skill"
+    },
+    {
+      "id": "skill_recsys_nlp_sql",
+      "line_no": 60,
+      "query": "推荐系统 NLP SQL",
+      "reason": "relevant_es_query matched no documents in current index",
+      "type": "skill_combo"
+    },
+    {
+      "id": "skill_backend_java_redis",
+      "line_no": 61,
+      "query": "Java Spring Boot Redis 后端",
+      "reason": "relevant_es_query matched no documents in current index",
+      "type": "skill_combo"
+    },
+    {
+      "id": "skill_frontend_vue_echarts",
+      "line_no": 62,
+      "query": "前端 Vue ECharts 可视化",
+      "reason": "relevant_es_query matched no documents in current index",
+      "type": "skill_combo"
+    },
+    {
+      "id": "skill_websec_vuln",
+      "line_no": 63,
+      "query": "Web安全 漏洞挖掘",
+      "reason": "relevant_es_query matched no documents in current index",
+      "type": "skill_combo"
+    },
+    {
+      "id": "skill_python_sql_stats",
+      "line_no": 65,
+      "query": "Python SQL 统计分析",
+      "reason": "relevant_es_query matched no documents in current index",
+      "type": "skill_combo"
+    },
+    {
+      "id": "skill_linux_python_binary",
+      "line_no": 66,
+      "query": "Linux Python 二进制安全",
+      "reason": "relevant_es_query matched no documents in current index",
+      "type": "skill_combo"
+    },
+    {
+      "id": "skill_mysql_springcloud",
+      "line_no": 67,
+      "query": "MySQL Spring Boot Spring Cloud",
+      "reason": "relevant_es_query matched no documents in current index",
+      "type": "skill_combo"
+    },
+    {
+      "id": "skill_docker_k8s_prometheus",
+      "line_no": 68,
+      "query": "Docker Kubernetes Prometheus",
+      "reason": "relevant_es_query matched no documents in current index",
+      "type": "skill_combo"
+    },
+    {
+      "id": "skill_go_linux_python",
+      "line_no": 69,
+      "query": "Go Linux Python",
+      "reason": "relevant_es_query matched no documents in current index",
+      "type": "skill_combo"
+    },
+    {
+      "id": "skill_pandas_sql",
+      "line_no": 70,
+      "query": "Pandas SQL 数据分析",
+      "reason": "relevant_es_query matched no documents in current index",
+      "type": "skill_combo"
+    },
+    {
+      "id": "skill_selenium_pytest",
+      "line_no": 71,
+      "query": "Selenium Pytest 接口测试",
+      "reason": "relevant_es_query matched no documents in current index",
+      "type": "skill_combo"
+    },
+    {
+      "id": "skill_c_linux_reverse",
+      "line_no": 72,
+      "query": "C Linux 逆向分析",
+      "reason": "relevant_es_query matched no documents in current index",
+      "type": "skill_combo"
+    },
+    {
+      "id": "skill_cxx_datastructure",
+      "line_no": 73,
+      "query": "C++ 数据结构 算法",
+      "reason": "relevant_es_query matched no documents in current index",
+      "type": "skill_combo"
+    },
+    {
+      "id": "skill_kafka_mysql_springboot",
+      "line_no": 74,
+      "query": "Kafka MySQL Spring Boot",
+      "reason": "relevant_es_query matched no documents in current index",
+      "type": "skill_combo"
+    },
+    {
+      "id": "skill_siem_log_sql",
+      "line_no": 75,
+      "query": "SIEM 日志分析 SQL",
+      "reason": "relevant_es_query matched no documents in current index",
+      "type": "skill_combo"
+    },
+    {
+      "id": "pos_skill_ml_python_recsys",
+      "line_no": 76,
+      "query": "机器学习工程师 Python 推荐系统",
+      "reason": "relevant_es_query matched no documents in current index",
+      "type": "position_skill"
+    },
+    {
+      "id": "pos_skill_ml_pytorch_python",
+      "line_no": 77,
+      "query": "机器学习工程师 PyTorch Python",
+      "reason": "relevant_es_query matched no documents in current index",
+      "type": "position_skill"
+    },
+    {
+      "id": "pos_skill_ml_nlp_recsys",
+      "line_no": 78,
+      "query": "机器学习工程师 NLP 推荐系统",
+      "reason": "relevant_es_query matched no documents in current index",
+      "type": "position_skill"
+    },
+    {
+      "id": "pos_skill_backend_mysql_springboot",
+      "line_no": 79,
+      "query": "后端开发工程师 MySQL Spring Boot",
+      "reason": "relevant_es_query matched no documents in current index",
+      "type": "position_skill"
+    },
+    {
+      "id": "pos_skill_backend_kafka_mysql",
+      "line_no": 80,
+      "query": "后端开发工程师 Kafka MySQL",
+      "reason": "relevant_es_query matched no documents in current index",
+      "type": "position_skill"
+    },
+    {
+      "id": "pos_skill_backend_docker_redis",
+      "line_no": 81,
+      "query": "后端开发工程师 Docker Redis",
+      "reason": "relevant_es_query matched no documents in current index",
+      "type": "position_skill"
+    },
+    {
+      "id": "pos_skill_java_jvm_redis",
+      "line_no": 82,
+      "query": "Java开发工程师 JVM Redis",
+      "reason": "relevant_es_query matched no documents in current index",
+      "type": "position_skill"
+    },
+    {
+      "id": "pos_skill_java_springcloud_mysql",
+      "line_no": 83,
+      "query": "Java开发工程师 Spring Cloud MySQL",
+      "reason": "relevant_es_query matched no documents in current index",
+      "type": "position_skill"
+    },
+    {
+      "id": "pos_skill_frontend_vue_react",
+      "line_no": 85,
+      "query": "前端开发工程师 Vue React",
+      "reason": "relevant_es_query matched no documents in current index",
+      "type": "position_skill"
+    },
+    {
+      "id": "pos_skill_security_web_reverse",
+      "line_no": 86,
+      "query": "安全研究员 Web安全 逆向分析",
+      "reason": "relevant_es_query matched no documents in current index",
+      "type": "position_skill"
+    },
+    {
+      "id": "pos_skill_security_binary_vuln",
+      "line_no": 87,
+      "query": "安全研究员 二进制安全 漏洞挖掘",
+      "reason": "relevant_es_query matched no documents in current index",
+      "type": "position_skill"
+    },
+    {
+      "id": "pos_skill_data_sql_spark",
+      "line_no": 88,
+      "query": "数据分析师 SQL Spark",
+      "reason": "relevant_es_query matched no documents in current index",
+      "type": "position_skill"
+    },
+    {
+      "id": "pos_skill_data_tableau_pandas",
+      "line_no": 89,
+      "query": "数据分析师 Tableau Pandas",
+      "reason": "relevant_es_query matched no documents in current index",
+      "type": "position_skill"
+    },
+    {
+      "id": "pos_skill_test_selenium_pytest",
+      "line_no": 90,
+      "query": "测试工程师 Selenium Pytest",
+      "reason": "relevant_es_query matched no documents in current index",
+      "type": "position_skill"
+    },
+    {
+      "id": "pos_skill_test_linux_perf",
+      "line_no": 91,
+      "query": "测试工程师 Linux 性能测试",
+      "reason": "relevant_es_query matched no documents in current index",
+      "type": "position_skill"
+    },
+    {
+      "id": "pos_skill_sre_k8s_prometheus",
+      "line_no": 92,
+      "query": "运维开发工程师 Kubernetes Prometheus",
+      "reason": "relevant_es_query matched no documents in current index",
+      "type": "position_skill"
+    },
+    {
+      "id": "pos_skill_sre_docker_shell",
+      "line_no": 93,
+      "query": "运维开发工程师 Docker Shell",
+      "reason": "relevant_es_query matched no documents in current index",
+      "type": "position_skill"
+    },
+    {
+      "id": "pos_skill_algo_cpp_datastructure",
+      "line_no": 94,
+      "query": "算法工程师 C++ 数据结构",
+      "reason": "relevant_es_query matched no documents in current index",
+      "type": "position_skill"
+    },
+    {
+      "id": "pos_skill_algo_deeplearning_python",
+      "line_no": 95,
+      "query": "算法工程师 深度学习 Python",
+      "reason": "relevant_es_query matched no documents in current index",
+      "type": "position_skill"
+    },
+    {
+      "id": "pos_skill_secops_siem_response",
+      "line_no": 96,
+      "query": "安全运营工程师 SIEM 应急响应",
+      "reason": "relevant_es_query matched no documents in current index",
+      "type": "position_skill"
+    },
+    {
+      "id": "pos_skill_secops_log_threat",
+      "line_no": 97,
+      "query": "安全运营工程师 日志分析 威胁情报",
+      "reason": "relevant_es_query matched no documents in current index",
+      "type": "position_skill"
+    },
+    {
+      "id": "natural_backend_cache",
+      "line_no": 101,
+      "query": "做过缓存优化和接口设计的后端候选人",
+      "reason": "relevant_es_query matched no documents in current index",
+      "type": "natural_semantic_auto"
+    },
+    {
+      "id": "natural_java_microservice",
+      "line_no": 102,
+      "query": "熟悉微服务治理 Spring Cloud 和 Redis 的 Java 候选人",
+      "reason": "relevant_es_query matched no documents in current index",
+      "type": "natural_semantic_auto"
+    },
+    {
+      "id": "natural_sec_vuln_repro",
+      "line_no": 103,
+      "query": "能做漏洞复现和 Web 安全分析的安全研究员",
+      "reason": "relevant_es_query matched no documents in current index",
+      "type": "natural_semantic_auto"
+    },
+    {
+      "id": "natural_secops_alert",
+      "line_no": 104,
+      "query": "做过 SIEM 告警研判和应急响应的人",
+      "reason": "relevant_es_query matched no documents in current index",
+      "type": "natural_semantic_auto"
+    },
+    {
+      "id": "natural_data_dashboard",
+      "line_no": 105,
+      "query": "能做数据看板和漏斗分析的数据分析候选人",
+      "reason": "relevant_es_query matched no documents in current index",
+      "type": "natural_semantic_auto"
+    },
+    {
+      "id": "natural_frontend_dashboard",
+      "line_no": 106,
+      "query": "做过 Vue 前端可视化和 ECharts 图表的人",
+      "reason": "relevant_es_query matched no documents in current index",
+      "type": "natural_semantic_auto"
+    },
+    {
+      "id": "natural_test_automation",
+      "line_no": 107,
+      "query": "有接口自动化和性能测试经验的测试工程师",
+      "reason": "relevant_es_query matched no documents in current index",
+      "type": "natural_semantic_auto"
+    },
+    {
+      "id": "natural_sre_observability",
+      "line_no": 108,
+      "query": "熟悉 Kubernetes Prometheus Grafana 的运维开发",
+      "reason": "relevant_es_query matched no documents in current index",
+      "type": "natural_semantic_auto"
+    },
+    {
+      "id": "natural_algo_cv",
+      "line_no": 109,
+      "query": "做过图像识别和深度学习算法项目的人",
+      "reason": "relevant_es_query matched no documents in current index",
+      "type": "natural_semantic_auto"
+    },
+    {
+      "id": "natural_ml_model_service",
+      "line_no": 110,
+      "query": "能把机器学习模型服务化落地的人",
+      "reason": "relevant_es_query matched no documents in current index",
+      "type": "natural_semantic_auto"
+    },
+    {
+      "id": "natural_ml_anomaly",
+      "line_no": 111,
+      "query": "做过异常检测和日志聚类的机器学习候选人",
+      "reason": "relevant_es_query matched no documents in current index",
+      "type": "natural_semantic_auto"
+    },
+    {
+      "id": "natural_backend_kafka_mysql",
+      "line_no": 112,
+      "query": "后端候选人需要 Kafka MySQL 和 Spring Boot 经验",
+      "reason": "relevant_es_query matched no documents in current index",
+      "type": "natural_semantic_auto"
+    },
+    {
+      "id": "natural_java_jvm_tuning",
+      "line_no": 113,
+      "query": "Java 候选人要熟悉 JVM 调优和 MySQL Redis",
+      "reason": "relevant_es_query matched no documents in current index",
+      "type": "natural_semantic_auto"
+    },
+    {
+      "id": "natural_binary_reverse",
+      "line_no": 114,
+      "query": "有二进制逆向和漏洞挖掘能力的安全研究员",
+      "reason": "relevant_es_query matched no documents in current index",
+      "type": "natural_semantic_auto"
+    },
+    {
+      "id": "natural_data_warehouse",
+      "line_no": 115,
+      "query": "会做数据仓库和统计分析的数据分析师",
+      "reason": "relevant_es_query matched no documents in current index",
+      "type": "natural_semantic_auto"
+    },
+    {
+      "id": "natural_test_selenium",
+      "line_no": 117,
+      "query": "会用 Selenium Pytest 做自动化测试的人",
+      "reason": "relevant_es_query matched no documents in current index",
+      "type": "natural_semantic_auto"
+    },
+    {
+      "id": "natural_sre_cicd",
+      "line_no": 118,
+      "query": "有 CI/CD 和 Kubernetes 运维平台经验的人",
+      "reason": "relevant_es_query matched no documents in current index",
+      "type": "natural_semantic_auto"
+    },
+    {
+      "id": "natural_algo_cpp",
+      "line_no": 119,
+      "query": "算法候选人要 C++ 数据结构和深度学习基础",
+      "reason": "relevant_es_query matched no documents in current index",
+      "type": "natural_semantic_auto"
+    }
+  ]
+}

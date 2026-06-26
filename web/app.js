@@ -192,19 +192,7 @@ function formatMatchedQuery(q) {
     key = key.replace(wMatch[0], "");
   }
 
-  if (key.startsWith("lexical_exact:")) {
-    type = "[精确匹配]";
-    typeClass = "exact";
-    key = key.replace("lexical_exact:", "");
-  } else if (key.startsWith("lexical_phrase:")) {
-    type = "[短语匹配]";
-    typeClass = "phrase";
-    key = key.replace("lexical_phrase:", "");
-  } else if (key.startsWith("lexical_term:")) {
-    type = "[普通匹配]";
-    typeClass = "term";
-    key = key.replace("lexical_term:", "");
-  } else if (key.startsWith("evidence_exact:")) {
+  if (key.startsWith("evidence_exact:")) {
     type = "[证据精确]";
     typeClass = "exact";
     key = `evidence_${key.replace("evidence_exact:", "")}`;
@@ -225,10 +213,6 @@ function formatMatchedQuery(q) {
 
 const denseFieldNameMap = {
   evidence_vector: "证据向量",
-  skills_vector: "技能向量",
-  projects_vector: "项目向量",
-  internships_vector: "实习向量",
-  education_vector: "教育向量",
 };
 
 const evidenceSectionNameMap = {
