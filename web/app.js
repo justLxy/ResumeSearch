@@ -181,9 +181,9 @@ const queryNameMap = {
 function formatMatchedQuery(q) {
   if (q.startsWith("query_term:")) return null; // 隐藏由于覆盖率计算产生的底层 term 查询
   
-  let type = "";
+  let typeLabel = "其他命中";
   let key = q;
-  let typeClass = "";
+  let typeClass = "other";
   let weight = "";
 
   const wMatch = key.match(/:W([0-9.]+)$/);
@@ -193,22 +193,29 @@ function formatMatchedQuery(q) {
   }
 
   if (key.startsWith("evidence_exact:")) {
-    type = "[证据精确]";
+    typeLabel = "精确命中";
     typeClass = "exact";
     key = `evidence_${key.replace("evidence_exact:", "")}`;
   } else if (key.startsWith("evidence_phrase:")) {
-    type = "[证据短语]";
+    typeLabel = "短语命中";
     typeClass = "phrase";
     key = `evidence_${key.replace("evidence_phrase:", "")}`;
   } else if (key.startsWith("evidence_term:")) {
-    type = "[证据词面]";
+    typeLabel = "词面命中";
     typeClass = "term";
     key = `evidence_${key.replace("evidence_term:", "")}`;
   }
   
   const fieldName = queryNameMap[key] || key;
-  const text = weight ? `${type} ${fieldName} (权重:${weight})` : `${type} ${fieldName}`;
-  return { typeClass, text, fieldName };
+  const text = weight ? `${fieldName} (权重:${weight})` : fieldName;
+  return { typeClass, typeLabel, text, fieldName };
+}
+
+function lexicalTierLabel(tier) {
+  if (tier === 3) return "精确命中";
+  if (tier === 2) return "短语命中";
+  if (tier === 1) return "词面命中";
+  return "未命中";
 }
 
 const denseFieldNameMap = {
@@ -351,23 +358,28 @@ function renderResults() {
         .map(q => formatMatchedQuery(q))
         .filter(Boolean);
         
-      const tierRank = { "exact": 3, "phrase": 2, "term": 1 };
+      const tierRank = { "exact": 3, "phrase": 2, "term": 1, "other": 0 };
       const uniqueMap = new Map();
       rawQueries.forEach(q => {
-        const existing = uniqueMap.get(q.fieldName);
+        const uniqueKey = `${q.typeClass}:${q.fieldName}`;
+        const existing = uniqueMap.get(uniqueKey);
         if (!existing || tierRank[q.typeClass] > tierRank[existing.typeClass]) {
-          uniqueMap.set(q.fieldName, q);
+          uniqueMap.set(uniqueKey, q);
         }
       });
       
       const validQueries = Array.from(uniqueMap.values()).sort((a, b) => tierRank[b.typeClass] - tierRank[a.typeClass]);
 
       const matchedQueriesHtml = validQueries.length 
-        ? `<div class="debug-item"><span class="debug-label">命中详情：</span>
-             <div class="debug-queries">
-               ${validQueries.map(q => `<span class="debug-tag tag-${q.typeClass}">${escapeHtml(q.text)}</span>`).join('')}
-             </div>
-           </div>`
+        ? ["exact", "phrase", "term", "other"].map(typeClass => {
+            const group = validQueries.filter(q => q.typeClass === typeClass);
+            if (!group.length) return "";
+            return `<div class="debug-item"><span class="debug-label">${escapeHtml(group[0].typeLabel)}：</span>
+              <div class="debug-queries">
+                ${group.map(q => `<span class="debug-tag tag-${q.typeClass}">${escapeHtml(q.text)}</span>`).join('')}
+              </div>
+            </div>`;
+          }).join("")
         : '';
 
       const evidenceLexicalContrib = hasEvidenceLexical
@@ -435,10 +447,10 @@ function renderResults() {
 
             ${debug.matched_queries && debug.matched_queries.length ? `
             <div class="debug-group queries-group">
-              <div class="debug-title">候选人聚合命中详情</div>
+              <div class="debug-title">候选人命中详情</div>
               <div class="debug-list">
-                ${debug.term_coverage !== undefined ? `<div class="debug-item"><span class="debug-label">Term 覆盖：</span> <span class="debug-value">${debug.term_coverage}</span></div>` : ''}
-                <div class="debug-item"><span class="debug-label">匹配层级：</span> <span class="debug-value tier-${debug.lexical_tier || 0}">${debug.lexical_tier || 0} <span class="tier-desc">(${debug.lexical_tier === 3 ? '完全匹配' : debug.lexical_tier === 2 ? '短语部分匹配' : '普通匹配'})</span></span></div>
+                ${debug.term_coverage !== undefined ? `<div class="debug-item"><span class="debug-label">查询词覆盖：</span> <span class="debug-value">${debug.term_coverage}</span></div>` : ''}
+                <div class="debug-item"><span class="debug-label">最佳匹配：</span> <span class="debug-value tier-${debug.lexical_tier || 0}">${lexicalTierLabel(debug.lexical_tier || 0)} <span class="tier-desc">(层级 ${debug.lexical_tier || 0})</span></span></div>
                 ${matchedQueriesHtml}
               </div>
             </div>` : ''}
