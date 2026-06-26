@@ -313,12 +313,14 @@ function renderResults() {
       const denseOuterWeight = Number(debug.dense_outer_weight ?? 1);
       const denseGroupRank = debug.dense_group_rank ?? debug.dense_rank;
       const bestDenseRouteRank = debug.dense_route_rank ?? denseMatches[0]?.rank ?? debug.dense_rank;
+      const denseSupportCount = Number(debug.dense_support_count || 0);
+      const evidenceSupportCount = Number(debug.evidence_support_count || 0);
       const evidenceGroupRank = debug.evidence_group_rank ?? debug.evidence_rank;
       const bestDenseLabel = denseMatches[0] ? denseMatchLabel(denseMatches[0]) : denseFieldLabel(debug.dense_field, null);
 
       const lexicalStatusRows = [
         hasEvidenceLexical
-          ? `<div class="debug-item"><span class="debug-label" title="证据索引中的 BM25 / phrase 词面召回&#10;先命中候选人档案、项目、实习、教育或技能证据片段，再按候选人聚合排名" style="cursor: help; text-decoration: underline dotted var(--muted); text-underline-offset: 4px;">词面证据排名：</span> <span class="debug-value">${evidenceGroupRank} <span class="tier-desc">(最佳片段 #${debug.evidence_rank}，分数: ${formatScore(debug.evidence_score || 0, 4)})</span></span></div>`
+          ? `<div class="debug-item"><span class="debug-label" title="证据索引中的 BM25 / phrase 词面召回&#10;先命中候选人档案、项目、实习、教育或技能证据片段，再按候选人聚合排名">词面证据排名：</span> <span class="debug-value">${evidenceGroupRank} <span class="tier-desc">(最佳片段 #${debug.evidence_rank}，分数: ${formatScore(debug.evidence_score || 0, 4)}${evidenceSupportCount > 1 ? `，证据数: ${evidenceSupportCount}` : ""})</span></span></div>`
           : "",
       ].filter(Boolean).join("");
       const lexicalHtml = hasLexical
@@ -326,7 +328,7 @@ function renderResults() {
         : `<div class="debug-item warning"><span class="debug-label">词面证据命中：</span> <span class="debug-value">否 (未召回)</span></div>`;
         
       const denseHtml = hasDense 
-        ? `<div class="debug-item"><span class="debug-label" title="先在 evidence_vector 中检索证据片段，再按 resume_id 在完整向量结果中聚合成候选人排名&#10;括号里的 # 是最佳证据片段在原始 kNN 结果里的名次">全局向量聚合排名：</span> <span class="debug-value">${denseGroupRank} <span class="tier-desc">(最佳证据 ${escapeHtml(bestDenseLabel)} 原始 #${bestDenseRouteRank}，分数: ${formatScore(debug.dense_score || 0, 4)})</span></span></div>`
+        ? `<div class="debug-item"><span class="debug-label" title="先在 evidence_vector 中检索证据片段，再按 resume_id 在完整向量结果中聚合成候选人排名&#10;括号里的 # 是最佳证据片段在原始 kNN 结果里的名次">全局向量聚合排名：</span> <span class="debug-value">${denseGroupRank} <span class="tier-desc">(最佳证据 ${escapeHtml(bestDenseLabel)} 原始 #${bestDenseRouteRank}，分数: ${formatScore(debug.dense_score || 0, 4)}${denseSupportCount > 1 ? `，证据数: ${denseSupportCount}` : ""})</span></span></div>`
         : `<div class="debug-item warning"><span class="debug-label">Dense 命中：</span> <span class="debug-value">否 (未召回)</span></div>`;
 
       const denseMatchesHtml = denseMatches.length

@@ -451,6 +451,65 @@ class SearchLogicTests(unittest.TestCase):
         self.assertEqual(debug["dense_group_rank"], 59)
         self.assertEqual(debug["dense_rrf_contribution"], round(1 / (60 + 59), 6))
 
+    def test_dense_pooling_reranks_route_without_extra_rrf_score(self) -> None:
+        dense_response = _response(
+            EVIDENCE_DENSE_RETRIEVER,
+            [
+                _evidence_hit("single:project:1", "single", "单证据候选人", "项目职责：负责推荐系统召回。"),
+                _evidence_hit("pooled:project:1", "pooled", "第一段向量证据", "项目职责：负责推荐系统召回。"),
+                _evidence_hit("pooled:internship:1", "pooled", "第二段向量证据", "实习描述：负责排序模型。"),
+                _evidence_hit("pooled:project:2", "pooled", "第三段向量证据", "项目职责：负责自然语言处理。"),
+            ],
+        )
+        dense_response["_vector_field"] = EVIDENCE_VECTOR_FIELD
+
+        with patch(
+            "app._fetch_resume_hits_for_evidence",
+            return_value={
+                "single": _hit("single", "单证据候选人"),
+                "pooled": _hit("pooled", "多证据候选人"),
+            },
+        ):
+            results = _rrf_merge([dense_response], 10)
+
+        self.assertEqual([item["id"] for item in results], ["pooled", "single"])
+        debug = results[0]["retrieval_debug"]
+        base_contribution = 1 / (60 + 1)
+        self.assertEqual(debug["dense_route_rank"], 2)
+        self.assertEqual(debug["dense_group_rank"], 1)
+        self.assertEqual(debug["dense_support_count"], 3)
+        self.assertEqual(debug["dense_rrf_contribution"], round(base_contribution, 6))
+        self.assertNotIn("dense_support_bonus", debug)
+        self.assertEqual(len(debug["dense_matches"]), 3)
+
+    def test_bm25_evidence_pooling_reranks_route_without_extra_rrf_score(self) -> None:
+        evidence_response = _response(
+            EVIDENCE_RETRIEVER,
+            [
+                _evidence_hit("single:project:1", "single", "单证据候选人", "项目职责：负责推荐系统召回。"),
+                _evidence_hit("pooled:project:1", "pooled", "第一段词面证据", "项目职责：负责推荐系统召回。"),
+                _evidence_hit("pooled:internship:1", "pooled", "第二段词面证据", "实习描述：负责排序模型。"),
+                _evidence_hit("pooled:education:1", "pooled", "第三段词面证据", "研究方向：自然语言处理。"),
+            ],
+            weight=1.2,
+        )
+
+        with patch(
+            "app._fetch_resume_hits_for_evidence",
+            return_value={
+                "single": _hit("single", "单证据候选人"),
+                "pooled": _hit("pooled", "多证据候选人"),
+            },
+        ):
+            results = _rrf_merge([evidence_response], 10)
+
+        self.assertEqual([item["id"] for item in results], ["pooled", "single"])
+        debug = results[0]["retrieval_debug"]
+        self.assertEqual(debug["evidence_rank"], 2)
+        self.assertEqual(debug["evidence_group_rank"], 1)
+        self.assertEqual(debug["evidence_support_count"], 3)
+        self.assertEqual(debug["evidence_rrf_contribution"], round(1.2 / (60 + 1), 6))
+
     def test_vector_text_excludes_entity_and_location_noise(self) -> None:
         doc = {
             "resume_id": "resume-1",
@@ -496,10 +555,15 @@ class SearchLogicTests(unittest.TestCase):
         }
 
         evidence_docs = _resume_evidence_docs(doc)
-        all_embedding_text = "\n".join(
+        evidence_text = "\n".join(
             item["text"]
             for item in evidence_docs
             if item["section_type"] != "profile"
+        )
+        vector_text = "\n".join(
+            item["text"]
+            for item in evidence_docs
+            if item.get("embedding")
         )
         profile_text = "\n".join(
             item["text"]
@@ -507,16 +571,17 @@ class SearchLogicTests(unittest.TestCase):
             if item["section_type"] == "profile"
         )
 
-        self.assertNotIn("北京大学", all_embedding_text)
-        self.assertNotIn("北京", all_embedding_text)
-        self.assertNotIn("张三", all_embedding_text)
-        self.assertNotIn("百度在线网络技术", all_embedding_text)
-        self.assertNotIn("学士", all_embedding_text)
-        self.assertIn("机器学习", all_embedding_text)
-        self.assertIn("自然语言处理", all_embedding_text)
-        self.assertIn("推荐系统", all_embedding_text)
-        self.assertIn("医疗问答系统", all_embedding_text)
-        self.assertNotIn("机器学习工程师", all_embedding_text)
+        self.assertNotIn("北京大学", evidence_text)
+        self.assertNotIn("北京", evidence_text)
+        self.assertNotIn("张三", evidence_text)
+        self.assertNotIn("百度在线网络技术", evidence_text)
+        self.assertNotIn("学士", evidence_text)
+        self.assertIn("机器学习", evidence_text)
+        self.assertIn("自然语言处理", evidence_text)
+        self.assertIn("推荐系统", vector_text)
+        self.assertIn("医疗问答系统", vector_text)
+        self.assertNotIn("自然语言处理", vector_text)
+        self.assertNotIn("机器学习工程师", evidence_text)
         self.assertIn("北京大学", profile_text)
         self.assertIn("机器学习工程师", profile_text)
 
@@ -565,22 +630,28 @@ class SearchLogicTests(unittest.TestCase):
 
         evidence_docs = _resume_evidence_docs(doc)
         section_types = {item["section_type"] for item in evidence_docs}
-        vector_text = "\n".join(
+        non_profile_text = "\n".join(
             item["text"]
             for item in evidence_docs
             if item["section_type"] != "profile"
         )
         profile_docs = [item for item in evidence_docs if item["section_type"] == "profile"]
+        skill_docs = [item for item in evidence_docs if item["section_type"] == "skills"]
+        education_docs = [item for item in evidence_docs if item["section_type"] == "education"]
 
         self.assertEqual(section_types, {"profile", "skills", "project", "internship", "education"})
         self.assertTrue(all(item["resume_id"] == "resume-1" for item in evidence_docs))
-        self.assertNotIn("北京大学", vector_text)
-        self.assertNotIn("百度在线网络技术", vector_text)
-        self.assertIn("推荐系统召回", vector_text)
-        self.assertIn("自然语言处理", vector_text)
+        self.assertNotIn("北京大学", non_profile_text)
+        self.assertNotIn("百度在线网络技术", non_profile_text)
+        self.assertIn("推荐系统召回", non_profile_text)
+        self.assertIn("自然语言处理", non_profile_text)
         self.assertEqual(len(profile_docs), 1)
+        self.assertEqual(len(skill_docs), 1)
+        self.assertEqual(len(education_docs), 1)
         self.assertIn("北京大学", profile_docs[0]["text"])
         self.assertIn("机器学习工程师", profile_docs[0]["text"])
+        self.assertNotIn("embedding", skill_docs[0])
+        self.assertNotIn("embedding", education_docs[0])
         self.assertNotIn(EVIDENCE_VECTOR_FIELD, profile_docs[0])
 
     def test_skill_filters_are_and_terms(self) -> None:
@@ -835,7 +906,7 @@ class SearchLogicTests(unittest.TestCase):
         self.assertEqual(evidence_meta["embedding_vector_fields"], [EVIDENCE_VECTOR_FIELD])
         self.assertEqual(
             evidence_meta["vectorized_section_types"],
-            ["education", "internship", "project", "skills"],
+            ["internship", "project"],
         )
         evidence_props = EVIDENCE_INDEX_BODY["mappings"]["properties"]
         self.assertIn(EVIDENCE_VECTOR_FIELD, evidence_props)

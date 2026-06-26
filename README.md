@@ -304,21 +304,21 @@ python resume_parser.py data/ --jsonl -o parsed_resumes.jsonl
      │ section_type │ 内容来源                         │ 有向量？│
      ├─────────────┼──────────────────────────────────┼─────────┤
      │ profile     │ 候选人档案（编号/姓名/学校/岗位等）│ ✗       │
-     │ skills      │ 所有技能标签拼接                  │ ✓       │
+     │ skills      │ 所有技能标签拼接                  │ ✗       │
      │ project     │ 每个项目：名称 + 描述 + 职责      │ ✓       │
      │ internship  │ 每段实习：部门 + 职位 + 描述      │ ✓       │
-     │ education   │ 每段教育：专业 + 研究方向 + 实验室 │ ✓       │
+     │ education   │ 每段教育：专业 + 研究方向 + 实验室 │ ✗       │
      └─────────────┴──────────────────────────────────┴─────────┘
    - evidence_id 格式：{resume_id}:{section_type}:{ordinal}
    - 每个证据片段冗余存储了候选人基本信息和申请信息，
      便于在证据索引上直接做过滤和词面检索
-   - 语义文本有字符预算控制（section 512 字符, skills 256 字符）
+   - 证据文本有字符预算控制（长经历 section 512 字符, skills 256 字符）
    - 证据文本会排除公司名、学校名、姓名等实体，
-     避免这些高频信息干扰语义向量的表达
+     避免这些高频信息干扰词面证据和语义向量的表达
 
 4. 向量化 (add_evidence_embeddings)
-   - 对 skills/project/internship/education 四类证据做向量化
-   - profile 类型不做向量化（它是纯结构化文本，不适合语义检索）
+   - 只对 project/internship 两类长经历证据做向量化
+   - profile/skills/education 类型不做向量化，保留给 BM25、短语匹配和结构化过滤
    - 调用 embedding_service.encode_batch() 批量生成 1792 维向量
    - 向量做 L2 归一化 (normalize=True)
 
@@ -607,41 +607,129 @@ $$\text{RRF} = \frac{1.2}{60 + 3} + \frac{1.0}{60 + 10} = 0.01905 + 0.01429 = 0.
 
 标准 RRF 的核心原则是：**每个检索器对每个候选人贡献且仅贡献一个排名**。
 
-由于系统的两路检索（BM25 和 kNN）返回的都是**证据片段级别**的结果，同一个候选人可能有多个不同排名位置的片段命中（例如 3 个项目描述和 1 个技能标签都命中了查询）。
+由于系统的两路检索（BM25 和 kNN）返回的都是**证据片段级别**的结果，同一个候选人可能有多个不同排名位置的片段命中。
 
-为了避免"写的段落多"的候选人因为片段分数累加次数多而总分虚高，系统在进入 RRF 前，对 BM25 和 Dense 两路都进行了**完全对称的候选人级别聚合**：
+为了避免"写的段落多"的候选人因为片段分数累加次数多而总分虚高，同时保留"多段证据一致相关"的排序信号，系统在进入 RRF 前，对 BM25 和 Dense 两路都进行了**对称的候选人级别聚合**：
 
-1. **片段最大池化 (Max-Pooling)**：遍历某一路返回的所有片段，对于同一个候选人，**只取其排名最高（rank 最小）的一个片段**作为代表，丢弃其他排名较低的冗余片段。
-2. **候选人全局重排**：根据提取出的最佳片段排名，对本路检索命中的所有候选人重新排序，得到候选人级别的全局排名（`evidence_group_rank` 和 `dense_group_rank`）。
+1. **片段 top-k pooling**：遍历某一路返回的所有片段，对于同一个候选人，只取排名最高的前 3 个片段，以 `1/(60 + best_rank) + 0.30/(60 + second_rank) + 0.15/(60 + third_rank)` 计算本路内部聚合分。
+2. **候选人全局重排**：根据本路内部聚合分，对命中的候选人重新排序，得到候选人级别的全局排名（`evidence_group_rank` 和 `dense_group_rank`）。
 3. **单项 RRF 贡献**：用重排后的候选人聚合排名参与 RRF 融合。
 
-这样确保了无论候选人命中了几个证据片段，系统只看其**最高质量的那一次匹配**，每路检索都只向最终的 RRF 贡献**1 项**分数。
+这样确保了多段证据只影响本路内部排名；跨路融合时，每路检索仍然只向最终的 RRF 贡献**1 项**分数。
+
+#### 内部聚合排名示例
+
+假设 query 是"推荐系统召回 NLP"，系统先分别拿到 BM25 evidence 和 Dense evidence 的片段级结果。
+
+BM25 evidence 路返回的片段排名如下：
+
+| 片段排名 | 候选人 | 命中的证据片段 |
+|----------|--------|----------------|
+| 1        | A      | 项目：推荐系统召回 |
+| 2        | B      | 项目：推荐系统 |
+| 5        | A      | 实习：排序模型 |
+| 8        | C      | 项目：NLP |
+| 12       | A      | 教育：自然语言处理 |
+
+此时不是直接把 A 的 3 个片段都送进最终 RRF，而是先在 BM25 路内部聚合：
+
+```text
+A = 1/(60+1) + 0.30/(60+5) + 0.15/(60+12)
+  = 0.01639 + 0.00462 + 0.00208
+  = 0.02309
+
+B = 1/(60+2)
+  = 0.01613
+
+C = 1/(60+8)
+  = 0.01471
+```
+
+所以 BM25 路内部候选人排名是：
+
+```text
+evidence_group_rank:
+A = 1
+B = 2
+C = 3
+```
+
+进入跨路 RRF 时，BM25 路仍然只给每个候选人贡献一次：
+
+```text
+A 的 BM25 贡献 = 1.2 / (60 + 1)
+B 的 BM25 贡献 = 1.2 / (60 + 2)
+C 的 BM25 贡献 = 1.2 / (60 + 3)
+```
+
+Dense evidence 路也做同样的事，只是片段排名来自向量检索：
+
+| 片段排名 | 候选人 | 命中的证据片段 |
+|----------|--------|----------------|
+| 1        | B      | 项目向量：推荐系统 |
+| 3        | A      | 项目向量：召回链路 |
+| 4        | A      | 实习向量：排序模型 |
+| 9        | C      | 项目向量：NLP |
+| 15       | A      | 实习向量：模型优化 |
+
+Dense 路内部聚合分：
+
+```text
+A = 1/(60+3) + 0.30/(60+4) + 0.15/(60+15)
+  = 0.01587 + 0.00469 + 0.00200
+  = 0.02256
+
+B = 1/(60+1)
+  = 0.01639
+
+C = 1/(60+9)
+  = 0.01449
+```
+
+所以 Dense 路内部候选人排名是：
+
+```text
+dense_group_rank:
+A = 1
+B = 2
+C = 3
+```
+
+进入跨路 RRF 时，Dense 路同样只贡献一次：
+
+```text
+A 的 Dense 贡献 = 1.0 / (60 + 1)
+B 的 Dense 贡献 = 1.0 / (60 + 2)
+C 的 Dense 贡献 = 1.0 / (60 + 3)
+```
+
+这个例子里，B 有 Dense 路的全局最佳单片段，但 A 有多个相关片段，所以 A 在 Dense 路内部被重排到第 1。关键点是：**多证据只改变本路内部排名，不会在最终 RRF 里额外多加一笔分数**。
 
 #### 完整的 RRF 融合流程
 
 ```
-Step 1: 检索路内部聚合 (Chunk to Candidate Max-Pooling)
-  - Evidence BM25 路：取候选人名下排名最高的一条词面证据，重排得出 evidence_group_rank
-  - Evidence kNN 路：取候选人名下排名最高的一条向量证据，重排得出 dense_group_rank
+Step 1: 检索路内部聚合 (Chunk to Candidate Top-K Pooling)
+  - Evidence BM25 路：按候选人名下 top-k 词面证据重排，得出 evidence_group_rank
+  - Evidence kNN 路：按候选人名下 top-k 向量证据重排，得出 dense_group_rank
 
 Step 2: 计算基础 RRF 分数 (Standard RRF)
   - evidence BM25 贡献：weight(1.2) / (60 + evidence_group_rank)
   - dense 贡献：weight(1.0) / (60 + dense_group_rank)
   - 基础 RRF = 两者之和
 
-Step 4: 匹配层级 (Lexical Tier) 加分
+Step 3: 匹配层级 (Lexical Tier) 加分
   - tier=3 (精确匹配命中)：额外 ×1.45
   - tier=2 (短语匹配命中)：额外 ×1.30
   - tier=1 (分词匹配命中)：额外 ×1.15
   - tier=0 (仅 dense 命中)：×1.00
 
-Step 5: Term Coverage 加分
+Step 4: Term Coverage 加分
   - 每覆盖一个查询词，额外 ×(1 + 0.05)
 
-Step 6: 最终得分
+Step 5: 最终得分
   final_score = base_rrf × (1.0 + 0.15×tier + 0.05×coverage)
 
-Step 7: 排序输出
+Step 6: 排序输出
   - 按 final_score 降序
   - 同分时按 best_rank 升序
   - 取 limit 条返回
@@ -877,6 +965,7 @@ python evaluate_search.py --details --output reports/current.json
 | `EVIDENCE_RRF_WEIGHT`        | 1.2    | Evidence BM25 路在 RRF 中的权重              |
 | `EVIDENCE_DENSE_RRF_WEIGHT`  | 1.0    | Evidence kNN 路在 RRF 中的权重               |
 | `DENSE_RANK_WINDOW_SIZE`     | 300    | Dense 检索的最大结果窗口                     |
+| `EVIDENCE_POOL_EXTRA_WEIGHTS`| `(0.30, 0.15)` | 同候选人第 2、3 个证据在本路内部排序中的衰减权重 |
 | `QUERY_TERM_COVERAGE_BOOST`  | 0.001  | Term Coverage 的 constant_score boost        |
 | `MAX_BROWSE_RESULT_SIZE`     | 10,000 | 浏览模式下的最大返回数                       |
 | `FACETS_CACHE_TTL_SECONDS`   | 60     | Facet 聚合结果缓存时间                       |
@@ -890,7 +979,7 @@ python evaluate_search.py --details --output reports/current.json
 | `SECTION_SEMANTIC_CHAR_BUDGET` | 512    | 每个 section 证据的最大字符数              |
 | `SKILLS_SEMANTIC_CHAR_BUDGET`  | 256    | 技能证据的最大字符数                       |
 | `PROFILE_LEXICAL_CHAR_BUDGET`  | 768    | 档案证据的最大字符数                       |
-| `VECTOR_EVIDENCE_SECTION_TYPES`| `{skills, project, internship, education}` | 需要向量化的证据类型 |
+| `VECTOR_EVIDENCE_SECTION_TYPES`| `{project, internship}` | 需要向量化的证据类型；技能标签和教育经历只走词面检索 |
 
 ### `embedding_service.py` 中的关键常量
 

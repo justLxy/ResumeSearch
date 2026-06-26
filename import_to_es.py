@@ -22,7 +22,7 @@ REQUEST_TIMEOUT_SECONDS = 90
 SECTION_SEMANTIC_CHAR_BUDGET = 512
 SKILLS_SEMANTIC_CHAR_BUDGET = 256
 PROFILE_LEXICAL_CHAR_BUDGET = 768
-SEMANTIC_PROFILE_VERSION = "semantic-profile-v5"
+SEMANTIC_PROFILE_VERSION = "semantic-profile-v6"
 EMBEDDING_NORMALIZED = True
 LEGACY_CANDIDATE_VECTOR_FIELDS = (
     "skills_vector",
@@ -31,7 +31,7 @@ LEGACY_CANDIDATE_VECTOR_FIELDS = (
     "education_vector",
 )
 EVIDENCE_VECTOR_FIELD = "evidence_vector"
-VECTOR_EVIDENCE_SECTION_TYPES = {"skills", "project", "internship", "education"}
+VECTOR_EVIDENCE_SECTION_TYPES = {"project", "internship"}
 OBSOLETE_VECTOR_FIELDS = (
     "semantic_profile_vector",
     "role_vector",
@@ -744,7 +744,16 @@ def _resume_evidence_docs(doc: dict[str, Any]) -> list[dict[str, Any]]:
 
     skills_text = _skills_semantic_text(doc)
     if skills_text:
-        items.append(_evidence_doc(doc, "skills", 0, "能力标签", skills_text))
+        items.append(
+            _evidence_doc(
+                doc,
+                "skills",
+                0,
+                "能力标签",
+                skills_text,
+                vector_enabled=False,
+            )
+        )
 
     for index, item in enumerate(doc.get("projects") or [], start=1):
         text = _semantic_text(
@@ -785,7 +794,16 @@ def _resume_evidence_docs(doc: dict[str, Any]) -> list[dict[str, Any]]:
         )
         title = " / ".join(value for value in [item.get("school"), item.get("major")] if value)
         if text:
-            items.append(_evidence_doc(doc, "education", index, title or "教育经历", text))
+            items.append(
+                _evidence_doc(
+                    doc,
+                    "education",
+                    index,
+                    title or "教育经历",
+                    text,
+                    vector_enabled=False,
+                )
+            )
 
     return items
 

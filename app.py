@@ -39,6 +39,7 @@ DENSE_RRF_WEIGHT = 1.0
 EVIDENCE_RRF_WEIGHT = 1.2
 EVIDENCE_DENSE_RRF_WEIGHT = 1.0
 DENSE_RANK_WINDOW_SIZE = 300
+EVIDENCE_POOL_EXTRA_WEIGHTS = (0.30, 0.15)
 QUERY_TERM_COVERAGE_BOOST = 0.001
 MAX_QUERY_COVERAGE_TERMS = 8
 COVERAGE_QUERY_PREFIX = "query_term:"
@@ -941,15 +942,15 @@ def _rrf_merge(
     query_text: str = "",
 ) -> list[dict[str, Any]]:
     rrf_scores: dict[str, float] = {}
-    dense_inner_scores: dict[str, float] = {}
+    dense_route_ranks: dict[str, list[int]] = {}
     dense_best_route_rank: dict[str, int] = {}
+    evidence_route_ranks: dict[str, list[int]] = {}
     hit_map: dict[str, dict[str, Any]] = {}
     best_rank: dict[str, int] = {}
     term_coverage: dict[str, int] = {}
     lexical_tier: dict[str, int] = {}
     retrieval_debug: dict[str, dict[str, Any]] = {}
     coverage_enabled = len(_coverage_tokens(query_text)) >= 2
-    evidence_inner_scores: dict[str, float] = {}
     evidence_best_route_rank: dict[str, int] = {}
 
     for response in responses:
@@ -961,10 +962,10 @@ def _rrf_merge(
             doc_id = _hit_resume_id(hit, response)
             route_contribution = weight / (RRF_RANK_CONSTANT + rank)
             if is_dense:
-                dense_inner_scores[doc_id] = dense_inner_scores.get(doc_id, 0) + route_contribution
+                dense_route_ranks.setdefault(doc_id, []).append(rank)
                 dense_best_route_rank[doc_id] = min(dense_best_route_rank.get(doc_id, rank), rank)
             elif is_evidence:
-                evidence_inner_scores[doc_id] = evidence_inner_scores.get(doc_id, 0) + route_contribution
+                evidence_route_ranks.setdefault(doc_id, []).append(rank)
                 evidence_best_route_rank[doc_id] = min(evidence_best_route_rank.get(doc_id, rank), rank)
             if coverage_enabled and retriever_name == EVIDENCE_RETRIEVER:
                 term_coverage[doc_id] = max(
@@ -1013,12 +1014,19 @@ def _rrf_merge(
                 }
                 if is_evidence:
                     dense_match.update(_evidence_match_debug(hit, retriever_name, rank))
-                debug.setdefault("dense_matches", []).append(dense_match)
+                matches = debug.setdefault("dense_matches", [])
+                if len(matches) < 3:
+                    matches.append(dense_match)
 
-    # --- Aggregate evidence BM25 to candidate level (Max-Pooling) ---
+    # --- Aggregate evidence BM25 to candidate level, then RRF once per candidate. ---
+    evidence_pools = {
+        doc_id: _evidence_pool_score(ranks)
+        for doc_id, ranks in evidence_route_ranks.items()
+    }
     evidence_group_ids = sorted(
-        evidence_best_route_rank.keys(),
+        evidence_pools.keys(),
         key=lambda doc_id: (
+            -float(evidence_pools[doc_id]["score"]),
             evidence_best_route_rank[doc_id],
             doc_id,
         ),
@@ -1035,13 +1043,19 @@ def _rrf_merge(
         debug = retrieval_debug.get(doc_id)
         if debug:
             debug["evidence_group_rank"] = ev_rank
-            debug["evidence_inner_score"] = round(1.0 / (RRF_RANK_CONSTANT + evidence_best_route_rank[doc_id]), 6)
+            debug["evidence_inner_score"] = round(float(evidence_pools[doc_id]["score"]), 6)
+            debug["evidence_support_count"] = evidence_pools[doc_id]["support_count"]
             debug["evidence_rrf_contribution"] = round(evidence_contribution, 6)
 
-    # --- Aggregate dense to candidate level (Max-Pooling) ---
+    # --- Aggregate dense to candidate level, then RRF once per candidate. ---
+    dense_pools = {
+        doc_id: _evidence_pool_score(ranks)
+        for doc_id, ranks in dense_route_ranks.items()
+    }
     dense_group_ids = sorted(
-        dense_best_route_rank.keys(),
+        dense_pools.keys(),
         key=lambda doc_id: (
+            -float(dense_pools[doc_id]["score"]),
             dense_best_route_rank[doc_id],
             doc_id,
         ),
@@ -1052,6 +1066,7 @@ def _rrf_merge(
     }
     for doc_id in dense_group_ids:
         dense_rank = all_dense_group_rank.get(doc_id, dense_best_route_rank.get(doc_id, 10**9))
+        dense_pool = dense_pools[doc_id]
         dense_contribution = DENSE_RRF_WEIGHT / (RRF_RANK_CONSTANT + dense_rank)
         rrf_scores[doc_id] = rrf_scores.get(doc_id, 0) + dense_contribution
         best_rank[doc_id] = min(best_rank.get(doc_id, dense_rank), dense_rank)
@@ -1064,7 +1079,14 @@ def _rrf_merge(
         )
         if DENSE_RETRIEVER not in debug["retrieval_sources"]:
             debug["retrieval_sources"].append(DENSE_RETRIEVER)
-        dense_matches = debug.get("dense_matches") or []
+        dense_matches = sorted(
+            debug.get("dense_matches") or [],
+            key=lambda match: (
+                match.get("rank") or 10**9,
+                -float(match.get("score") or 0),
+            ),
+        )
+        debug["dense_matches"] = dense_matches
         best_dense_match = min(
             dense_matches,
             key=lambda match: (
@@ -1074,8 +1096,10 @@ def _rrf_merge(
         ) if dense_matches else {}
         debug["dense_rank"] = dense_rank
         debug["dense_group_rank"] = dense_rank
-        debug["dense_inner_score"] = round(1.0 / (RRF_RANK_CONSTANT + dense_best_route_rank[doc_id]), 6)
+        debug["dense_inner_score"] = round(float(dense_pool["score"]), 6)
         debug["dense_outer_weight"] = round(DENSE_RRF_WEIGHT, 3)
+        debug["dense_support_count"] = dense_pool["support_count"]
+        debug["dense_pooling"] = "top_k_route_rerank"
         debug["dense_rrf_contribution"] = round(dense_contribution, 6)
         debug["dense_route_rank"] = best_dense_match.get("rank")
         debug["dense_score"] = best_dense_match.get("score")
@@ -1115,6 +1139,19 @@ def _rrf_merge(
             hit["_retrieval_debug"]["term_coverage"] = term_coverage.get(doc_id, 0)
         results.append(_format_hit(hit, final_scores[doc_id]))
     return results
+
+
+def _evidence_pool_score(route_ranks: list[int]) -> dict[str, float | int]:
+    sorted_route_ranks = sorted(rank for rank in route_ranks if rank > 0)
+    weights = (1.0, *EVIDENCE_POOL_EXTRA_WEIGHTS)
+    contributions = [
+        weight / (RRF_RANK_CONSTANT + route_rank)
+        for weight, route_rank in zip(weights, sorted_route_ranks)
+    ]
+    return {
+        "score": sum(contributions),
+        "support_count": len(contributions),
+    }
 
 
 def _fetch_resume_hits_for_evidence(
