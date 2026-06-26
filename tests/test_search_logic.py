@@ -11,6 +11,7 @@ from app import (
     INTENT_SKILL_COMBO,
     INTENT_STRUCTURED,
     _build_filters,
+    _dense_confidence,
     _default_snippet,
     _evidence_lexical_query,
     _format_hit,
@@ -147,6 +148,71 @@ class SearchLogicTests(unittest.TestCase):
             {EVIDENCE_RETRIEVER, EVIDENCE_DENSE_RETRIEVER},
         )
         self.assertTrue(all("resume_evidence_current" in path for path in calls))
+
+    def test_dense_confidence_abstains_when_scores_have_no_clear_head(self) -> None:
+        scores = (
+            ([0.7521] * 50)
+            + ([0.7594] * 24)
+            + ([0.7672] * 21)
+            + [0.7852, 0.7850, 0.7815, 0.7804, 0.7782]
+        )
+        response = _response(
+            EVIDENCE_DENSE_RETRIEVER,
+            [_hit(f"dense-{index}", f"候选人 {index}", score=score) for index, score in enumerate(scores)],
+        )
+
+        confidence = _dense_confidence(response)
+
+        self.assertTrue(confidence["abstained"])
+        self.assertEqual(confidence["reason"], "flat_distribution")
+
+    def test_dense_confidence_keeps_clear_head_distribution(self) -> None:
+        scores = (
+            ([0.8443] * 50)
+            + ([0.8502] * 24)
+            + ([0.8569] * 21)
+            + [0.8967, 0.8932, 0.8910, 0.8873, 0.8805]
+        )
+        response = _response(
+            EVIDENCE_DENSE_RETRIEVER,
+            [_hit(f"dense-{index}", f"候选人 {index}", score=score) for index, score in enumerate(scores)],
+        )
+
+        confidence = _dense_confidence(response)
+
+        self.assertFalse(confidence["abstained"])
+        self.assertEqual(confidence["reason"], "clear_head")
+
+    def test_hybrid_search_clears_dense_hits_when_dense_abstains(self) -> None:
+        flat_scores = (
+            ([0.7521] * 50)
+            + ([0.7594] * 24)
+            + ([0.7672] * 21)
+            + [0.7852, 0.7850, 0.7815, 0.7804, 0.7782]
+        )
+
+        def fake_es(_method: str, _path: str, body: dict) -> dict:
+            if "knn" in body:
+                hits = [
+                    _hit(f"dense-{index}", f"候选人 {index}", score=score)
+                    for index, score in enumerate(flat_scores)
+                ]
+                return {"hits": {"total": {"value": len(hits)}, "hits": hits}}
+            return {"hits": {"total": {"value": 0}, "hits": []}}
+
+        with patch("app._es", side_effect=fake_es):
+            responses, warnings = _run_hybrid_search(
+                "哥伦比亚",
+                [0.1, 0.2, 0.3],
+                [],
+                100,
+                use_dense=True,
+            )
+
+        dense_response = next(response for response in responses if response["_retriever_name"] == EVIDENCE_DENSE_RETRIEVER)
+        self.assertEqual(dense_response["hits"]["hits"], [])
+        self.assertTrue(dense_response["_dense_confidence"]["abstained"])
+        self.assertEqual(warnings, ["evidence_dense abstained: dense score distribution has no clear head"])
 
     def test_exact_entity_queries_skip_dense_before_merge(self) -> None:
         lexical_response = _response(

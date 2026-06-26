@@ -705,31 +705,55 @@ C 的 Dense 贡献 = 1.0 / (60 + 3)
 
 这个例子里，B 有 Dense 路的全局最佳单片段，但 A 有多个相关片段，所以 A 在 Dense 路内部被重排到第 1。关键点是：**多证据只改变本路内部排名，不会在最终 RRF 里额外多加一笔分数**。
 
+#### Dense 路的自适应拒绝召回
+
+Elasticsearch kNN 会强制返回最近的 K 个证据片段，即使 query 和简历经历没有真实语义关系，也会从库里找出"最接近"的一批结果。因此 Dense 路在进入候选人聚合前，会先判断本次向量检索是否有清晰的头部信号。
+
+项目不使用固定相似度阈值（例如 `score > 0.80`），而是使用本次 dense 结果分布的上侧离群判断：
+
+```text
+Q1 = dense scores 的 25 分位数
+Q3 = dense scores 的 75 分位数
+IQR = Q3 - Q1
+upper_fence = Q3 + 1.5 * IQR
+
+如果 top_score <= upper_fence：
+  Dense 路 abstain，不参与 RRF
+否则：
+  Dense 路进入候选人聚合和 RRF
+```
+
+这个判断只看本次检索结果的分布形状，不关心 query 是不是学校、公司、技能或自然语言需求。比如搜索"哥伦比亚"时，dense topK 可能整体都在 0.75-0.78 之间，top1 没有明显高出背景分布，Dense 路会拒绝召回；而搜索"做过推荐系统召回和 NLP 模型落地的人"时，头部向量证据会明显高于背景，Dense 路才参与融合。
+
 #### 完整的 RRF 融合流程
 
 ```
-Step 1: 检索路内部聚合 (Chunk to Candidate Top-K Pooling)
+Step 1: Dense 路自适应判断
+  - 如果 Dense topK 没有清晰头部，Dense 路 abstain
+  - 如果 Dense topK 有清晰头部，继续进入候选人聚合
+
+Step 2: 检索路内部聚合 (Chunk to Candidate Top-K Pooling)
   - Evidence BM25 路：按候选人名下 top-k 词面证据重排，得出 evidence_group_rank
   - Evidence kNN 路：按候选人名下 top-k 向量证据重排，得出 dense_group_rank
 
-Step 2: 计算基础 RRF 分数 (Standard RRF)
+Step 3: 计算基础 RRF 分数 (Standard RRF)
   - evidence BM25 贡献：weight(1.2) / (60 + evidence_group_rank)
   - dense 贡献：weight(1.0) / (60 + dense_group_rank)
   - 基础 RRF = 两者之和
 
-Step 3: 匹配层级 (Lexical Tier) 加分
+Step 4: 匹配层级 (Lexical Tier) 加分
   - tier=3 (精确匹配命中)：额外 ×1.45
   - tier=2 (短语匹配命中)：额外 ×1.30
   - tier=1 (分词匹配命中)：额外 ×1.15
   - tier=0 (仅 dense 命中)：×1.00
 
-Step 4: Term Coverage 加分
+Step 5: Term Coverage 加分
   - 每覆盖一个查询词，额外 ×(1 + 0.05)
 
-Step 5: 最终得分
+Step 6: 最终得分
   final_score = base_rrf × (1.0 + 0.15×tier + 0.05×coverage)
 
-Step 6: 排序输出
+Step 7: 排序输出
   - 按 final_score 降序
   - 同分时按 best_rank 升序
   - 取 limit 条返回
@@ -965,6 +989,8 @@ python evaluate_search.py --details --output reports/current.json
 | `EVIDENCE_RRF_WEIGHT`        | 1.2    | Evidence BM25 路在 RRF 中的权重              |
 | `EVIDENCE_DENSE_RRF_WEIGHT`  | 1.0    | Evidence kNN 路在 RRF 中的权重               |
 | `DENSE_RANK_WINDOW_SIZE`     | 300    | Dense 检索的最大结果窗口                     |
+| `DENSE_ABSTAIN_MIN_SAMPLE_SIZE` | 20  | Dense 自适应拒绝召回所需的最小样本数        |
+| `DENSE_ABSTAIN_IQR_MULTIPLIER` | 1.5  | Dense 上侧离群围栏的 IQR 倍率               |
 | `EVIDENCE_POOL_EXTRA_WEIGHTS`| `(0.30, 0.15)` | 同候选人第 2、3 个证据在本路内部排序中的衰减权重 |
 | `QUERY_TERM_COVERAGE_BOOST`  | 0.001  | Term Coverage 的 constant_score boost        |
 | `MAX_BROWSE_RESULT_SIZE`     | 10,000 | 浏览模式下的最大返回数                       |

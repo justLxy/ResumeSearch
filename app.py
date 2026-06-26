@@ -39,6 +39,8 @@ DENSE_RRF_WEIGHT = 1.0
 EVIDENCE_RRF_WEIGHT = 1.2
 EVIDENCE_DENSE_RRF_WEIGHT = 1.0
 DENSE_RANK_WINDOW_SIZE = 300
+DENSE_ABSTAIN_MIN_SAMPLE_SIZE = 20
+DENSE_ABSTAIN_IQR_MULTIPLIER = 1.5
 EVIDENCE_POOL_EXTRA_WEIGHTS = (0.30, 0.15)
 QUERY_TERM_COVERAGE_BOOST = 0.001
 MAX_QUERY_COVERAGE_TERMS = 8
@@ -827,6 +829,48 @@ def _evidence_knn_body(
     return body
 
 
+def _dense_confidence(response: dict[str, Any]) -> dict[str, Any]:
+    scores = [
+        float(hit.get("_score") or 0)
+        for hit in response.get("hits", {}).get("hits", [])
+    ]
+    sample_size = len(scores)
+    if sample_size < DENSE_ABSTAIN_MIN_SAMPLE_SIZE:
+        return {
+            "abstained": False,
+            "reason": "insufficient_sample",
+            "sample_size": sample_size,
+        }
+
+    top_score = max(scores)
+    q1 = _percentile(scores, 0.25)
+    q3 = _percentile(scores, 0.75)
+    iqr = q3 - q1
+    threshold = q3 + (DENSE_ABSTAIN_IQR_MULTIPLIER * iqr)
+    abstained = not (iqr > 0 and top_score > threshold)
+    return {
+        "abstained": abstained,
+        "reason": "flat_distribution" if abstained else "clear_head",
+        "sample_size": sample_size,
+        "top_score": round(top_score, 6),
+        "q1": round(q1, 6),
+        "q3": round(q3, 6),
+        "iqr": round(iqr, 6),
+        "threshold": round(threshold, 6),
+    }
+
+
+def _percentile(values: list[float], fraction: float) -> float:
+    if not values:
+        return 0.0
+    sorted_values = sorted(values)
+    position = (len(sorted_values) - 1) * fraction
+    lower = int(position)
+    upper = min(lower + 1, len(sorted_values) - 1)
+    ratio = position - lower
+    return (sorted_values[lower] * (1 - ratio)) + (sorted_values[upper] * ratio)
+
+
 def _run_hybrid_search(
     query_text: str,
     query_vector: list[float],
@@ -880,6 +924,14 @@ def _run_hybrid_search(
             response["_rrf_weight"] = weight
             if field:
                 response["_vector_field"] = field
+            if _is_dense_retriever(name):
+                confidence = _dense_confidence(response)
+                response["_dense_confidence"] = confidence
+                if confidence["abstained"]:
+                    response["hits"]["hits"] = []
+                    warnings.append(
+                        f"{name} abstained: dense score distribution has no clear head"
+                    )
             responses.append(response)
     return responses, warnings
 
