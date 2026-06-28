@@ -399,6 +399,15 @@ def _plan_query(
     lexical_query = str(parsed_query.get("lexical_query") or parsed_query.get("query_text") or "").strip()
     semantic_query = str(parsed_query.get("semantic_query") or lexical_query).strip()
     intent = _normalize_plan_intent(parsed_query.get("intent"), raw_query, lexical_query, parsed_query.get("constraints") or {})
+
+    # 防御：lookup / semantic 意图下 lexical_query 不应为空。
+    # LLM 偶尔会脑抽返回空字符串（尤其是开了 thinking 模式时），
+    # 导致搜索退化到浏览模式。此处用 raw_query 兜底。
+    if not lexical_query and raw_query and intent in (INTENT_LOOKUP, INTENT_SEMANTIC):
+        lexical_query = raw_query
+        if not semantic_query:
+            semantic_query = raw_query
+
     known_skills = _planner_known_skills(facets) if raw_query else set()
     llm_filters = _filters_from_llm_constraints(parsed_query.get("constraints") or {}, known_skills)
     filters = [*explicit_filters, *llm_filters]
