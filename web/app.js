@@ -103,7 +103,8 @@ function updateResultCount() {
 
 function updateLoadMore() {
   if (!els.loadMoreButton) return;
-  els.loadMoreButton.hidden = !state.hasMore && !state.loadingMore;
+  const allLoaded = state.results.length >= state.availableCount && state.availableCount > 0;
+  els.loadMoreButton.hidden = allLoaded || (!state.hasMore && !state.loadingMore);
   els.loadMoreButton.disabled = state.loadingMore;
   els.loadMoreButton.textContent = state.loadingMore ? "加载中..." : "加载更多";
 }
@@ -351,6 +352,9 @@ function renderResults() {
         .slice(0, 6)
         .map((skill) => `<span class="skill-tag">${escapeHtml(skill)}</span>`)
         .join("");
+
+      const source = item.source || {};
+      const cardExtras = buildCardExtras(source);
         
       const debug = item.retrieval_debug || {};
       const sources = debug.retrieval_sources || [];
@@ -534,6 +538,7 @@ function renderResults() {
             <div class="meta-line">${buildMetaLineHTML(item)}</div>
             <div class="snippet">${item.project_snippet}</div>
             <div class="skill-row">${skills || `<span class="skill-tag">技能待补充</span>`}</div>
+            ${cardExtras}
           </div>
           <div class="result-actions">
             ${sources.length > 0 ? `<button class="quick-action debug-action" type="button" style="margin-right: 8px;">Debug 排名</button>` : ''}
@@ -783,6 +788,46 @@ els.loadMoreButton.addEventListener("click", () => {
     runSearch({ append: true });
   }
 });
+
+function buildCardExtras(source) {
+  const parts = [];
+
+  // 获奖经历
+  const awards = (source.awards || []).filter(
+    (a) => a.has_award && a.has_award !== "否" && a.name
+  );
+  const awardItems = [];
+  if (awards.length > 0) {
+    for (const a of awards) {
+      awardItems.push(`<span class="award-tag">🏆 ${escapeHtml(a.name)} ${escapeHtml(a.level || "")}</span>`);
+    }
+    parts.push(`<span class="extra-label">获奖</span> ${awardItems.join(" ")}`);
+  }
+
+  // 语言
+  const languages = source.languages || {};
+  const langItems = [];
+  if (languages.english_exam_score) langItems.push(escapeHtml(languages.english_exam_score));
+  if (languages.english_spoken_level) langItems.push(`口语${escapeHtml(languages.english_spoken_level)}`);
+  if (langItems.length > 0) {
+    parts.push(`<span class="extra-label">语言</span> ${langItems.join(" · ")}`);
+  }
+
+  // 实习意向
+  const offer = source.offer_internship || {};
+  const offerItems = [];
+  if (offer.can_intern === "是") offerItems.push("可实习");
+  if (offer.available_start_date) offerItems.push(`到岗${escapeHtml(offer.available_start_date)}`);
+  if (offer.weekly_workdays) offerItems.push(`每周${escapeHtml(offer.weekly_workdays)}天`);
+  if (offer.internship_period) offerItems.push(`周期${escapeHtml(offer.internship_period)}`);
+  if (offer.post_graduation_intention) offerItems.push(escapeHtml(offer.post_graduation_intention));
+  if (offerItems.length > 0) {
+    parts.push(`<span class="extra-label">意向</span> ${offerItems.join(" · ")}`);
+  }
+
+  if (parts.length === 0) return "";
+  return `<div class="extra-row">${parts.join("  <span class=\"extra-sep\">|</span>  ")}</div>`;
+}
 
 function buildMetaLineHTML(item) {
   const source = item.source || {};

@@ -372,6 +372,41 @@ INDEX_BODY: dict[str, Any] = {
                     "english_spoken_level": {"type": "keyword"},
                 }
             },
+            "awards": {
+                "type": "nested",
+                "properties": {
+                    "has_award": {"type": "keyword"},
+                    "name": {"type": "keyword"},
+                    "level": {"type": "keyword"},
+                    "description": {"type": "text", "analyzer": "resume_search"},
+                    "is_current": {"type": "boolean"},
+                },
+            },
+            "it_skill_items": {
+                "type": "nested",
+                "properties": {
+                    "skill_name": {"type": "keyword"},
+                    "duration": {"type": "keyword"},
+                    "proficiency": {"type": "keyword"},
+                    "primary_languages": {"type": "keyword"},
+                    "other_languages": {"type": "keyword"},
+                    "is_current": {"type": "boolean"},
+                },
+            },
+            "offer_internship": {
+                "properties": {
+                    "post_graduation_intention": {"type": "keyword"},
+                    "can_intern": {"type": "keyword"},
+                    "available_start_date": {"type": "date"},
+                    "weekly_workdays": {"type": "keyword"},
+                    "internship_period": {"type": "keyword"},
+                },
+            },
+            "uploaded_resume": {
+                "properties": {
+                    "chinese_resume": {"type": "keyword"},
+                },
+            },
             "section_text": {
                 "dynamic": False,
                 "properties": {
@@ -695,6 +730,16 @@ def _enrich_doc(doc: dict[str, Any]) -> dict[str, Any]:
     else:
         candidate["years_experience"] = years_experience
     doc["skills_text"] = " ".join(doc.get("skills") or [])
+    # 清理无效的奖项记录（has_award 为否或无名称的）
+    if "awards" in doc:
+        doc["awards"] = [
+            award for award in doc["awards"]
+            if award.get("has_award") not in (None, "否", False) and award.get("name")
+        ] or []
+    # 清理无效的 offer_internship（所有关键字段都为空）
+    offer = doc.get("offer_internship")
+    if offer and not any(offer.get(k) for k in ("post_graduation_intention", "can_intern", "available_start_date", "weekly_workdays", "internship_period")):
+        doc.pop("offer_internship", None)
     _drop_index_debug_fields(doc)
     return doc
 

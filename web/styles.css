@@ -630,6 +630,38 @@ mark {
   content: "";
 }
 
+.extra-row {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid #edf0f5;
+  font-size: 12px;
+  color: #6b7280;
+  line-height: 1.6;
+}
+
+.extra-label {
+  display: inline-block;
+  min-width: 28px;
+  font-weight: 500;
+  color: #9ca3af;
+  font-size: 11px;
+}
+
+.extra-sep {
+  color: #e0e3e8;
+}
+
+.award-tag {
+  display: inline-block;
+  padding: 1px 7px;
+  margin-right: 4px;
+  margin-bottom: 2px;
+  border-radius: 4px;
+  background: #fef9e7;
+  color: #7d6608;
+  font-size: 11px;
+}
+
 .result-actions {
   display: flex;
   align-items: start;
@@ -703,6 +735,10 @@ mark {
 .load-more:disabled {
   color: var(--muted);
   cursor: wait;
+}
+
+.load-more[hidden] {
+  display: none;
 }
 
 .overlay {

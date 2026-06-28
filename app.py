@@ -41,7 +41,7 @@ EVIDENCE_RRF_WEIGHT = 1.2
 EVIDENCE_DENSE_RRF_WEIGHT = 1.0
 DENSE_RANK_WINDOW_SIZE = 300
 ENABLE_RERANK = True
-RERANK_TOP_N = 5
+RERANK_TOP_N = 20
 DENSE_ABSTAIN_MIN_SAMPLE_SIZE = 20
 DENSE_ABSTAIN_IQR_MULTIPLIER = 1.5
 EVIDENCE_POOL_EXTRA_WEIGHTS = (0.30, 0.15)
@@ -143,6 +143,11 @@ app.mount("/static", StaticFiles(directory=WEB_DIR), name="static")
 @app.get("/")
 def index() -> FileResponse:
     return FileResponse(WEB_DIR / "index.html")
+
+
+@app.get("/favicon.ico")
+def favicon():
+    return FileResponse(WEB_DIR / "favicon.svg", media_type="image/svg+xml")
 
 
 @app.get("/api/search")
@@ -1347,13 +1352,46 @@ def _rerank_document(result: dict[str, Any]) -> str:
     application = source.get("application") or result.get("application") or {}
     lines: list[str] = []
 
-    _append_doc_line(lines, "应聘岗位", application.get("position_name"))
-    _append_doc_line(lines, "期望城市", "、".join(application.get("expected_work_cities") or []))
-    _append_doc_line(lines, "学历", candidate.get("highest_degree"))
-    _append_doc_line(lines, "学校", candidate.get("school"))
-    _append_doc_line(lines, "专业", candidate.get("major"))
-    _append_doc_line(lines, "工作年限", candidate.get("years_experience"))
     _append_doc_line(lines, "技能", "、".join(source.get("skills") or result.get("skills") or []))
+
+    lang = source.get("languages") or {}
+    lang_parts = []
+    if lang.get("english_exam_score"):
+        lang_parts.append(lang["english_exam_score"])
+    if lang.get("english_spoken_level"):
+        lang_parts.append(f"口语{lang['english_spoken_level']}")
+    _append_doc_line(lines, "语言", "，".join(lang_parts))
+
+    for award in source.get("awards") or []:
+        if award.get("has_award") not in (None, "否", False) and award.get("name"):
+            text = " ".join(
+                _clean_doc_text(award.get(field))
+                for field in ("name", "level", "description")
+                if award.get(field)
+            )
+            _append_doc_line(lines, "奖项", text)
+
+    offer = source.get("offer_internship") or {}
+    offer_parts = []
+    if offer.get("can_intern"):
+        offer_parts.append(f"可实习")
+    if offer.get("available_start_date"):
+        offer_parts.append(f"到岗{offer['available_start_date']}")
+    if offer.get("weekly_workdays"):
+        offer_parts.append(f"每周{offer['weekly_workdays']}天")
+    if offer.get("internship_period"):
+        offer_parts.append(f"周期{offer['internship_period']}")
+    if offer.get("post_graduation_intention"):
+        offer_parts.append(offer["post_graduation_intention"])
+    _append_doc_line(lines, "意向", "，".join(offer_parts))
+
+    for edu in source.get("education") or []:
+        text = " ".join(
+            _clean_doc_text(edu.get(field))
+            for field in ("school", "college", "degree", "major", "research_direction", "lab_name")
+            if edu.get(field)
+        )
+        _append_doc_line(lines, "教育", text)
 
     for project in source.get("projects") or []:
         text = " ".join(
@@ -1369,11 +1407,6 @@ def _rerank_document(result: dict[str, Any]) -> str:
             if internship.get(field)
         )
         _append_doc_line(lines, "经历", text)
-
-    debug = result.get("retrieval_debug") or {}
-    snippets = _debug_evidence_snippets(debug)
-    if snippets:
-        _append_doc_line(lines, "命中证据", _strip_html(" ".join(snippets)))
 
     return "\n".join(line for line in lines if line.strip())
 
