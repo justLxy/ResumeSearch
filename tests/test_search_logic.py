@@ -6,10 +6,8 @@ from app import (
     DENSE_RETRIEVER,
     EVIDENCE_DENSE_RETRIEVER,
     EVIDENCE_RETRIEVER,
-    INTENT_ENTITY,
+    INTENT_KEYWORD,
     INTENT_SEMANTIC,
-    INTENT_SKILL_COMBO,
-    INTENT_STRUCTURED,
     _build_filters,
     _call_deepseek_query_parser,
     _dense_confidence,
@@ -833,11 +831,11 @@ class SearchLogicTests(unittest.TestCase):
             ],
         )
 
-    def test_query_plan_uses_llm_structured_constraints_with_system_rerank(self) -> None:
+    def test_query_plan_uses_llm_keyword_constraints_with_system_rerank(self) -> None:
         with patch(
             "app._call_deepseek_query_parser",
             return_value={
-                "intent": "structured",
+                "intent": "keyword",
                 "lexical_query": "推荐系统",
                 "semantic_query": "推荐系统",
                 "constraints": {
@@ -848,7 +846,7 @@ class SearchLogicTests(unittest.TestCase):
                 },
                 "must_terms": ["推荐系统"],
                 "should_terms": [],
-                "enable_dense": True,
+                "enable_dense": False,
                 "enable_rerank": False,
             },
         ):
@@ -863,10 +861,10 @@ class SearchLogicTests(unittest.TestCase):
                 },
             )
 
-        self.assertEqual(plan.intent, INTENT_STRUCTURED)
+        self.assertEqual(plan.intent, INTENT_KEYWORD)
         self.assertEqual(plan.lexical_query, "推荐系统")
         self.assertEqual(plan.semantic_query, "推荐系统")
-        self.assertTrue(plan.enable_dense)
+        self.assertFalse(plan.enable_dense)
         self.assertTrue(plan.enable_rerank)
         self.assertEqual(plan.must_terms, ["推荐系统"])
         self.assertIn({"term": {"skills": "推荐系统"}}, plan.filters)
@@ -875,11 +873,11 @@ class SearchLogicTests(unittest.TestCase):
         with patch(
             "app._call_deepseek_query_parser",
             return_value={
-                "intent": "structured",
+                "intent": "keyword",
                 "lexical_query": "java",
                 "semantic_query": "java",
                 "constraints": {"skills": ["java"]},
-                "enable_dense": True,
+                "enable_dense": False,
                 "enable_rerank": False,
             },
         ):
@@ -896,11 +894,11 @@ class SearchLogicTests(unittest.TestCase):
 
         self.assertIn({"term": {"skills": "Java"}}, plan.filters)
 
-    def test_query_plan_routes_skill_combo_as_broad_hybrid_query(self) -> None:
+    def test_query_plan_routes_semantic_as_hybrid_query(self) -> None:
         with patch(
             "app._call_deepseek_query_parser",
             return_value={
-                "intent": "skill_combo",
+                "intent": "semantic",
                 "lexical_query": "推荐系统 NLP SQL",
                 "semantic_query": "推荐系统 NLP SQL",
                 "constraints": {},
@@ -921,17 +919,17 @@ class SearchLogicTests(unittest.TestCase):
                 },
             )
 
-        self.assertEqual(plan.intent, INTENT_SKILL_COMBO)
+        self.assertEqual(plan.intent, INTENT_SEMANTIC)
         self.assertEqual(plan.filters, [])
         self.assertEqual(plan.must_terms, ["推荐系统", "NLP", "SQL"])
         self.assertTrue(plan.enable_dense)
         self.assertTrue(plan.enable_rerank)
 
-    def test_query_plan_disables_dense_for_entity_queries(self) -> None:
+    def test_query_plan_disables_dense_for_keyword_queries(self) -> None:
         with patch(
             "app._call_deepseek_query_parser",
             return_value={
-                "intent": "entity",
+                "intent": "keyword",
                 "lexical_query": "北京大学",
                 "semantic_query": "",
                 "constraints": {},
@@ -952,7 +950,7 @@ class SearchLogicTests(unittest.TestCase):
                 },
             )
 
-        self.assertEqual(plan.intent, INTENT_ENTITY)
+        self.assertEqual(plan.intent, INTENT_KEYWORD)
         self.assertEqual(plan.must_terms, ["北京大学"])
         self.assertFalse(plan.enable_dense)
         self.assertTrue(plan.enable_rerank)

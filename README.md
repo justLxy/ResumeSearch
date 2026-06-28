@@ -24,6 +24,7 @@
   - [4.4 Elasticsearch 索引设计](#44-elasticsearch-索引设计)
 - [5. 检索流程详解](#5-检索流程详解)
   - [5.1 请求入口与 Query 解析](#51-请求入口与-query-解析)
+    - [5.1.1 LLM Query Planner 的意图分类与检索策略路由](#511-llm-query-planner-的意图分类与检索策略路由)
   - [5.2 两路并行检索](#52-两路并行检索)
   - [5.3 RRF 融合排序](#53-rrf-融合排序)
   - [5.4 结果格式化与返回](#54-结果格式化与返回)
@@ -507,7 +508,7 @@ encode_batch(texts: list[str]) -> list[list[float]]  # 批量编码
       ↓ DeepSeek V4 Flash
 输出:
 {
-  "intent": "structured",
+  "intent": "keyword",
   "lexical_query": "Python 自然语言处理",
   "semantic_query": "Python 自然语言处理",
   "constraints": {
@@ -518,13 +519,13 @@ encode_batch(texts: list[str]) -> list[list[float]]  # 批量编码
   },
   "must_terms": [],
   "should_terms": ["Python", "自然语言处理"],
-  "enable_dense": true
+  "enable_dense": false
 }
 ```
 
 QueryPlan 的字段分工：
 
-- `intent`：浏览、精确查找、实体查询、结构化筛选、技能组合、语义能力查询或长 JD 匹配。
+- `intent`：浏览、精确查找（lookup）、关键词检索（keyword）或语义检索（semantic）。
 - `constraints`：学历、城市、技能、最低年限等硬过滤条件。后端只负责把 LLM 输出的结构化约束转换为 ES filter。
 - `lexical_query`：交给 Evidence BM25 的词面检索文本。
 - `semantic_query`：交给 embedding 和 reranker 的语义检索文本。
@@ -533,6 +534,66 @@ QueryPlan 的字段分工：
 `enable_rerank` 不是 LLM Query Planner 的职责。只要存在实际检索文本且 `ENABLE_RERANK=True`，系统都会对 RRF 后的 top-N 候选启用 Qwen3 reranker；空 query 浏览和纯筛选浏览不做 rerank。
 
 如果 DeepSeek 调用失败，系统会退化为保守的词面检索：保留原始 query 作为 `lexical_query`，不启用 dense，但仍会在 BM25/RRF 候选上执行系统级 rerank，避免解析失败导致搜索接口不可用。
+
+#### 5.1.1 LLM Query Planner 的意图分类与检索策略路由
+
+LLM 完成的不只是"抽 filter"，而是一次**检索策略路由决策**。它输出一个意图标签，系统据此决定走纯 BM25 还是 BM25+Dense 混合检索。这是一种 **Self-Querying** 技术的扩展——经典 Self-Querying 只把 NL 查询拆成 `(语义文本, 元数据 filter)` 两项，本系统额外产出了意图分类和多路检索文本。
+
+##### 六种意图
+
+| 意图 | 前端中文标签 | 典型输入 | 检索策略 | Dense | 说明 |
+|---|---|---|---|---|---|
+| `lookup` | 精确查找 | `A0009`、`M20260001`、`13800138000` | 纯 BM25 | ❌ | 编号/手机/邮箱等唯一标识符直接定位，语义泛化反而会引入噪声 |
+| `keyword` | 关键词检索 | `阿里巴巴`、`北京交通大学`、`硕士 北京 3年 Python` | 纯 BM25（+ ES filter） | ❌ | 实体名精确匹配、多维度筛选+关键词。filter 承担硬筛，BM25 承担关键词召回 |
+| `semantic` | 语义检索 | `做过大规模分布式系统架构设计`、`Python PyTorch NLP 大模型`、长 JD 粘贴 | **混合** | ✅ | 自然语言能力描述、多技能组合、长文本匹配，核心依赖语义理解 |
+
+**核心原则**：Dense 永远是 BM25 的**外挂**，不存在纯 Dense 检索路径。`_run_hybrid_search` 中 BM25 证据检索是必跑的，Dense KNN 只在 `enable_dense=True` 时额外追加。这样设计的原因是——BM25 对实体、编号、技能关键词的精确召回是 Dense 无法替代的。
+
+##### enable_dense 的决策链
+
+```
+LLM 输出 enable_dense: true/false
+        ↓
+_plan_query: AND bool(semantic_query)  ← 语义查询为空则强制关
+        ↓
+search(): embedding API 调用失败 → 运行时降级关
+        ↓
+LLM API 整体挂掉 → 兜底关（_llm_parser_fallback）
+```
+
+`enable_rerank` 不受 LLM 控制。只要 `ENABLE_RERANK=True` 且 `raw_query`、`lexical_query`、`semantic_query` 三者都非空，系统就对 RRF 后的 top-N 执行 Qwen3 rerank 重排。LLM 的 system prompt 明确写了"不要输出 rerank 开关"。
+
+##### semantic_query 的生成规则
+
+```
+semantic_query = LLM 输出的 semantic_query || lexical_query（兜底）
+```
+
+这是 `_plan_query` 中的一行兜底逻辑：`semantic_query = str(parsed_query.get("semantic_query") or lexical_query).strip()`。当 LLM 按要求为 `exact_lookup`/`entity` 返回空的 `semantic_query` 时，系统自动用 `lexical_query` 填充。**但这不等于语义检索被启用**——`enable_dense=False` 保证了 Dense 路不会实际执行，填充后的 `semantic_query` 仅在 rerank 阶段作为参考文本。
+
+##### 与经典 Self-Querying 的对比
+
+| | 经典 Self-Querying (LangChain 2023) | 本系统 |
+|---|---|---|
+| LLM 输出 | `{query, filter}` | `{intent, lexical_query, semantic_query, constraints, enable_dense}` |
+| 检索方式 | 纯向量 | **BM25 + 向量 + RRF 融合** |
+| 策略路由 | 无（始终向量检索） | **6 种意图 → 不同检索策略** |
+| 排序管道 | 单一相似度 | RRF → tier/coverage 乘数 → **Rerank 重排** |
+| Filter 处理 | 从 query 中移除后单独 filter | 抽取 constraints 但**保留原词在 query 中**（避免 BM25 召回损失） |
+| 容错 | LLM 失败 = 搜索失败 | LLM 失败 → 降级为保守词面检索 |
+
+##### 证据分块 BM25 查询的三层匹配
+
+在`_evidence_lexical_query` 中，实体字段（公司/学校/专业/岗位名）同时使用 `term`（精确 token 匹配）和 `match`（分词后 OR 匹配）：
+
+```
+dis_max(
+    term("application.company", query),     // 完整匹配 "阿里巴巴" → boost 30
+    match("application.company", query)     // 分词匹配 ["阿里巴巴","实习"] → boost 16.5
+)
+```
+
+这解决了"搜'阿里巴巴'能命中，搜'阿里巴巴实习'反而命中不了"的问题——`match` 让 IK 分词器自动拆出 "阿里巴巴" 去匹配，无需手工分词规则。
 
 ### 5.2 两路并行检索
 

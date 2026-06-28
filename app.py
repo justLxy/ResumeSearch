@@ -53,12 +53,9 @@ EVIDENCE_EXACT_QUERY_PREFIX = "evidence_exact:"
 EVIDENCE_PHRASE_QUERY_PREFIX = "evidence_phrase:"
 EVIDENCE_TERM_QUERY_PREFIX = "evidence_term:"
 INTENT_BROWSE = "browse"
-INTENT_EXACT_LOOKUP = "exact_lookup"
-INTENT_ENTITY = "entity"
-INTENT_STRUCTURED = "structured"
-INTENT_SKILL_COMBO = "skill_combo"
+INTENT_LOOKUP = "lookup"
+INTENT_KEYWORD = "keyword"
 INTENT_SEMANTIC = "semantic"
-INTENT_JD_MATCH = "jd_match"
 EVIDENCE_VECTOR_FIELD = "evidence_vector"
 QUERY_PARSER_PROVIDER = "deepseek"
 QUERY_PARSER_MODEL_ID = "deepseek-v4-flash"
@@ -491,7 +488,7 @@ def _query_parser_system_prompt() -> str:
         "不要根据候选人库是否存在来臆测结果，只解析用户意图。\n\n"
         "输出 schema:\n"
         "{\n"
-        '  "intent": "browse|exact_lookup|entity|structured|skill_combo|semantic|jd_match",\n'
+        '  "intent": "browse|lookup|keyword|semantic",\n'
         '  "lexical_query": "给 BM25/短语/精确检索使用的文本；不得包含已抽取到 constraints 的学历/城市/年限纯筛选词；纯筛选时为空字符串",\n'
         '  "semantic_query": "给 embedding/rerank 使用的语义需求文本；不得包含已抽取到 constraints 的学历/城市/年限纯筛选词；不启用语义时为空字符串",\n'
         '  "constraints": {\n'
@@ -500,22 +497,16 @@ def _query_parser_system_prompt() -> str:
         '    "skills": ["Python"],\n'
         '    "min_years": null|0.5\n'
         "  },\n"
-        '  "must_terms": ["必须满足或强约束词"],\n'
-        '  "should_terms": ["加分但不应硬过滤的词"],\n'
         '  "enable_dense": true\n'
         "}\n\n"
         "判断准则:\n"
-        "- exact_lookup: 候选人编号、岗位编号、手机号、邮箱等直接定位查询；dense=false。\n"
-        "- entity: 学校、公司、姓名、专业、岗位名等实体查询；dense=false，保留原实体作为 lexical_query。\n"
-        "- structured: 同时包含学历/城市/年限/技能等筛选条件和少量检索词；学历/城市/年限放入 constraints，技术技能、岗位词、能力需求仍要保留在 lexical_query/semantic_query。\n"
-        "- skill_combo: 多个技能组合但不应把技能变成硬过滤；保留完整 query 做召回，dense=true。\n"
-        "- semantic: 自然语言能力需求；dense=true。\n"
-        "- jd_match: 长岗位描述或多行 JD；dense=true。\n"
-        "- 不要输出 rerank 开关；rerank 是系统排序策略，不由 query planner 决定。\n"
-        "- 负向约束如“不要纯推荐排序”不要变成硬过滤；把核心正向需求放入 semantic_query，负向信息可留在 semantic_query 里供 rerank 理解。\n"
+        "- lookup: 候选人编号、岗位编号、手机号、邮箱等唯一标识符直接定位查询；dense=false。\n"
+        "- keyword: 关键词检索——学校、公司、专业、姓名、岗位名等实体查询，或含学历/城市/年限+关键词的混合筛选查询；dense=false。注意：只把实体核心名称放入 lexical_query，修饰词如\"实习\"\"大学\"\"硕士\"等不要混进去。例如\"阿里巴巴实习\" → lexical_query=\"阿里巴巴\"。\n"
+        "- semantic: 语义检索——自然语言能力描述（如\"做过大规模分布式系统架构设计\"）、多技能组合（如\"Python PyTorch NLP 大模型\"）、长岗位描述或 JD 粘贴；dense=true。\n"
+        "- 负向约束如\"不要纯推荐排序\"不要变成硬过滤；把核心正向需求放入 semantic_query，负向信息可留在 semantic_query 里。\n"
         "- 即使某些技能也放入 constraints.skills，也不要从 lexical_query/semantic_query 中删除这些技能词；技能词仍然是 BM25 和语义召回的重要线索。\n"
         "- 已放入 constraints 的学历、城市、年限不要再出现在 lexical_query 或 semantic_query 中，避免污染词面检索和 embedding。\n"
-        "- 只有用户仅输入学历、城市、年限这类纯筛选条件时，lexical_query 和 semantic_query 才返回空字符串。\n"
+        "- keyword 意图下，如果用户只输入了学历、城市、年限这类纯筛选条件（没有任何检索关键词），则 lexical_query 和 semantic_query 都返回空字符串。\n"
         "- skills 只放明确被用户当作硬条件的技能；泛化语义能力不要硬塞进 skills。\n"
     )
 
@@ -623,20 +614,17 @@ def _normalize_plan_intent(
 ) -> str:
     allowed = {
         INTENT_BROWSE,
-        INTENT_EXACT_LOOKUP,
-        INTENT_ENTITY,
-        INTENT_STRUCTURED,
-        INTENT_SKILL_COMBO,
+        INTENT_LOOKUP,
+        INTENT_KEYWORD,
         INTENT_SEMANTIC,
-        INTENT_JD_MATCH,
     }
     intent = str(raw_intent or "").strip()
     if intent in allowed:
         return intent
     if not raw_query.strip():
-        return INTENT_STRUCTURED if constraints else INTENT_BROWSE
+        return INTENT_KEYWORD if constraints else INTENT_BROWSE
     if constraints:
-        return INTENT_STRUCTURED
+        return INTENT_KEYWORD
     return INTENT_SEMANTIC if lexical_query else INTENT_BROWSE
 
 
@@ -783,18 +771,24 @@ def _evidence_lexical_query(query_text: str) -> dict[str, Any]:
                     "skills",
                     _term_query("skills", query_text, 40, "evidence_exact:skills"),
                 ),
-                _profile_query(
-                    _term_query("candidate.all_schools.keyword", query_text, 36, "evidence_exact:candidate_school")
-                ),
-                _profile_query(
-                    _term_query("candidate.major.keyword", query_text, 34, "evidence_exact:candidate_major")
-                ),
-                _profile_query(
-                    _term_query("application.company", query_text, 30, "evidence_exact:application_company")
-                ),
-                _profile_query(
-                    _term_query("application.position_name.keyword", query_text, 30, "evidence_exact:position_name")
-                ),
+                # 实体字段: term (精确 token 匹配) + match (分词后 OR 匹配)
+                # term 保证 "阿里巴巴" 精准命中，match 保证 "阿里巴巴实习" 也能通过分词命中
+                _profile_query(_entity_field_query(
+                    "candidate.all_schools.keyword", "candidate.all_schools",
+                    query_text, 36, "evidence_exact:candidate_school", "evidence_match:candidate_school",
+                )),
+                _profile_query(_entity_field_query(
+                    "candidate.major.keyword", "candidate.major",
+                    query_text, 34, "evidence_exact:candidate_major", "evidence_match:candidate_major",
+                )),
+                _profile_query(_entity_field_query(
+                    "application.company", "application.company",
+                    query_text, 30, "evidence_exact:application_company", "evidence_match:company",
+                )),
+                _profile_query(_entity_field_query(
+                    "application.position_name.keyword", "application.position_name",
+                    query_text, 30, "evidence_exact:position_name", "evidence_match:position_name",
+                )),
                 _profile_query(
                     _term_query("candidate.highest_degree", normalized_degree, 15, "evidence_exact:highest_degree")
                 ),
@@ -854,6 +848,31 @@ def _evidence_lexical_query(query_text: str) -> dict[str, Any]:
         "bool": {
             "must": [scoring_query],
             "should": coverage_should,
+        }
+    }
+
+
+def _entity_field_query(
+    keyword_field: str,
+    text_field: str,
+    query_text: str,
+    boost: float,
+    term_name: str,
+    match_name: str,
+) -> dict[str, Any]:
+    """对实体字段组合 term + match，兼顾精确匹配和分词召回。
+
+    term 查询：当 query 本身就是一个完整 token 时精准命中（如 "阿里巴巴"）。
+    match 查询：当 query 含修饰词时（如 "阿里巴巴实习"），经分词后在 text 字段
+    上做 OR 匹配，降低 boost 避免排在精准匹配前面。
+    """
+    return {
+        "dis_max": {
+            "tie_breaker": 0.0,
+            "queries": [
+                {"term": {keyword_field: {"value": query_text, "boost": boost, "_name": f"{term_name}:W{boost}"}}},
+                {"match": {text_field: {"query": query_text, "operator": "or", "boost": boost * 0.55, "_name": f"{match_name}:W{boost * 0.55}"}}},
+            ],
         }
     }
 

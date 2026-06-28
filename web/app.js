@@ -106,12 +106,9 @@ function updateQueryMode(payload) {
 
 const intentLabelMap = {
   browse: "浏览模式",
-  exact_lookup: "精确查找",
-  entity: "实体查询",
-  structured: "条件筛选",
-  skill_combo: "技能组合检索",
+  lookup: "精确查找",
+  keyword: "关键词检索",
   semantic: "语义检索",
-  jd_match: "JD 匹配",
 };
 
 function formatParserSummary(payload) {
@@ -130,14 +127,19 @@ function formatParserSummary(payload) {
   const rows = [
     ["查询意图", intentLabel],
     ["词面检索", lexicalText],
-    ["语义检索", semanticText],
-    ["向量召回", denseEnabled ? "已启用（Dense）" : "未启用"],
   ];
+  // 只有向量召回启用时才展示语义检索文本，否则显示"未启用"
+  if (denseEnabled) {
+    rows.push(["语义检索", semanticText]);
+  }
+  rows.push(["向量召回", denseEnabled ? `已启用 → ${semanticText}` : "未启用"]);
   if (filters) {
     rows.push(["筛选条件", filters]);
   }
 
-  const title = `意图=${intentLabel} | 词面=${lexicalText} | 语义=${semanticText}${filters ? ` | 过滤=${filters}` : ""}`;
+  const title = denseEnabled
+    ? `意图=${intentLabel} | 词面=${lexicalText} | 语义=${semanticText}${filters ? ` | 过滤=${filters}` : ""}`
+    : `意图=${intentLabel} | 词面=${lexicalText} | 向量召回=未启用${filters ? ` | 过滤=${filters}` : ""}`;
 
   const detailHtml = `
     <div class="parser-detail">
