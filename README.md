@@ -517,8 +517,6 @@ encode_batch(texts: list[str]) -> list[list[float]]  # 批量编码
     "cities": ["北京"],
     "skills": ["Python", "自然语言处理"]
   },
-  "must_terms": [],
-  "should_terms": ["Python", "自然语言处理"],
   "enable_dense": false
 }
 ```
@@ -539,7 +537,7 @@ QueryPlan 的字段分工：
 
 LLM 完成的不只是"抽 filter"，而是一次**检索策略路由决策**。它输出一个意图标签，系统据此决定走纯 BM25 还是 BM25+Dense 混合检索。这是一种 **Self-Querying** 技术的扩展——经典 Self-Querying 只把 NL 查询拆成 `(语义文本, 元数据 filter)` 两项，本系统额外产出了意图分类和多路检索文本。
 
-##### 六种意图
+##### 三种意图
 
 | 意图 | 前端中文标签 | 典型输入 | 检索策略 | Dense | 说明 |
 |---|---|---|---|---|---|
@@ -569,7 +567,7 @@ LLM API 整体挂掉 → 兜底关（_llm_parser_fallback）
 semantic_query = LLM 输出的 semantic_query || lexical_query（兜底）
 ```
 
-这是 `_plan_query` 中的一行兜底逻辑：`semantic_query = str(parsed_query.get("semantic_query") or lexical_query).strip()`。当 LLM 按要求为 `exact_lookup`/`entity` 返回空的 `semantic_query` 时，系统自动用 `lexical_query` 填充。**但这不等于语义检索被启用**——`enable_dense=False` 保证了 Dense 路不会实际执行，填充后的 `semantic_query` 仅在 rerank 阶段作为参考文本。
+这是 `_plan_query` 中的一行兜底逻辑：`semantic_query = str(parsed_query.get("semantic_query") or lexical_query).strip()`。当 LLM 按要求为 `lookup`/`keyword` 返回空的 `semantic_query` 时，系统自动用 `lexical_query` 填充。**但这不等于语义检索被启用**——`enable_dense=False` 保证了 Dense 路不会实际执行，填充后的 `semantic_query` 仅在 rerank 阶段作为参考文本。
 
 ##### 与经典 Self-Querying 的对比
 

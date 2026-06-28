@@ -132,7 +132,7 @@ function formatParserSummary(payload) {
   if (denseEnabled) {
     rows.push(["语义检索", semanticText]);
   }
-  rows.push(["向量召回", denseEnabled ? `已启用 → ${semanticText}` : "未启用"]);
+  rows.push(["向量召回", denseEnabled ? "已启用" : "未启用"]);
   if (filters) {
     rows.push(["筛选条件", filters]);
   }
