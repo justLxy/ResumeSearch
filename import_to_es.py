@@ -850,6 +850,53 @@ def _resume_evidence_docs(doc: dict[str, Any]) -> list[dict[str, Any]]:
                 )
             )
 
+    for index, item in enumerate(doc.get("awards") or [], start=1):
+        text = _semantic_text(
+            doc,
+            [
+                _profile_line("获奖名称", item.get("name")),
+                _profile_line("获奖级别", item.get("level")),
+                _profile_line("获奖描述", item.get("description")),
+            ],
+            SECTION_SEMANTIC_CHAR_BUDGET,
+        )
+        if text:
+            items.append(
+                _evidence_doc(
+                    doc,
+                    "awards",
+                    index,
+                    item.get("name") or "获奖经历",
+                    text,
+                    vector_enabled=False,
+                )
+            )
+
+    offer = doc.get("offer_internship") or {}
+    offer_lines = []
+    if offer.get("post_graduation_intention"):
+        offer_lines.append(_profile_line("毕业后意向", offer["post_graduation_intention"]))
+    if offer.get("can_intern"):
+        offer_lines.append(_profile_line("是否可以实习", offer["can_intern"]))
+    if offer.get("available_start_date"):
+        offer_lines.append(_profile_line("可开始工作日期", offer["available_start_date"]))
+    if offer.get("weekly_workdays"):
+        offer_lines.append(_profile_line("每周可实习天数", offer["weekly_workdays"]))
+    if offer.get("internship_period"):
+        offer_lines.append(_profile_line("可实习周期", offer["internship_period"]))
+    offer_text = _compact_join(offer_lines)
+    if offer_text:
+        items.append(
+            _evidence_doc(
+                doc,
+                "offer",
+                0,
+                "实习与入职意向",
+                offer_text,
+                vector_enabled=False,
+            )
+        )
+
     return items
 
 
@@ -1009,6 +1056,13 @@ def _profile_lexical_text(doc: dict[str, Any]) -> str:
         for item in doc.get("education") or []
         if isinstance(item, dict)
     ]
+    language_lines = []
+    languages = doc.get("languages") or {}
+    if languages.get("english_exam_score"):
+        language_lines.append(_profile_line("英语等级", languages["english_exam_score"]))
+    if languages.get("english_spoken_level"):
+        language_lines.append(_profile_line("英语口语", languages["english_spoken_level"]))
+
     lines = [
         _profile_line("候选人编号", application.get("candidate_no")),
         _profile_line("岗位编号", application.get("position_code")),
@@ -1023,6 +1077,7 @@ def _profile_lexical_text(doc: dict[str, Any]) -> str:
         _profile_line("当前城市", candidate.get("current_city")),
         _profile_line("期望工作城市", application.get("expected_work_cities") or []),
         _profile_line("技能标签", "，".join(doc.get("skills") or [])),
+        *language_lines,
         *wish_lines,
         *education_lines,
     ]

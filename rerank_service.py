@@ -18,6 +18,7 @@ RERANK_API_KEY = (
 )
 RERANK_BATCH_SIZE = 20
 RERANK_TIMEOUT_SECONDS = 60
+RERANK_INSTRUCT: str | None = "Given a recruitment query, retrieve relevant candidate resumes that match the required skills, experience, and qualifications."
 
 
 @dataclass(frozen=True)
@@ -71,16 +72,19 @@ def _score_batch(query: str, documents: list[str]) -> list[float]:
 
 
 def _build_payload(query: str, documents: list[str]) -> dict[str, Any]:
+    parameters: dict[str, Any] = {
+        "return_documents": True,
+        "top_n": len(documents),
+    }
+    if RERANK_INSTRUCT:
+        parameters["instruct"] = RERANK_INSTRUCT
     return {
         "model": RERANK_MODEL_ID,
         "input": {
             "query": query.strip(),
             "documents": [_clean_document(document) for document in documents],
         },
-        "parameters": {
-            "return_documents": True,
-            "top_n": len(documents),
-        },
+        "parameters": parameters,
     }
 
 

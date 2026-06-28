@@ -801,7 +801,7 @@ function buildCardExtras(source) {
     for (const a of awards) {
       awardItems.push(`<span class="award-tag">🏆 ${escapeHtml(a.name)} ${escapeHtml(a.level || "")}</span>`);
     }
-    parts.push(`<span class="extra-label">获奖</span> ${awardItems.join(" ")}`);
+    parts.push(`<span class="extra-label">获奖经历</span> ${awardItems.join(" ")}`);
   }
 
   // 语言
@@ -810,10 +810,10 @@ function buildCardExtras(source) {
   if (languages.english_exam_score) langItems.push(escapeHtml(languages.english_exam_score));
   if (languages.english_spoken_level) langItems.push(`口语${escapeHtml(languages.english_spoken_level)}`);
   if (langItems.length > 0) {
-    parts.push(`<span class="extra-label">语言</span> ${langItems.join(" · ")}`);
+    parts.push(`<span class="extra-label">语言能力</span> ${langItems.join(" · ")}`);
   }
 
-  // 实习意向
+  // 实习与入职意向
   const offer = source.offer_internship || {};
   const offerItems = [];
   if (offer.can_intern === "是") offerItems.push("可实习");
@@ -822,7 +822,7 @@ function buildCardExtras(source) {
   if (offer.internship_period) offerItems.push(`周期${escapeHtml(offer.internship_period)}`);
   if (offer.post_graduation_intention) offerItems.push(escapeHtml(offer.post_graduation_intention));
   if (offerItems.length > 0) {
-    parts.push(`<span class="extra-label">意向</span> ${offerItems.join(" · ")}`);
+    parts.push(`<span class="extra-label">实习与入职意向</span> ${offerItems.join(" · ")}`);
   }
 
   if (parts.length === 0) return "";

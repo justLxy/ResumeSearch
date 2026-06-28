@@ -1352,15 +1352,15 @@ def _rerank_document(result: dict[str, Any]) -> str:
     application = source.get("application") or result.get("application") or {}
     lines: list[str] = []
 
-    _append_doc_line(lines, "技能", "、".join(source.get("skills") or result.get("skills") or []))
+    _append_doc_line(lines, "技能标签", "、".join(source.get("skills") or result.get("skills") or []))
 
     lang = source.get("languages") or {}
     lang_parts = []
     if lang.get("english_exam_score"):
-        lang_parts.append(lang["english_exam_score"])
+        lang_parts.append(f"英语等级考试成绩 {lang["english_exam_score"]}")
     if lang.get("english_spoken_level"):
-        lang_parts.append(f"口语{lang['english_spoken_level']}")
-    _append_doc_line(lines, "语言", "，".join(lang_parts))
+        lang_parts.append(f"英语口语水平 {lang['english_spoken_level']}")
+    _append_doc_line(lines, "语言能力", "，".join(lang_parts))
 
     for award in source.get("awards") or []:
         if award.get("has_award") not in (None, "否", False) and award.get("name"):
@@ -1369,7 +1369,7 @@ def _rerank_document(result: dict[str, Any]) -> str:
                 for field in ("name", "level", "description")
                 if award.get(field)
             )
-            _append_doc_line(lines, "奖项", text)
+            _append_doc_line(lines, "获奖经历", text)
 
     offer = source.get("offer_internship") or {}
     offer_parts = []
@@ -1383,7 +1383,7 @@ def _rerank_document(result: dict[str, Any]) -> str:
         offer_parts.append(f"周期{offer['internship_period']}")
     if offer.get("post_graduation_intention"):
         offer_parts.append(offer["post_graduation_intention"])
-    _append_doc_line(lines, "意向", "，".join(offer_parts))
+    _append_doc_line(lines, "实习与入职意向", "，".join(offer_parts))
 
     for edu in source.get("education") or []:
         text = " ".join(
@@ -1391,7 +1391,7 @@ def _rerank_document(result: dict[str, Any]) -> str:
             for field in ("school", "college", "degree", "major", "research_direction", "lab_name")
             if edu.get(field)
         )
-        _append_doc_line(lines, "教育", text)
+        _append_doc_line(lines, "教育经历", text)
 
     for project in source.get("projects") or []:
         text = " ".join(
@@ -1399,14 +1399,14 @@ def _rerank_document(result: dict[str, Any]) -> str:
             for field in ("name", "description", "responsibility")
             if project.get(field)
         )
-        _append_doc_line(lines, "项目", text)
+        _append_doc_line(lines, "项目经历", text)
     for internship in source.get("internships") or []:
         text = " ".join(
             _clean_doc_text(internship.get(field))
             for field in ("company", "department", "title", "description")
             if internship.get(field)
         )
-        _append_doc_line(lines, "经历", text)
+        _append_doc_line(lines, "实习经历", text)
 
     return "\n".join(line for line in lines if line.strip())
 
