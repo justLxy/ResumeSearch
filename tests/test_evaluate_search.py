@@ -70,16 +70,16 @@ def test_report_json_round_trip(tmp_path) -> None:
 
 def test_compare_reports_returns_metric_deltas() -> None:
     previous = {
-        "overall": {"queries": 2, "ndcg10": 0.5, "mrr10": 0.4, "r10": 0.3, "forbidden10": 2},
+        "overall": {"queries": 2, "ndcg10": 0.5, "mrr10": 0.4, "r10": 0.3, "r100": 0.5, "forbidden10": 2},
         "by_type": {
-            "semantic": {"queries": 1, "ndcg10": 0.2, "mrr10": 0.2, "r10": 0.2, "forbidden10": 1}
+            "semantic": {"queries": 1, "ndcg10": 0.2, "mrr10": 0.2, "r10": 0.2, "r100": 0.4, "forbidden10": 1}
         },
     }
     current = {
-        "overall": {"queries": 3, "ndcg10": 0.7, "mrr10": 0.5, "r10": 0.4, "forbidden10": 1},
+        "overall": {"queries": 3, "ndcg10": 0.7, "mrr10": 0.5, "r10": 0.4, "r100": 0.7, "forbidden10": 1},
         "by_type": {
-            "semantic": {"queries": 1, "ndcg10": 0.6, "mrr10": 0.4, "r10": 0.5, "forbidden10": 0},
-            "entity": {"queries": 1, "ndcg10": 1.0, "mrr10": 1.0, "r10": 1.0, "forbidden10": 0},
+            "semantic": {"queries": 1, "ndcg10": 0.6, "mrr10": 0.4, "r10": 0.5, "r100": 0.9, "forbidden10": 0},
+            "entity": {"queries": 1, "ndcg10": 1.0, "mrr10": 1.0, "r10": 1.0, "r100": 1.0, "forbidden10": 0},
         },
     }
 
@@ -89,6 +89,7 @@ def test_compare_reports_returns_metric_deltas() -> None:
     assert comparison["overall"]["ndcg10"]["delta"] == 0.19999999999999996
     assert comparison["overall"]["forbidden10"]["delta"] == -1
     assert comparison["by_type"]["semantic"]["r10"]["delta"] == 0.3
+    assert comparison["by_type"]["semantic"]["r100"]["delta"] == 0.5
     assert comparison["by_type"]["entity"]["ndcg10"]["delta"] is None
 
 
@@ -103,6 +104,8 @@ def _result(
     precision_at_10: float = 0.0,
     recall_at_5: float = 0.0,
     recall_at_10: float = 0.0,
+    recall_at_50: float = 0.0,
+    recall_at_100: float = 0.0,
     mrr_at_10: float = 0.0,
     ndcg_at_10: float = 0.0,
     forbidden_at_10: int = 0,
@@ -122,6 +125,8 @@ def _result(
         precision_at_10=precision_at_10,
         recall_at_5=recall_at_5,
         recall_at_10=recall_at_10,
+        recall_at_50=recall_at_50,
+        recall_at_100=recall_at_100,
         mrr_at_10=mrr_at_10,
         ndcg_at_10=ndcg_at_10,
         forbidden_at_10=forbidden_at_10,

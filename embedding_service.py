@@ -1,17 +1,31 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import shutil
 from typing import TYPE_CHECKING
 
+import requests
 from sentence_transformers import SentenceTransformer
 
 if TYPE_CHECKING:
     import numpy as np
 
-MODEL_ID = "IEITYuan/Yuan-embedding-2.0-zh"
-VECTOR_DIMS = 1792
+LOCAL_PROVIDER = "local"
+DOUBAO_PROVIDER = "doubao"
+EMBEDDING_PROVIDER = DOUBAO_PROVIDER
+
+LOCAL_MODEL_ID = "IEITYuan/Yuan-embedding-2.0-zh"
+LOCAL_VECTOR_DIMS = 1792
+
+DOUBAO_API_KEY = "b22a1ce8-9df9-4aec-9a94-a0a6be74cc86"
+DOUBAO_API_BASE = "https://ark.cn-beijing.volces.com/api/v3"
+DOUBAO_MODEL_ID = "ep-20260412051954-zl5fm"
+DOUBAO_VECTOR_DIMS = 2048
+DOUBAO_BATCH_SIZE = 64
+DOUBAO_TIMEOUT_SECONDS = 60
+DOUBAO_SEND_DIMENSIONS = True
 
 _POOLING_CONFIG = json.dumps(
     {
@@ -39,10 +53,49 @@ _DENSE_CONFIG = json.dumps(
 _model: SentenceTransformer | None = None
 
 
+def _current_provider() -> str:
+    provider = EMBEDDING_PROVIDER.strip().lower()
+    if provider in {"api", "ark", "volcengine"}:
+        return DOUBAO_PROVIDER
+    if provider in {LOCAL_PROVIDER, DOUBAO_PROVIDER}:
+        return provider
+    raise ValueError("EMBEDDING_PROVIDER must be one of: local, doubao")
+
+
+def _current_vector_dims() -> int:
+    if _current_provider() == DOUBAO_PROVIDER:
+        return _positive_int(DOUBAO_VECTOR_DIMS, "DOUBAO_VECTOR_DIMS")
+    return _positive_int(LOCAL_VECTOR_DIMS, "LOCAL_VECTOR_DIMS")
+
+
+def _positive_int(raw_value: int | str, name: str) -> int:
+    try:
+        value = int(str(raw_value).strip())
+    except ValueError as exc:
+        raise ValueError(f"{name} must be an integer") from exc
+    if value <= 0:
+        raise ValueError(f"{name} must be greater than 0")
+    return value
+
+
+def _doubao_model_id() -> str:
+    return DOUBAO_MODEL_ID.strip()
+
+
+def _current_model_id() -> str:
+    if _current_provider() == DOUBAO_PROVIDER:
+        return f"{DOUBAO_PROVIDER}:{_doubao_model_id()}"
+    return LOCAL_MODEL_ID
+
+
+MODEL_ID = _current_model_id()
+VECTOR_DIMS = _current_vector_dims()
+
+
 def _download_from_modelscope() -> str:
     from modelscope import snapshot_download
 
-    model_dir = snapshot_download(MODEL_ID)
+    model_dir = snapshot_download(LOCAL_MODEL_ID)
 
     # ModelScope flattens all files to root level, but sentence_transformers
     # expects 1_Pooling/ and 2_Dense/ as subdirectories with their own config
@@ -91,7 +144,7 @@ def _try_hf_download(filename: str) -> str:
     for endpoint in endpoints:
         os.environ["HF_ENDPOINT"] = endpoint
         try:
-            return hf_hub_download(repo_id=MODEL_ID, filename=filename)
+            return hf_hub_download(repo_id=LOCAL_MODEL_ID, filename=filename)
         except Exception:
             continue
     raise RuntimeError(
@@ -107,19 +160,112 @@ def get_model() -> SentenceTransformer:
     return _model
 
 
-def encode(texts: str | list[str], *, normalize: bool = True) -> "np.ndarray":
+def encode(texts: str | list[str], *, normalize: bool = True) -> "np.ndarray | list[list[float]]":
     if isinstance(texts, str):
         texts = [texts]
+    if _current_provider() == DOUBAO_PROVIDER:
+        return _encode_doubao_batch(texts, normalize=normalize)
     return get_model().encode(texts, normalize_embeddings=normalize)
 
 
 def encode_single(text: str) -> list[float]:
     vec = encode(text, normalize=True)
-    return vec[0].tolist()
+    first = vec[0]
+    if hasattr(first, "tolist"):
+        return first.tolist()
+    return list(first)
 
 
 def encode_batch(texts: list[str]) -> list[list[float]]:
     if not texts:
         return []
     vecs = encode(texts, normalize=True)
-    return vecs.tolist()
+    if hasattr(vecs, "tolist"):
+        return vecs.tolist()
+    return list(vecs)
+
+
+def _encode_doubao_batch(texts: list[str], *, normalize: bool = True) -> list[list[float]]:
+    api_key = _doubao_api_key()
+    batch_size = _positive_int(DOUBAO_BATCH_SIZE, "DOUBAO_BATCH_SIZE")
+    vectors: list[list[float]] = []
+    for start in range(0, len(texts), batch_size):
+        vectors.extend(
+            _request_doubao_embeddings(texts[start : start + batch_size], api_key)
+        )
+    return [_normalize_vector(vector) for vector in vectors] if normalize else vectors
+
+
+def _doubao_api_key() -> str:
+    api_key = DOUBAO_API_KEY.strip()
+    if not api_key:
+        raise RuntimeError("DOUBAO_API_KEY is required when EMBEDDING_PROVIDER=doubao")
+    return api_key
+
+
+def _request_doubao_embeddings(texts: list[str], api_key: str) -> list[list[float]]:
+    if not texts:
+        return []
+    base_url = DOUBAO_API_BASE.rstrip("/")
+    model_id = _doubao_model_id()
+    timeout = _positive_int(DOUBAO_TIMEOUT_SECONDS, "DOUBAO_TIMEOUT_SECONDS")
+    body: dict[str, object] = {
+        "model": model_id,
+        "input": texts,
+        "encoding_format": "float",
+    }
+    if DOUBAO_SEND_DIMENSIONS:
+        body["dimensions"] = _current_vector_dims()
+
+    response = requests.post(
+        f"{base_url}/embeddings",
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        json=body,
+        timeout=timeout,
+    )
+    try:
+        response.raise_for_status()
+    except requests.HTTPError as exc:
+        raise RuntimeError(
+            f"Doubao embedding request failed: {response.status_code} "
+            f"{response.text[:800]}"
+        ) from exc
+
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise RuntimeError("Doubao embedding response is not valid JSON") from exc
+    rows = payload.get("data")
+    if not isinstance(rows, list):
+        raise RuntimeError("Doubao embedding response is missing data[]")
+    if not all(isinstance(row, dict) for row in rows):
+        raise RuntimeError("Doubao embedding response data[] contains a non-object item")
+    ordered_rows = sorted(rows, key=lambda item: int(item.get("index", 0)))
+    vectors = [row.get("embedding") for row in ordered_rows]
+    if len(vectors) != len(texts):
+        raise RuntimeError(
+            f"Doubao embedding response count mismatch: expected {len(texts)}, got {len(vectors)}"
+        )
+    cleaned_vectors: list[list[float]] = []
+    expected_dims = _current_vector_dims()
+    for vector in vectors:
+        if not isinstance(vector, list):
+            raise RuntimeError("Doubao embedding response contains a non-list vector")
+        cleaned_vector = [float(value) for value in vector]
+        if len(cleaned_vector) != expected_dims:
+            raise RuntimeError(
+                f"Doubao embedding dimension mismatch: expected {expected_dims}, "
+                f"got {len(cleaned_vector)}"
+            )
+        cleaned_vectors.append(cleaned_vector)
+    return cleaned_vectors
+
+
+def _normalize_vector(vector: list[float]) -> list[float]:
+    norm = math.sqrt(sum(value * value for value in vector))
+    if norm == 0:
+        return vector
+    return [value / norm for value in vector]

@@ -48,6 +48,8 @@ class QueryResult:
     precision_at_10: float
     recall_at_5: float
     recall_at_10: float
+    recall_at_50: float
+    recall_at_100: float
     mrr_at_10: float
     ndcg_at_10: float
     forbidden_at_10: int
@@ -59,7 +61,7 @@ def main() -> None:
         description="Evaluate resume search quality for the current retrieval configuration."
     )
     parser.add_argument("--qrels", default="eval_queries.jsonl", help="JSONL qrels file.")
-    parser.add_argument("--limit", type=int, default=10, help="Search result window.")
+    parser.add_argument("--limit", type=int, default=100, help="Search result window.")
     parser.add_argument("--output", help="Write the full evaluation report as JSON.")
     parser.add_argument("--compare-to", help="Compare this run with a previous JSON report.")
     parser.add_argument(
@@ -171,6 +173,8 @@ def evaluate_case(client: TestClient, case: EvalCase, limit: int) -> QueryResult
         precision_at_10=precision_at(returned_ids, case.relevant_ids, 10),
         recall_at_5=recall_at(returned_ids, case.relevant_ids, 5),
         recall_at_10=recall_at(returned_ids, case.relevant_ids, 10),
+        recall_at_50=recall_at(returned_ids, case.relevant_ids, 50),
+        recall_at_100=recall_at(returned_ids, case.relevant_ids, 100),
         mrr_at_10=mrr_at(returned_ids, case.relevant_ids, 10),
         ndcg_at_10=ndcg_at(returned_ids, case.relevant_ids, 10),
         forbidden_at_10=sum(1 for doc_id in returned_ids[:10] if doc_id in case.forbidden_ids),
@@ -249,6 +253,8 @@ def summarize(results: list[QueryResult]) -> dict[str, Any]:
         "p10": _mean_metric(judged, "precision_at_10"),
         "r5": _mean_metric(judged, "recall_at_5"),
         "r10": _mean_metric(judged, "recall_at_10"),
+        "r50": _mean_metric(judged, "recall_at_50"),
+        "r100": _mean_metric(judged, "recall_at_100"),
         "mrr10": _mean_metric(judged, "mrr_at_10"),
         "ndcg10": _mean_metric(judged, "ndcg_at_10"),
         "forbidden10": sum(result.forbidden_at_10 for result in results),
@@ -286,6 +292,8 @@ def result_to_detail(result: QueryResult) -> dict[str, Any]:
         "p10": result.precision_at_10,
         "r5": result.recall_at_5,
         "r10": result.recall_at_10,
+        "r50": result.recall_at_50,
+        "r100": result.recall_at_100,
         "mrr10": result.mrr_at_10,
         "ndcg10": result.ndcg_at_10,
         "forbidden10": result.forbidden_at_10,
@@ -329,6 +337,8 @@ COMPARISON_METRICS = (
     "p10",
     "r5",
     "r10",
+    "r50",
+    "r100",
     "mrr10",
     "ndcg10",
     "empty_accuracy",
@@ -380,7 +390,7 @@ def _metric_delta(current_value: Any, previous_value: Any) -> float | None:
 def print_summary_table(row: dict[str, Any]) -> None:
     print("\nSearch quality summary")
     print(
-        "queries judged  P@5    P@10   R@5    R@10   MRR@10 NDCG@10 empty_acc forbidden@10"
+        "queries judged  P@5    P@10   R@5    R@10   R@50   R@100  MRR@10 NDCG@10 empty_acc forbidden@10"
     )
     empty = "-" if row["empty_accuracy"] is None else f"{row['empty_accuracy']:.3f}"
     print(
@@ -390,6 +400,8 @@ def print_summary_table(row: dict[str, Any]) -> None:
         f"{row['p10']:.3f}  "
         f"{row['r5']:.3f}  "
         f"{row['r10']:.3f}  "
+        f"{row['r50']:.3f}  "
+        f"{row['r100']:.3f}  "
         f"{row['mrr10']:.3f}  "
         f"{row['ndcg10']:.3f}  "
         f"{empty:>9}  "
@@ -399,7 +411,7 @@ def print_summary_table(row: dict[str, Any]) -> None:
 
 def print_type_summary(report: dict[str, Any]) -> None:
     print("\nType summary")
-    print("type                    queries judged P@5   R@10  NDCG@10 empty_acc forbidden@10")
+    print("type                    queries judged P@5   R@10  R@100 NDCG@10 empty_acc forbidden@10")
     for case_type, row in (report.get("by_type") or {}).items():
         empty = row.get("empty_accuracy")
         print(
@@ -408,6 +420,7 @@ def print_type_summary(report: dict[str, Any]) -> None:
             f"{row['judged']:>6} "
             f"{row['p5']:.3f} "
             f"{row['r10']:.3f} "
+            f"{row['r100']:.3f} "
             f"{row['ndcg10']:.3f} "
             f"{'-' if empty is None else f'{empty:.3f}':>9} "
             f"{row['forbidden10']:>12}"
@@ -425,7 +438,7 @@ def print_skipped_cases(skipped: list[SkippedCase]) -> None:
 
 def print_comparison_report(comparison: dict[str, Any], previous_path: Path) -> None:
     print(f"\nComparison vs {previous_path}")
-    print("scope                   queriesΔ NDCG@10Δ MRR@10Δ R@10Δ  emptyΔ  forbiddenΔ")
+    print("scope                   queriesΔ NDCG@10Δ MRR@10Δ R@10Δ R@100Δ emptyΔ  forbiddenΔ")
     print_comparison_row("overall", comparison["overall"])
     for case_type, row in (comparison.get("by_type") or {}).items():
         print_comparison_row(case_type, row)
@@ -438,6 +451,7 @@ def print_comparison_row(label: str, row: dict[str, Any]) -> None:
         f"{_format_delta(row['ndcg10']['delta']):>8} "
         f"{_format_delta(row['mrr10']['delta']):>7} "
         f"{_format_delta(row['r10']['delta']):>6} "
+        f"{_format_delta(row['r100']['delta']):>7} "
         f"{_format_delta(row['empty_accuracy']['delta']):>7} "
         f"{_format_delta(row['forbidden10']['delta'], digits=0):>10}"
     )
@@ -461,6 +475,7 @@ def print_details(results: list[QueryResult]) -> None:
         print(
             f"- {result.case.case_id} [{result.case.case_type}] "
             f"NDCG@10={result.ndcg_at_10:.3f} R@10={result.recall_at_10:.3f} "
+            f"R@100={result.recall_at_100:.3f} "
             f"hits={relevant_hits} forbidden={forbidden_hits} returned={result.returned_ids[:10]}"
         )
 
