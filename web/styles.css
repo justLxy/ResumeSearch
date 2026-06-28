@@ -445,12 +445,12 @@ input:focus-visible {
 }
 
 .result-meta {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  min-height: 44px;
-  margin-bottom: 12px;
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  align-items: start;
+  gap: 20px;
+  min-height: 42px;
+  margin-bottom: 14px;
   padding: 0 2px;
   color: var(--muted);
   font-size: 13px;
@@ -462,12 +462,137 @@ input:focus-visible {
   font-weight: 750;
 }
 
-#queryMode {
-  min-width: 0;
-  overflow: hidden;
-  color: var(--subtext);
-  text-overflow: ellipsis;
+.result-meta > span:first-child {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  padding-top: 3px;
   white-space: nowrap;
+}
+
+#queryMode {
+  justify-self: end;
+  min-width: 0;
+  max-width: min(760px, 100%);
+  color: var(--subtext);
+  text-align: right;
+}
+
+.parser-debug {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.parser-summary {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 5px;
+  min-width: 0;
+  color: var(--muted);
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+
+.parser-summary::-webkit-details-marker {
+  display: none;
+}
+
+.parser-summary::after {
+  content: "";
+  width: 6px;
+  height: 6px;
+  margin-left: 2px;
+  border-right: 1.5px solid #8a94a6;
+  border-bottom: 1.5px solid #8a94a6;
+  transform: rotate(45deg) translateY(-1px);
+  transition: transform 160ms ease;
+}
+
+.parser-debug[open] .parser-summary::after {
+  transform: rotate(225deg) translate(-1px, -1px);
+}
+
+.parser-label {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 22px;
+}
+
+.parser-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--muted);
+  background: var(--surface);
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1;
+}
+
+/* 意图标签：突出显示 */
+.parser-chip-intent {
+  border-color: var(--primary-line);
+  color: var(--primary);
+  background: var(--primary-soft);
+}
+
+/* 向量召回标签：绿色提示 */
+.parser-chip-dense {
+  border-color: #bde7cd;
+  color: var(--success);
+  background: var(--success-soft);
+}
+
+.parser-panel {
+  margin-top: 8px;
+  padding: 12px 14px;
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: 0 2px 12px rgba(15, 23, 42, 0.06);
+}
+
+.parser-detail {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  width: 100%;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.parser-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+  max-width: 100%;
+  width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.parser-key {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+  text-transform: none;
+}
+
+.parser-value {
+  min-width: 0;
+  color: var(--text);
+  font-weight: 500;
+  overflow-wrap: anywhere;
 }
 
 .results {
@@ -1329,13 +1454,22 @@ mark {
   }
 
   .result-meta {
-    align-items: start;
-    flex-direction: column;
-    gap: 4px;
+    grid-template-columns: 1fr;
+    gap: 6px;
   }
 
   #queryMode {
+    justify-self: stretch;
     width: 100%;
+    text-align: left;
+  }
+
+  .parser-summary {
+    justify-content: flex-start;
+  }
+
+  .parser-panel {
+    text-align: left;
   }
 
   .result-card {

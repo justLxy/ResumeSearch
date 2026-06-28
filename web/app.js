@@ -84,15 +84,106 @@ async function runSearch({ append = false } = {}) {
   state.hasMore = Boolean(payload.has_more);
   state.loadingMore = false;
   updateResultCount();
-  els.queryMode.textContent = state.query
-    ? `搜索：${state.query}`
-    : hasActiveFilters()
-      ? "按筛选浏览"
-      : "浏览全部候选人";
+  updateQueryMode(payload);
   syncQuickQueryState();
   renderFacets(payload.facets || {});
   renderResults();
   updateLoadMore();
+}
+
+function updateQueryMode(payload) {
+  if (state.query) {
+    const { html, title } = formatParserSummary(payload);
+    els.queryMode.innerHTML = html;
+    els.queryMode.title = title;
+    return;
+  }
+  els.queryMode.textContent = hasActiveFilters()
+    ? "按筛选浏览"
+    : "浏览全部候选人";
+  els.queryMode.title = "";
+}
+
+const intentLabelMap = {
+  browse: "浏览模式",
+  exact_lookup: "精确查找",
+  entity: "实体查询",
+  structured: "条件筛选",
+  skill_combo: "技能组合检索",
+  semantic: "语义检索",
+  jd_match: "JD 匹配",
+};
+
+function formatParserSummary(payload) {
+  const plan = payload?.query_plan || {};
+  const constraints = payload?.parsed_constraints || {};
+  const intent = plan.intent || "unknown";
+  const intentLabel = intentLabelMap[intent] || intent;
+  const lexical = String(plan.lexical_query || payload?.effective_query || "").trim();
+  const semantic = String(plan.semantic_query || "").trim();
+  const lexicalText = lexical || "—";
+  const semanticText = semantic || lexical || "—";
+  const filters = formatParserFilters(constraints);
+  const denseEnabled = Boolean(plan.enable_dense);
+
+  // 展开面板里的详情行
+  const rows = [
+    ["查询意图", intentLabel],
+    ["词面检索", lexicalText],
+    ["语义检索", semanticText],
+    ["向量召回", denseEnabled ? "已启用（Dense）" : "未启用"],
+  ];
+  if (filters) {
+    rows.push(["筛选条件", filters]);
+  }
+
+  const title = `意图=${intentLabel} | 词面=${lexicalText} | 语义=${semanticText}${filters ? ` | 过滤=${filters}` : ""}`;
+
+  const detailHtml = `
+    <div class="parser-detail">
+      ${rows
+        .map(([label, value]) => `
+          <div class="parser-row">
+            <span class="parser-key">${escapeHtml(label)}</span>
+            <span class="parser-value">${escapeHtml(value)}</span>
+          </div>
+        `)
+        .join("")}
+    </div>
+  `;
+
+  return {
+    title,
+    html: `
+      <details class="parser-debug" title="${escapeHtml(title)}">
+        <summary class="parser-summary">
+          <span class="parser-label">🔍 搜索解析</span>
+          <span class="parser-chip parser-chip-intent">${escapeHtml(intentLabel)}</span>
+          ${denseEnabled
+            ? '<span class="parser-chip parser-chip-dense">向量召回</span>'
+            : ""}
+        </summary>
+        <div class="parser-panel">
+          ${detailHtml}
+        </div>
+      </details>
+    `,
+  };
+}
+
+function formatParserFilters(constraints) {
+  const parts = [];
+  if (constraints.degree) parts.push(constraints.degree);
+  if (Array.isArray(constraints.cities) && constraints.cities.length) {
+    parts.push(`城市:${constraints.cities.join("、")}`);
+  }
+  if (Array.isArray(constraints.skills) && constraints.skills.length) {
+    parts.push(`技能:${constraints.skills.join("、")}`);
+  }
+  if (constraints.min_years != null) {
+    parts.push(`${constraints.min_years}年以上`);
+  }
+  return parts.join(", ");
 }
 
 function updateResultCount() {

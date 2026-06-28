@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import html
+import json
 import logging
 import re
 import time
@@ -58,20 +59,19 @@ INTENT_STRUCTURED = "structured"
 INTENT_SKILL_COMBO = "skill_combo"
 INTENT_SEMANTIC = "semantic"
 INTENT_JD_MATCH = "jd_match"
-RERANK_INTENTS = {INTENT_SEMANTIC, INTENT_JD_MATCH}
 EVIDENCE_VECTOR_FIELD = "evidence_vector"
+QUERY_PARSER_PROVIDER = "deepseek"
+QUERY_PARSER_MODEL_ID = "deepseek-v4-flash"
+QUERY_PARSER_API_URL = "https://api.deepseek.com/chat/completions"
+QUERY_PARSER_API_KEY = "sk-1eed8c88508842c2a023399a7ed6b5c0"
+QUERY_PARSER_TIMEOUT_SECONDS = 30
+QUERY_PARSER_MAX_VOCAB_ITEMS = 120
 SOURCE_EXCLUDES = [
     "raw_text",
     "raw_sections",
     "skills_text",
 ]
 EVIDENCE_SOURCE_EXCLUDES = [EVIDENCE_VECTOR_FIELD]
-EXACT_LOOKUP_RE = re.compile(
-    r"^(?:[A-Za-z]\d{3,}|M\d{6,}|\d{6,}|1[3-9]\d{9}|[^@\s]+@[^@\s]+\.[^@\s]+)$",
-    re.I,
-)
-YEAR_FILTER_RE = re.compile(r"^(?P<years>\d+(?:\.\d+)?)\s*年(?:以上|及以上|\+)?$")
-EXACT_ENTITY_SUFFIXES = ("大学", "学院", "公司", "集团")
 DEGREE_ALIASES = {
     "博士研究生": "博士",
     "博士": "博士",
@@ -375,7 +375,19 @@ def _skill_label_score(value: str) -> int:
 
 
 def _empty_parsed_query() -> dict[str, Any]:
-    return {"query_text": "", "filters": [], "constraints": {}}
+    return {
+        "intent": INTENT_BROWSE,
+        "query_text": "",
+        "lexical_query": "",
+        "semantic_query": "",
+        "filters": [],
+        "constraints": {},
+        "must_terms": [],
+        "should_terms": [],
+        "enable_dense": False,
+        "enable_rerank": False,
+        "parser": QUERY_PARSER_PROVIDER,
+    }
 
 
 def _plan_query(
@@ -386,185 +398,298 @@ def _plan_query(
     facets: dict[str, Any] | None = None,
 ) -> QueryPlan:
     raw_query = raw_query_text.strip()
-    parsed_query = _parse_query_constraints(raw_query, facets=facets) if raw_query else _empty_parsed_query()
-    query_text = parsed_query["query_text"]
-    filters = [*explicit_filters, *parsed_query["filters"]]
+    parsed_query = _parse_query_with_llm(raw_query, facets=facets) if raw_query else _empty_parsed_query()
+    lexical_query = str(parsed_query.get("lexical_query") or parsed_query.get("query_text") or "").strip()
+    semantic_query = str(parsed_query.get("semantic_query") or lexical_query).strip()
+    intent = _normalize_plan_intent(parsed_query.get("intent"), raw_query, lexical_query, parsed_query.get("constraints") or {})
     known_skills = _planner_known_skills(facets) if raw_query else set()
-    intent = _classify_query_intent(
-        raw_query=raw_query,
-        query_text=query_text,
-        filters=filters,
-        constraints=parsed_query["constraints"],
-        known_skills=known_skills,
-    )
-    semantic_query = query_text
-    must_terms = _plan_must_terms(intent, query_text, parsed_query["constraints"], known_skills)
-    must_term_keys = {_casefold_key(term) for term in must_terms}
-    should_terms = [
-        token
-        for token in _coverage_tokens(query_text)
-        if _casefold_key(token) not in must_term_keys
-    ]
-    enable_dense = _plan_enable_dense(intent, semantic_query)
+    llm_filters = _filters_from_llm_constraints(parsed_query.get("constraints") or {}, known_skills)
+    filters = [*explicit_filters, *llm_filters]
+    enable_dense = bool(parsed_query.get("enable_dense")) and bool(semantic_query)
+    enable_rerank = ENABLE_RERANK and bool(raw_query) and bool(lexical_query) and bool(semantic_query)
     return QueryPlan(
         raw_query=raw_query,
         intent=intent,
         filters=filters,
         constraints=parsed_query["constraints"],
-        query_text=query_text,
-        lexical_query=query_text,
+        query_text=lexical_query,
+        lexical_query=lexical_query,
         semantic_query=semantic_query,
-        must_terms=must_terms,
-        should_terms=should_terms,
+        must_terms=_clean_string_list(parsed_query.get("must_terms")),
+        should_terms=_clean_string_list(parsed_query.get("should_terms")),
         enable_dense=enable_dense,
-        enable_rerank=_plan_enable_rerank(intent, semantic_query),
+        enable_rerank=enable_rerank,
         rank_window_size=max(size, RRF_RANK_WINDOW_SIZE),
     )
+
+
+def _parse_query_with_llm(
+    raw_query: str,
+    facets: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    if not raw_query.strip():
+        return _empty_parsed_query()
+
+    try:
+        payload = _call_deepseek_query_parser(raw_query, facets=facets)
+    except Exception as exc:
+        logger.exception("LLM query parser failed")
+        fallback = _llm_parser_fallback(raw_query)
+        fallback["constraints"]["parser_warning"] = str(exc)
+        return fallback
+    return _sanitize_llm_query_plan(payload, raw_query)
+
+
+def _call_deepseek_query_parser(
+    raw_query: str,
+    facets: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    prompt_context = _query_parser_prompt_context(facets)
+    body = {
+        "model": QUERY_PARSER_MODEL_ID,
+        "messages": [
+            {"role": "system", "content": _query_parser_system_prompt()},
+            {
+                "role": "user",
+                "content": (
+                    f"{prompt_context}\n\n"
+                    f"用户原始 query:\n{raw_query.strip()}"
+                ),
+            },
+        ],
+        "response_format": {"type": "json_object"},
+        "thinking": {"type": "disabled"},
+        "temperature": 0,
+        "max_tokens": 900,
+        "stream": False,
+    }
+    response = requests.post(
+        QUERY_PARSER_API_URL,
+        headers={
+            "Authorization": f"Bearer {QUERY_PARSER_API_KEY}",
+            "Content-Type": "application/json",
+        },
+        json=body,
+        timeout=QUERY_PARSER_TIMEOUT_SECONDS,
+    )
+    response.raise_for_status()
+    data = response.json()
+    content = (
+        data.get("choices", [{}])[0]
+        .get("message", {})
+        .get("content", "")
+    )
+    if not isinstance(content, str) or not content.strip():
+        raise RuntimeError(f"query parser response has no content: {data}")
+    return json.loads(_strip_json_fence(content))
+
+
+def _query_parser_system_prompt() -> str:
+    return (
+        "你是一个招聘/简历检索系统的 query planner。"
+        "你的唯一任务是把用户自由文本解析成可执行的检索计划，必须只输出一个 JSON object，不能输出 Markdown。"
+        "不要根据候选人库是否存在来臆测结果，只解析用户意图。\n\n"
+        "输出 schema:\n"
+        "{\n"
+        '  "intent": "browse|exact_lookup|entity|structured|skill_combo|semantic|jd_match",\n'
+        '  "lexical_query": "给 BM25/短语/精确检索使用的文本；不得包含已抽取到 constraints 的学历/城市/年限纯筛选词；纯筛选时为空字符串",\n'
+        '  "semantic_query": "给 embedding/rerank 使用的语义需求文本；不得包含已抽取到 constraints 的学历/城市/年限纯筛选词；不启用语义时为空字符串",\n'
+        '  "constraints": {\n'
+        '    "degree": null|"博士"|"硕士"|"本科",\n'
+        '    "cities": ["北京"],\n'
+        '    "skills": ["Python"],\n'
+        '    "min_years": null|0.5\n'
+        "  },\n"
+        '  "must_terms": ["必须满足或强约束词"],\n'
+        '  "should_terms": ["加分但不应硬过滤的词"],\n'
+        '  "enable_dense": true\n'
+        "}\n\n"
+        "判断准则:\n"
+        "- exact_lookup: 候选人编号、岗位编号、手机号、邮箱等直接定位查询；dense=false。\n"
+        "- entity: 学校、公司、姓名、专业、岗位名等实体查询；dense=false，保留原实体作为 lexical_query。\n"
+        "- structured: 同时包含学历/城市/年限/技能等筛选条件和少量检索词；学历/城市/年限放入 constraints，技术技能、岗位词、能力需求仍要保留在 lexical_query/semantic_query。\n"
+        "- skill_combo: 多个技能组合但不应把技能变成硬过滤；保留完整 query 做召回，dense=true。\n"
+        "- semantic: 自然语言能力需求；dense=true。\n"
+        "- jd_match: 长岗位描述或多行 JD；dense=true。\n"
+        "- 不要输出 rerank 开关；rerank 是系统排序策略，不由 query planner 决定。\n"
+        "- 负向约束如“不要纯推荐排序”不要变成硬过滤；把核心正向需求放入 semantic_query，负向信息可留在 semantic_query 里供 rerank 理解。\n"
+        "- 即使某些技能也放入 constraints.skills，也不要从 lexical_query/semantic_query 中删除这些技能词；技能词仍然是 BM25 和语义召回的重要线索。\n"
+        "- 已放入 constraints 的学历、城市、年限不要再出现在 lexical_query 或 semantic_query 中，避免污染词面检索和 embedding。\n"
+        "- 只有用户仅输入学历、城市、年限这类纯筛选条件时，lexical_query 和 semantic_query 才返回空字符串。\n"
+        "- skills 只放明确被用户当作硬条件的技能；泛化语义能力不要硬塞进 skills。\n"
+    )
+
+
+def _query_parser_prompt_context(facets: dict[str, Any] | None = None) -> str:
+    vocab = _filter_vocab_for_prompt(facets)
+    return (
+        "可用规范化参考词表如下。词表只是帮助规范输出，不要把不在词表里的真实用户约束丢弃。\n"
+        f"学历: {', '.join(vocab['degrees']) or '博士, 硕士, 本科'}\n"
+        f"城市: {', '.join(vocab['cities']) or '无'}\n"
+        f"技能样例: {', '.join(vocab['skills']) or '无'}"
+    )
+
+
+def _filter_vocab_for_prompt(facets: dict[str, Any] | None = None) -> dict[str, list[str]]:
+    if facets is not None:
+        degrees = sorted(_facet_keys(facets, "degrees"))
+        cities = sorted(_facet_keys(facets, "cities"))
+        skills = sorted(_facet_keys(facets, "skills"), key=_skill_label_sort_key)
+    else:
+        try:
+            vocab = _load_filter_vocab()
+            degrees = sorted(vocab["degrees"])
+            cities = sorted(vocab["cities"])
+            skills = sorted(vocab["skills"], key=_skill_label_sort_key)
+        except Exception:
+            logger.exception("loading parser vocabulary failed")
+            degrees, cities, skills = [], [], []
+    return {
+        "degrees": degrees[:QUERY_PARSER_MAX_VOCAB_ITEMS],
+        "cities": cities[:QUERY_PARSER_MAX_VOCAB_ITEMS],
+        "skills": skills[:QUERY_PARSER_MAX_VOCAB_ITEMS],
+    }
+
+
+def _strip_json_fence(content: str) -> str:
+    text = content.strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```(?:json)?\s*", "", text)
+        text = re.sub(r"\s*```$", "", text)
+    return text.strip()
+
+
+def _sanitize_llm_query_plan(payload: dict[str, Any], raw_query: str) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        return _llm_parser_fallback(raw_query)
+
+    constraints = payload.get("constraints") if isinstance(payload.get("constraints"), dict) else {}
+    cleaned_constraints: dict[str, Any] = {}
+    degree = constraints.get("degree")
+    if degree:
+        cleaned_constraints["degree"] = _normalize_highest_degree(str(degree).strip())
+    cities = _clean_string_list(constraints.get("cities"))
+    if cities:
+        cleaned_constraints["cities"] = cities
+    skills = _clean_string_list(constraints.get("skills"))
+    if skills:
+        cleaned_constraints["skills"] = skills
+    min_years = _clean_float(constraints.get("min_years"))
+    if min_years is not None and min_years > 0:
+        cleaned_constraints["min_years"] = min_years
+
+    lexical_query = str(payload.get("lexical_query") or payload.get("query_text") or "").strip()
+    semantic_query = str(payload.get("semantic_query") or "").strip()
+    intent = _normalize_plan_intent(payload.get("intent"), raw_query, lexical_query, cleaned_constraints)
+    enable_dense = bool(payload.get("enable_dense")) and bool(semantic_query)
+
+    return {
+        "intent": intent,
+        "query_text": lexical_query,
+        "lexical_query": lexical_query,
+        "semantic_query": semantic_query,
+        "filters": [],
+        "constraints": cleaned_constraints,
+        "must_terms": _clean_string_list(payload.get("must_terms")),
+        "should_terms": _clean_string_list(payload.get("should_terms")),
+        "enable_dense": enable_dense,
+        "enable_rerank": False,
+        "parser": QUERY_PARSER_PROVIDER,
+    }
+
+
+def _llm_parser_fallback(raw_query: str) -> dict[str, Any]:
+    query = raw_query.strip()
+    return {
+        "intent": INTENT_SEMANTIC if query else INTENT_BROWSE,
+        "query_text": query,
+        "lexical_query": query,
+        "semantic_query": query,
+        "filters": [],
+        "constraints": {},
+        "must_terms": [],
+        "should_terms": [],
+        "enable_dense": False,
+        "enable_rerank": False,
+        "parser": QUERY_PARSER_PROVIDER,
+    }
+
+
+def _normalize_plan_intent(
+    raw_intent: Any,
+    raw_query: str,
+    lexical_query: str,
+    constraints: dict[str, Any],
+) -> str:
+    allowed = {
+        INTENT_BROWSE,
+        INTENT_EXACT_LOOKUP,
+        INTENT_ENTITY,
+        INTENT_STRUCTURED,
+        INTENT_SKILL_COMBO,
+        INTENT_SEMANTIC,
+        INTENT_JD_MATCH,
+    }
+    intent = str(raw_intent or "").strip()
+    if intent in allowed:
+        return intent
+    if not raw_query.strip():
+        return INTENT_STRUCTURED if constraints else INTENT_BROWSE
+    if constraints:
+        return INTENT_STRUCTURED
+    return INTENT_SEMANTIC if lexical_query else INTENT_BROWSE
+
+
+def _filters_from_llm_constraints(
+    constraints: dict[str, Any],
+    skill_vocab: set[str] | None = None,
+) -> list[dict[str, Any]]:
+    filters: list[dict[str, Any]] = []
+    degree = constraints.get("degree")
+    if degree:
+        filters.append({"term": {"candidate.highest_degree": _normalize_highest_degree(str(degree))}})
+    cities = _clean_string_list(constraints.get("cities"))
+    if cities:
+        filters.append({"terms": {"application.expected_work_cities": _dedupe(cities)}})
+    for skill in _dedupe_casefold(_clean_string_list(constraints.get("skills"))):
+        filters.append(_skill_filter(skill, skill_vocab))
+    min_years = _clean_float(constraints.get("min_years"))
+    if min_years is not None and min_years > 0:
+        filters.append({"range": {"candidate.years_experience": {"gte": min_years}}})
+    return filters
+
+
+def _clean_string_list(value: Any) -> list[str]:
+    if value is None:
+        return []
+    raw_items = value if isinstance(value, list) else [value]
+    result: list[str] = []
+    seen: set[str] = set()
+    for item in raw_items:
+        text = str(item).strip()
+        if not text:
+            continue
+        key = _casefold_key(text)
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(text)
+    return result
+
+
+def _clean_float(value: Any) -> float | None:
+    if value in (None, ""):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _planner_known_skills(facets: dict[str, Any] | None = None) -> set[str]:
     if facets is not None:
         return _facet_keys(facets, "skills")
     return _load_filter_vocab()["skills"]
-
-
-def _classify_query_intent(
-    *,
-    raw_query: str,
-    query_text: str,
-    filters: list[dict[str, Any]],
-    constraints: dict[str, Any],
-    known_skills: set[str],
-) -> str:
-    if not raw_query:
-        return INTENT_STRUCTURED if filters else INTENT_BROWSE
-
-    if not query_text:
-        return INTENT_STRUCTURED if filters else INTENT_BROWSE
-
-    compact_query = "".join(query_text.split())
-    if EXACT_LOOKUP_RE.match(compact_query):
-        return INTENT_EXACT_LOOKUP
-    if compact_query.endswith(EXACT_ENTITY_SUFFIXES):
-        return INTENT_ENTITY
-    if constraints:
-        return INTENT_STRUCTURED
-    if _is_skill_combo_query(query_text, known_skills):
-        return INTENT_SKILL_COMBO
-    if _looks_like_jd_query(raw_query, query_text):
-        return INTENT_JD_MATCH
-    if _use_dense(query_text):
-        return INTENT_SEMANTIC
-    return INTENT_ENTITY
-
-
-def _is_skill_combo_query(query_text: str, known_skills: set[str]) -> bool:
-    tokens = _query_tokens(query_text)
-    if len(tokens) < 2 or not known_skills:
-        return False
-    skill_tokens = _known_skill_tokens(tokens, known_skills)
-    return len(skill_tokens) >= 2 and len(skill_tokens) >= max(2, len(tokens) - 1)
-
-
-def _looks_like_jd_query(raw_query: str, query_text: str) -> bool:
-    compact = "".join(query_text.split())
-    return "\n" in raw_query or len(compact) >= 80 or len(_query_tokens(query_text)) >= 16
-
-
-def _plan_must_terms(
-    intent: str,
-    query_text: str,
-    constraints: dict[str, Any],
-    known_skills: set[str],
-) -> list[str]:
-    if not query_text:
-        return []
-    if intent in {INTENT_EXACT_LOOKUP, INTENT_ENTITY}:
-        return [query_text]
-    if intent == INTENT_STRUCTURED:
-        return list(constraints.get("skills") or [])
-    if intent == INTENT_SKILL_COMBO:
-        skill_terms = _known_skill_tokens(_query_tokens(query_text), known_skills)
-        return skill_terms or _coverage_tokens(query_text)
-    return []
-
-
-def _plan_enable_dense(intent: str, semantic_query: str) -> bool:
-    if intent in {INTENT_BROWSE, INTENT_EXACT_LOOKUP, INTENT_ENTITY}:
-        return False
-    return _use_dense(semantic_query)
-
-
-def _plan_enable_rerank(intent: str, semantic_query: str) -> bool:
-    return ENABLE_RERANK and intent in RERANK_INTENTS and _use_dense(semantic_query)
-
-
-def _parse_query_constraints(
-    query_text: str,
-    facets: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    text = query_text.strip()
-    if not text:
-        return _empty_parsed_query()
-
-    tokens = _query_tokens(text)
-    year_tokens = [token for token in tokens if _parse_year_filter_token(token) is not None]
-    should_parse = len(tokens) >= 2 or bool(year_tokens)
-    if not should_parse:
-        return {"query_text": text, "filters": [], "constraints": {}}
-
-    if facets is None:
-        vocab = _load_filter_vocab()
-        known_cities = vocab["cities"]
-        known_skills = vocab["skills"]
-        known_degrees = vocab["degrees"] | set(DEGREE_ALIASES)
-    else:
-        known_cities = _facet_keys(facets, "cities")
-        known_skills = _facet_keys(facets, "skills")
-        known_degrees = _facet_keys(facets, "degrees") | set(DEGREE_ALIASES)
-
-    remove_tokens: set[str] = set()
-    constraints: dict[str, Any] = {}
-    filters: list[dict[str, Any]] = []
-
-    parsed_years = [_parse_year_filter_token(token) for token in tokens]
-    parsed_years = [years for years in parsed_years if years is not None]
-    if parsed_years:
-        min_years = max(parsed_years)
-        filters.append({"range": {"candidate.years_experience": {"gte": min_years}}})
-        constraints["min_years"] = min_years
-        remove_tokens.update(year_tokens)
-
-    degree_tokens = [token for token in tokens if token in known_degrees]
-    if degree_tokens:
-        degree = _normalize_highest_degree(degree_tokens[0])
-        filters.append({"term": {"candidate.highest_degree": degree}})
-        constraints["degree"] = degree
-        remove_tokens.update(degree_tokens)
-
-    cities = _dedupe([token for token in tokens if token in known_cities])
-    if cities:
-        filters.append({"terms": {"application.expected_work_cities": cities}})
-        constraints["cities"] = cities
-        remove_tokens.update(cities)
-
-    # Only promote skill tokens to hard filters when the same free-text input
-    # already contains an explicit structured constraint. Plain skill queries
-    # remain broad BM25+dense searches to preserve recall.
-    if filters:
-        skills = _known_skill_tokens(tokens, known_skills)
-        if skills:
-            for skill in skills:
-                filters.append(_skill_filter(skill, known_skills))
-            constraints["skills"] = skills
-
-    remaining_tokens = [token for token in tokens if token not in remove_tokens]
-    remaining_query = " ".join(remaining_tokens).strip()
-    return {
-        "query_text": remaining_query,
-        "filters": filters,
-        "constraints": constraints,
-    }
 
 
 def _query_tokens(query_text: str) -> list[str]:
@@ -595,33 +720,6 @@ def _facet_keys(facets: dict[str, Any], name: str) -> set[str]:
         for item in facets.get(name, [])
         if item.get("key")
     }
-
-
-def _known_skill_tokens(tokens: list[str], known_skills: set[str]) -> list[str]:
-    preferred_by_key: dict[str, str] = {}
-    for skill in known_skills:
-        key = _casefold_key(skill)
-        if not key:
-            continue
-        current = preferred_by_key.get(key)
-        if current is None or _skill_label_sort_key(skill) < _skill_label_sort_key(current):
-            preferred_by_key[key] = skill
-
-    result: list[str] = []
-    seen: set[str] = set()
-    for token in tokens:
-        key = _casefold_key(token)
-        if key in preferred_by_key and key not in seen:
-            seen.add(key)
-            result.append(_display_skill_label([preferred_by_key[key]]))
-    return result
-
-
-def _parse_year_filter_token(token: str) -> float | None:
-    match = YEAR_FILTER_RE.match(token)
-    if not match:
-        return None
-    return float(match.group("years"))
 
 
 def _filter_browse_body(filters: list[dict[str, Any]], size: int) -> dict[str, Any]:
@@ -1352,7 +1450,14 @@ def _rerank_document(result: dict[str, Any]) -> str:
     application = source.get("application") or result.get("application") or {}
     lines: list[str] = []
 
-    _append_doc_line(lines, "技能标签", "、".join(source.get("skills") or result.get("skills") or []))
+    _append_doc_line(lines, "应聘岗位", application.get("position_name"))
+    background = " ".join(
+        _clean_doc_text(candidate.get(field))
+        for field in ("highest_degree", "school", "major")
+        if candidate.get(field)
+    )
+    _append_doc_line(lines, "候选人背景", background)
+    _append_doc_line(lines, "技能", "、".join(source.get("skills") or result.get("skills") or []))
 
     lang = source.get("languages") or {}
     lang_parts = []
@@ -1399,14 +1504,14 @@ def _rerank_document(result: dict[str, Any]) -> str:
             for field in ("name", "description", "responsibility")
             if project.get(field)
         )
-        _append_doc_line(lines, "项目经历", text)
+        _append_doc_line(lines, "项目", text)
     for internship in source.get("internships") or []:
         text = " ".join(
             _clean_doc_text(internship.get(field))
             for field in ("company", "department", "title", "description")
             if internship.get(field)
         )
-        _append_doc_line(lines, "实习经历", text)
+        _append_doc_line(lines, "经历", text)
 
     return "\n".join(line for line in lines if line.strip())
 
@@ -1543,21 +1648,6 @@ def _accepted_hits(response: dict[str, Any]) -> list[tuple[int, dict[str, Any], 
         }
         accepted.append((rank, hit, dense_debug))
     return accepted
-
-
-def _use_dense(query_text: str) -> bool:
-    compact = "".join(query_text.split())
-    if not compact or _looks_like_exact_lookup(compact):
-        return False
-    if len(query_text.split()) >= 2:
-        return True
-    return len(compact) >= 4
-
-
-def _looks_like_exact_lookup(compact_query: str) -> bool:
-    if EXACT_LOOKUP_RE.match(compact_query):
-        return True
-    return compact_query.endswith(EXACT_ENTITY_SUFFIXES)
 
 
 # ---------------------------------------------------------------------------

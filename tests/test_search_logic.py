@@ -11,6 +11,7 @@ from app import (
     INTENT_SKILL_COMBO,
     INTENT_STRUCTURED,
     _build_filters,
+    _call_deepseek_query_parser,
     _dense_confidence,
     _default_snippet,
     _evidence_lexical_query,
@@ -20,13 +21,11 @@ from app import (
     _merge_case_insensitive_skill_buckets,
     _normalize_limit,
     _normalize_offset,
-    _parse_query_constraints,
     _plan_query,
     _rerank_document,
     _rerank_results,
     _rrf_merge,
     _run_hybrid_search,
-    _use_dense,
 )
 from import_to_es import (
     EMBEDDING_NORMALIZED,
@@ -41,6 +40,55 @@ from import_to_es import (
 
 
 class SearchLogicTests(unittest.TestCase):
+    def test_deepseek_query_parser_disables_thinking(self) -> None:
+        calls: list[dict] = []
+
+        class FakeResponse:
+            def raise_for_status(self) -> None:
+                return None
+
+            def json(self) -> dict:
+                return {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": json.dumps(
+                                    {
+                                        "intent": "semantic",
+                                        "lexical_query": "RAG 向量检索",
+                                        "semantic_query": "RAG 向量检索",
+                                        "constraints": {},
+                                        "must_terms": [],
+                                        "should_terms": [],
+                                        "enable_dense": True,
+                                        "enable_rerank": True,
+                                    },
+                                    ensure_ascii=False,
+                                )
+                            }
+                        }
+                    ]
+                }
+
+        def fake_post(url, *, headers, json, timeout):
+            calls.append({"url": url, "headers": headers, "json": json, "timeout": timeout})
+            return FakeResponse()
+
+        with patch("app.requests.post", side_effect=fake_post):
+            plan = _call_deepseek_query_parser(
+                "找做过 RAG 和向量检索的人",
+                facets={
+                    "degrees": [{"key": "本科"}],
+                    "cities": [{"key": "北京"}],
+                    "skills": [{"key": "RAG"}],
+                },
+            )
+
+        self.assertEqual(plan["intent"], "semantic")
+        self.assertEqual(calls[0]["json"]["model"], "deepseek-v4-flash")
+        self.assertEqual(calls[0]["json"]["thinking"], {"type": "disabled"})
+        self.assertFalse(calls[0]["json"]["stream"])
+
     def test_search_limit_defaults_to_full_result_window(self) -> None:
         self.assertEqual(_normalize_limit(None), 100)
         self.assertEqual(_normalize_limit(0), 100)
@@ -223,7 +271,7 @@ class SearchLogicTests(unittest.TestCase):
         self.assertTrue(dense_response["_dense_confidence"]["abstained"])
         self.assertEqual(warnings, ["evidence_dense abstained: dense score distribution has no clear head"])
 
-    def test_exact_entity_queries_skip_dense_before_merge(self) -> None:
+    def test_hybrid_merge_keeps_dense_candidates_when_dense_route_is_present(self) -> None:
         lexical_response = _response(
             EVIDENCE_RETRIEVER,
             [
@@ -240,13 +288,6 @@ class SearchLogicTests(unittest.TestCase):
 
         results = _rrf_merge([lexical_response, vector_response], 10)
 
-        self.assertFalse(_use_dense("北京大学"))
-        self.assertFalse(_use_dense("奇安信集团"))
-        self.assertFalse(_use_dense("M20260001"))
-        self.assertFalse(_use_dense("A0009"))
-        self.assertTrue(_use_dense("自然语言处理"))
-        self.assertTrue(_use_dense("推荐召回"))
-        self.assertTrue(_use_dense("做过推荐系统召回和 NLP 模型落地的人"))
         self.assertEqual(_hybrid_total([lexical_response, vector_response]), 2)
         self.assertEqual([item["id"] for item in results], ["lexical-1", "vector-only"])
 
@@ -792,118 +833,154 @@ class SearchLogicTests(unittest.TestCase):
             ],
         )
 
-    def test_mixed_query_constraints_are_parsed_from_facets(self) -> None:
-        parsed = _parse_query_constraints(
-            "0.5年以上 北京 本科 推荐系统",
-            facets={
-                "degrees": [{"key": "本科"}],
-                "cities": [{"key": "北京"}],
-                "skills": [{"key": "推荐系统"}],
+    def test_query_plan_uses_llm_structured_constraints_with_system_rerank(self) -> None:
+        with patch(
+            "app._call_deepseek_query_parser",
+            return_value={
+                "intent": "structured",
+                "lexical_query": "推荐系统",
+                "semantic_query": "推荐系统",
+                "constraints": {
+                    "min_years": 0.5,
+                    "degree": "本科",
+                    "cities": ["北京"],
+                    "skills": ["推荐系统"],
+                },
+                "must_terms": ["推荐系统"],
+                "should_terms": [],
+                "enable_dense": True,
+                "enable_rerank": False,
             },
-        )
-
-        self.assertEqual(parsed["query_text"], "推荐系统")
-        self.assertEqual(
-            parsed["constraints"],
-            {
-                "min_years": 0.5,
-                "degree": "本科",
-                "cities": ["北京"],
-                "skills": ["推荐系统"],
-            },
-        )
-        self.assertIn({"term": {"skills": "推荐系统"}}, parsed["filters"])
-
-    def test_mixed_query_skill_constraints_are_case_insensitive(self) -> None:
-        parsed = _parse_query_constraints(
-            "0.5年以上 北京 本科 java",
-            facets={
-                "degrees": [{"key": "本科"}],
-                "cities": [{"key": "北京"}],
-                "skills": [{"key": "Java"}],
-            },
-        )
-
-        self.assertEqual(parsed["constraints"]["skills"], ["Java"])
-        self.assertIn({"term": {"skills": "Java"}}, parsed["filters"])
-
-    def test_plain_skill_query_stays_broad(self) -> None:
-        parsed = _parse_query_constraints(
-            "推荐系统 NLP SQL",
-            facets={
-                "degrees": [{"key": "本科"}],
-                "cities": [{"key": "北京"}],
-                "skills": [{"key": "推荐系统"}, {"key": "NLP"}, {"key": "SQL"}],
-            },
-        )
-
-        self.assertEqual(parsed["query_text"], "推荐系统 NLP SQL")
-        self.assertEqual(parsed["filters"], [])
-
-    def test_query_plan_routes_structured_query_without_rerank(self) -> None:
-        plan = _plan_query(
-            "0.5年以上 北京 本科 推荐系统",
-            [],
-            size=10,
-            facets={
-                "degrees": [{"key": "本科"}],
-                "cities": [{"key": "北京"}],
-                "skills": [{"key": "推荐系统"}],
-            },
-        )
+        ):
+            plan = _plan_query(
+                "0.5年以上 北京 本科 推荐系统",
+                [],
+                size=10,
+                facets={
+                    "degrees": [{"key": "本科"}],
+                    "cities": [{"key": "北京"}],
+                    "skills": [{"key": "推荐系统"}],
+                },
+            )
 
         self.assertEqual(plan.intent, INTENT_STRUCTURED)
         self.assertEqual(plan.lexical_query, "推荐系统")
         self.assertEqual(plan.semantic_query, "推荐系统")
         self.assertTrue(plan.enable_dense)
-        self.assertFalse(plan.enable_rerank)
+        self.assertTrue(plan.enable_rerank)
         self.assertEqual(plan.must_terms, ["推荐系统"])
         self.assertIn({"term": {"skills": "推荐系统"}}, plan.filters)
 
-    def test_query_plan_routes_skill_combo_as_broad_hybrid_query(self) -> None:
-        plan = _plan_query(
-            "推荐系统 NLP SQL",
-            [],
-            size=10,
-            facets={
-                "degrees": [{"key": "本科"}],
-                "cities": [{"key": "北京"}],
-                "skills": [{"key": "推荐系统"}, {"key": "NLP"}, {"key": "SQL"}],
+    def test_query_plan_canonicalizes_llm_skill_filters_case_insensitively(self) -> None:
+        with patch(
+            "app._call_deepseek_query_parser",
+            return_value={
+                "intent": "structured",
+                "lexical_query": "java",
+                "semantic_query": "java",
+                "constraints": {"skills": ["java"]},
+                "enable_dense": True,
+                "enable_rerank": False,
             },
-        )
+        ):
+            plan = _plan_query(
+                "0.5年以上 北京 本科 java",
+                [],
+                size=10,
+                facets={
+                    "degrees": [{"key": "本科"}],
+                    "cities": [{"key": "北京"}],
+                    "skills": [{"key": "Java"}],
+                },
+            )
+
+        self.assertIn({"term": {"skills": "Java"}}, plan.filters)
+
+    def test_query_plan_routes_skill_combo_as_broad_hybrid_query(self) -> None:
+        with patch(
+            "app._call_deepseek_query_parser",
+            return_value={
+                "intent": "skill_combo",
+                "lexical_query": "推荐系统 NLP SQL",
+                "semantic_query": "推荐系统 NLP SQL",
+                "constraints": {},
+                "must_terms": ["推荐系统", "NLP", "SQL"],
+                "should_terms": [],
+                "enable_dense": True,
+                "enable_rerank": False,
+            },
+        ):
+            plan = _plan_query(
+                "推荐系统 NLP SQL",
+                [],
+                size=10,
+                facets={
+                    "degrees": [{"key": "本科"}],
+                    "cities": [{"key": "北京"}],
+                    "skills": [{"key": "推荐系统"}, {"key": "NLP"}, {"key": "SQL"}],
+                },
+            )
 
         self.assertEqual(plan.intent, INTENT_SKILL_COMBO)
         self.assertEqual(plan.filters, [])
         self.assertEqual(plan.must_terms, ["推荐系统", "NLP", "SQL"])
         self.assertTrue(plan.enable_dense)
+        self.assertTrue(plan.enable_rerank)
 
     def test_query_plan_disables_dense_for_entity_queries(self) -> None:
-        plan = _plan_query(
-            "北京大学",
-            [],
-            size=10,
-            facets={
-                "degrees": [{"key": "本科"}],
-                "cities": [{"key": "北京"}],
-                "skills": [{"key": "Python"}],
+        with patch(
+            "app._call_deepseek_query_parser",
+            return_value={
+                "intent": "entity",
+                "lexical_query": "北京大学",
+                "semantic_query": "",
+                "constraints": {},
+                "must_terms": ["北京大学"],
+                "should_terms": [],
+                "enable_dense": False,
+                "enable_rerank": False,
             },
-        )
+        ):
+            plan = _plan_query(
+                "北京大学",
+                [],
+                size=10,
+                facets={
+                    "degrees": [{"key": "本科"}],
+                    "cities": [{"key": "北京"}],
+                    "skills": [{"key": "Python"}],
+                },
+            )
 
         self.assertEqual(plan.intent, INTENT_ENTITY)
         self.assertEqual(plan.must_terms, ["北京大学"])
         self.assertFalse(plan.enable_dense)
+        self.assertTrue(plan.enable_rerank)
 
     def test_query_plan_routes_natural_language_to_semantic(self) -> None:
-        plan = _plan_query(
-            "做过推荐系统召回和 NLP 模型落地的人",
-            [],
-            size=10,
-            facets={
-                "degrees": [{"key": "本科"}],
-                "cities": [{"key": "北京"}],
-                "skills": [{"key": "NLP"}],
+        with patch(
+            "app._call_deepseek_query_parser",
+            return_value={
+                "intent": "semantic",
+                "lexical_query": "推荐系统召回 NLP 模型落地",
+                "semantic_query": "做过推荐系统召回和 NLP 模型落地的人",
+                "constraints": {},
+                "must_terms": [],
+                "should_terms": ["推荐系统召回", "NLP", "模型落地"],
+                "enable_dense": True,
+                "enable_rerank": True,
             },
-        )
+        ):
+            plan = _plan_query(
+                "做过推荐系统召回和 NLP 模型落地的人",
+                [],
+                size=10,
+                facets={
+                    "degrees": [{"key": "本科"}],
+                    "cities": [{"key": "北京"}],
+                    "skills": [{"key": "NLP"}],
+                },
+            )
 
         self.assertEqual(plan.intent, INTENT_SEMANTIC)
         self.assertEqual(plan.must_terms, [])
