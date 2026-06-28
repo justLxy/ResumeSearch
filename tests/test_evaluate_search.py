@@ -21,6 +21,7 @@ def test_build_report_groups_metrics_by_query_type() -> None:
             recall_at_5=1.0,
             recall_at_10=1.0,
             mrr_at_10=1.0,
+            ndcg_at_5=1.0,
             ndcg_at_10=1.0,
         ),
         _result(
@@ -39,9 +40,11 @@ def test_build_report_groups_metrics_by_query_type() -> None:
     assert report["overall"]["judged"] == 1
     assert report["overall"]["p5"] == 0.2
     assert report["overall"]["empty_accuracy"] == 1.0
+    assert report["by_type"]["exact_code"]["ndcg5"] == 1.0
     assert report["by_type"]["exact_code"]["ndcg10"] == 1.0
     assert report["by_type"]["negative_semantic"]["empty_accuracy"] == 1.0
     assert report["details"][0]["relevant_hits_at_10"] == ["resume-1"]
+    assert report["details"][0]["relevant_grades_at_10"] == {"resume-1": 1.0}
 
 
 def test_report_json_round_trip(tmp_path) -> None:
@@ -53,6 +56,7 @@ def test_report_json_round_trip(tmp_path) -> None:
                 query="Python NLP",
                 relevant_ids={"resume-1"},
                 returned_ids=["resume-1"],
+                ndcg_at_5=1.0,
                 ndcg_at_10=1.0,
             )
         ],
@@ -70,22 +74,63 @@ def test_report_json_round_trip(tmp_path) -> None:
 
 def test_compare_reports_returns_metric_deltas() -> None:
     previous = {
-        "overall": {"queries": 2, "ndcg10": 0.5, "mrr10": 0.4, "r10": 0.3, "r100": 0.5, "forbidden10": 2},
+        "overall": {
+            "queries": 2,
+            "ndcg5": 0.45,
+            "ndcg10": 0.5,
+            "mrr10": 0.4,
+            "r10": 0.3,
+            "r100": 0.5,
+            "forbidden10": 2,
+        },
         "by_type": {
-            "semantic": {"queries": 1, "ndcg10": 0.2, "mrr10": 0.2, "r10": 0.2, "r100": 0.4, "forbidden10": 1}
+            "semantic": {
+                "queries": 1,
+                "ndcg5": 0.1,
+                "ndcg10": 0.2,
+                "mrr10": 0.2,
+                "r10": 0.2,
+                "r100": 0.4,
+                "forbidden10": 1,
+            }
         },
     }
     current = {
-        "overall": {"queries": 3, "ndcg10": 0.7, "mrr10": 0.5, "r10": 0.4, "r100": 0.7, "forbidden10": 1},
+        "overall": {
+            "queries": 3,
+            "ndcg5": 0.65,
+            "ndcg10": 0.7,
+            "mrr10": 0.5,
+            "r10": 0.4,
+            "r100": 0.7,
+            "forbidden10": 1,
+        },
         "by_type": {
-            "semantic": {"queries": 1, "ndcg10": 0.6, "mrr10": 0.4, "r10": 0.5, "r100": 0.9, "forbidden10": 0},
-            "entity": {"queries": 1, "ndcg10": 1.0, "mrr10": 1.0, "r10": 1.0, "r100": 1.0, "forbidden10": 0},
+            "semantic": {
+                "queries": 1,
+                "ndcg5": 0.5,
+                "ndcg10": 0.6,
+                "mrr10": 0.4,
+                "r10": 0.5,
+                "r100": 0.9,
+                "forbidden10": 0,
+            },
+            "entity": {
+                "queries": 1,
+                "ndcg5": 1.0,
+                "ndcg10": 1.0,
+                "mrr10": 1.0,
+                "r10": 1.0,
+                "r100": 1.0,
+                "forbidden10": 0,
+            },
         },
     }
 
     comparison = compare_reports(current, previous)
 
     assert comparison["overall"]["queries"]["delta"] == 1
+    assert comparison["overall"]["ndcg5"]["delta"] == 0.2
     assert comparison["overall"]["ndcg10"]["delta"] == 0.19999999999999996
     assert comparison["overall"]["forbidden10"]["delta"] == -1
     assert comparison["by_type"]["semantic"]["r10"]["delta"] == 0.3
@@ -107,6 +152,7 @@ def _result(
     recall_at_50: float = 0.0,
     recall_at_100: float = 0.0,
     mrr_at_10: float = 0.0,
+    ndcg_at_5: float = 0.0,
     ndcg_at_10: float = 0.0,
     forbidden_at_10: int = 0,
     empty_success: bool | None = None,
@@ -116,6 +162,7 @@ def _result(
             case_id=case_id,
             query=query,
             case_type=case_type,
+            relevance={doc_id: 1.0 for doc_id in relevant_ids},
             relevant_ids=relevant_ids,
             forbidden_ids=set(),
             expect_empty=empty_success is not None,
@@ -128,6 +175,7 @@ def _result(
         recall_at_50=recall_at_50,
         recall_at_100=recall_at_100,
         mrr_at_10=mrr_at_10,
+        ndcg_at_5=ndcg_at_5,
         ndcg_at_10=ndcg_at_10,
         forbidden_at_10=forbidden_at_10,
         empty_success=empty_success,

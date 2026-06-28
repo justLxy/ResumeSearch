@@ -34,14 +34,9 @@ def test_doubao_embedding_backend_posts_openai_compatible_request(monkeypatch) -
                 "timeout": timeout,
             }
         )
-        return FakeResponse(
-            {
-                "data": [
-                    {"index": 1, "embedding": [0, 3, 4]},
-                    {"index": 0, "embedding": [6, 8, 0]},
-                ]
-            }
-        )
+        text = json["input"][0]["text"]
+        embedding = [6, 8, 0] if text == "first" else [0, 3, 4]
+        return FakeResponse({"data": {"embedding": embedding}})
 
     monkeypatch.setattr(embedding_service.requests, "post", fake_post)
 
@@ -49,19 +44,33 @@ def test_doubao_embedding_backend_posts_openai_compatible_request(monkeypatch) -
 
     assert calls == [
         {
-            "url": "https://ark.cn-beijing.volces.com/api/v3/embeddings",
+            "url": "https://ark.cn-beijing.volces.com/api/v3/embeddings/multimodal",
             "headers": {
                 "Authorization": "Bearer test-key",
                 "Content-Type": "application/json",
             },
             "json": {
                 "model": "ep-test",
-                "input": ["first", "second"],
+                "input": [{"type": "text", "text": "first"}],
                 "encoding_format": "float",
                 "dimensions": 3,
             },
             "timeout": 60,
-        }
+        },
+        {
+            "url": "https://ark.cn-beijing.volces.com/api/v3/embeddings/multimodal",
+            "headers": {
+                "Authorization": "Bearer test-key",
+                "Content-Type": "application/json",
+            },
+            "json": {
+                "model": "ep-test",
+                "input": [{"type": "text", "text": "second"}],
+                "encoding_format": "float",
+                "dimensions": 3,
+            },
+            "timeout": 60,
+        },
     ]
     assert vectors[0] == pytest.approx([0.6, 0.8, 0.0])
     assert vectors[1] == pytest.approx([0.0, 0.6, 0.8])

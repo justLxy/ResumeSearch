@@ -20,6 +20,7 @@ class EvalCase:
     case_id: str
     query: str
     case_type: str
+    relevance: dict[str, float]
     relevant_ids: set[str]
     forbidden_ids: set[str]
     expect_empty: bool
@@ -51,6 +52,7 @@ class QueryResult:
     recall_at_50: float
     recall_at_100: float
     mrr_at_10: float
+    ndcg_at_5: float
     ndcg_at_10: float
     forbidden_at_10: int
     empty_success: bool | None
@@ -106,11 +108,14 @@ def load_cases(path: Path) -> EvalCaseSet:
             continue
         raw = json.loads(line)
         case_id = raw["id"]
-        relevant_ids = set(raw.get("relevant_ids") or [])
+        relevance = _load_relevance(raw)
+        relevant_ids = {doc_id for doc_id, grade in relevance.items() if grade > 0}
         forbidden_ids = set(raw.get("forbidden_ids") or [])
 
         if "relevant_es_query" in raw:
-            relevant_ids.update(fetch_ids(raw["relevant_es_query"]))
+            for doc_id in fetch_ids(raw["relevant_es_query"]):
+                relevance[doc_id] = max(relevance.get(doc_id, 0.0), 1.0)
+            relevant_ids = {doc_id for doc_id, grade in relevance.items() if grade > 0}
         if "forbidden_es_query" in raw:
             forbidden_ids.update(fetch_ids(raw["forbidden_es_query"]))
 
@@ -138,6 +143,7 @@ def load_cases(path: Path) -> EvalCaseSet:
                 case_id=case_id,
                 query=raw["query"],
                 case_type=raw.get("type", "unknown"),
+                relevance=relevance,
                 relevant_ids=relevant_ids,
                 forbidden_ids=forbidden_ids,
                 expect_empty=bool(raw.get("expect_empty", False)),
@@ -176,10 +182,23 @@ def evaluate_case(client: TestClient, case: EvalCase, limit: int) -> QueryResult
         recall_at_50=recall_at(returned_ids, case.relevant_ids, 50),
         recall_at_100=recall_at(returned_ids, case.relevant_ids, 100),
         mrr_at_10=mrr_at(returned_ids, case.relevant_ids, 10),
-        ndcg_at_10=ndcg_at(returned_ids, case.relevant_ids, 10),
+        ndcg_at_5=ndcg_at(returned_ids, case.relevance, 5),
+        ndcg_at_10=ndcg_at(returned_ids, case.relevance, 10),
         forbidden_at_10=sum(1 for doc_id in returned_ids[:10] if doc_id in case.forbidden_ids),
         empty_success=(len(returned_ids) == 0) if case.expect_empty else None,
     )
+
+
+def _load_relevance(raw: dict[str, Any]) -> dict[str, float]:
+    relevance: dict[str, float] = {}
+    for doc_id in raw.get("relevant_ids") or []:
+        relevance[str(doc_id)] = max(relevance.get(str(doc_id), 0.0), 1.0)
+    for doc_id, grade in (raw.get("relevance") or {}).items():
+        grade_value = float(grade)
+        if grade_value < 0:
+            raise ValueError(f"relevance grade must be non-negative for {doc_id}")
+        relevance[str(doc_id)] = max(relevance.get(str(doc_id), 0.0), grade_value)
+    return relevance
 
 
 def precision_at(returned_ids: list[str], relevant_ids: set[str], k: int) -> float:
@@ -203,15 +222,16 @@ def mrr_at(returned_ids: list[str], relevant_ids: set[str], k: int) -> float:
     return 0.0
 
 
-def ndcg_at(returned_ids: list[str], relevant_ids: set[str], k: int) -> float:
-    if not relevant_ids:
+def ndcg_at(returned_ids: list[str], relevance: dict[str, float], k: int) -> float:
+    if not relevance:
         return 0.0
     dcg = 0.0
     for rank, doc_id in enumerate(returned_ids[:k], start=1):
-        if doc_id in relevant_ids:
-            dcg += 1 / math.log2(rank + 1)
-    ideal_hits = min(len(relevant_ids), k)
-    idcg = sum(1 / math.log2(rank + 1) for rank in range(1, ideal_hits + 1))
+        gain = relevance.get(doc_id, 0.0)
+        if gain > 0:
+            dcg += gain / math.log2(rank + 1)
+    ideal_gains = sorted((grade for grade in relevance.values() if grade > 0), reverse=True)[:k]
+    idcg = sum(gain / math.log2(rank + 1) for rank, gain in enumerate(ideal_gains, start=1))
     return dcg / idcg if idcg else 0.0
 
 
@@ -256,6 +276,7 @@ def summarize(results: list[QueryResult]) -> dict[str, Any]:
         "r50": _mean_metric(judged, "recall_at_50"),
         "r100": _mean_metric(judged, "recall_at_100"),
         "mrr10": _mean_metric(judged, "mrr_at_10"),
+        "ndcg5": _mean_metric(judged, "ndcg_at_5"),
         "ndcg10": _mean_metric(judged, "ndcg_at_10"),
         "forbidden10": sum(result.forbidden_at_10 for result in results),
         "empty_accuracy": (
@@ -285,6 +306,11 @@ def result_to_detail(result: QueryResult) -> dict[str, Any]:
         "relevant_hits_at_10": [
             doc_id for doc_id in result.returned_ids[:10] if doc_id in result.case.relevant_ids
         ],
+        "relevant_grades_at_10": {
+            doc_id: result.case.relevance[doc_id]
+            for doc_id in result.returned_ids[:10]
+            if doc_id in result.case.relevance
+        },
         "forbidden_hits_at_10": [
             doc_id for doc_id in result.returned_ids[:10] if doc_id in result.case.forbidden_ids
         ],
@@ -295,6 +321,7 @@ def result_to_detail(result: QueryResult) -> dict[str, Any]:
         "r50": result.recall_at_50,
         "r100": result.recall_at_100,
         "mrr10": result.mrr_at_10,
+        "ndcg5": result.ndcg_at_5,
         "ndcg10": result.ndcg_at_10,
         "forbidden10": result.forbidden_at_10,
         "empty_success": result.empty_success,
@@ -340,6 +367,7 @@ COMPARISON_METRICS = (
     "r50",
     "r100",
     "mrr10",
+    "ndcg5",
     "ndcg10",
     "empty_accuracy",
     "forbidden10",
@@ -390,7 +418,7 @@ def _metric_delta(current_value: Any, previous_value: Any) -> float | None:
 def print_summary_table(row: dict[str, Any]) -> None:
     print("\nSearch quality summary")
     print(
-        "queries judged  P@5    P@10   R@5    R@10   R@50   R@100  MRR@10 NDCG@10 empty_acc forbidden@10"
+        "queries judged  P@5    P@10   R@5    R@10   R@50   R@100  MRR@10 NDCG@5 NDCG@10 empty_acc forbidden@10"
     )
     empty = "-" if row["empty_accuracy"] is None else f"{row['empty_accuracy']:.3f}"
     print(
@@ -403,6 +431,7 @@ def print_summary_table(row: dict[str, Any]) -> None:
         f"{row['r50']:.3f}  "
         f"{row['r100']:.3f}  "
         f"{row['mrr10']:.3f}  "
+        f"{row['ndcg5']:.3f}  "
         f"{row['ndcg10']:.3f}  "
         f"{empty:>9}  "
         f"{row['forbidden10']:>12}"
@@ -411,7 +440,7 @@ def print_summary_table(row: dict[str, Any]) -> None:
 
 def print_type_summary(report: dict[str, Any]) -> None:
     print("\nType summary")
-    print("type                    queries judged P@5   R@10  R@100 NDCG@10 empty_acc forbidden@10")
+    print("type                    queries judged P@5   R@10  R@100 NDCG@5 NDCG@10 empty_acc forbidden@10")
     for case_type, row in (report.get("by_type") or {}).items():
         empty = row.get("empty_accuracy")
         print(
@@ -421,6 +450,7 @@ def print_type_summary(report: dict[str, Any]) -> None:
             f"{row['p5']:.3f} "
             f"{row['r10']:.3f} "
             f"{row['r100']:.3f} "
+            f"{row['ndcg5']:.3f} "
             f"{row['ndcg10']:.3f} "
             f"{'-' if empty is None else f'{empty:.3f}':>9} "
             f"{row['forbidden10']:>12}"
@@ -438,7 +468,7 @@ def print_skipped_cases(skipped: list[SkippedCase]) -> None:
 
 def print_comparison_report(comparison: dict[str, Any], previous_path: Path) -> None:
     print(f"\nComparison vs {previous_path}")
-    print("scope                   queriesΔ NDCG@10Δ MRR@10Δ R@10Δ R@100Δ emptyΔ  forbiddenΔ")
+    print("scope                   queriesΔ NDCG@5Δ NDCG@10Δ MRR@10Δ R@10Δ R@100Δ emptyΔ  forbiddenΔ")
     print_comparison_row("overall", comparison["overall"])
     for case_type, row in (comparison.get("by_type") or {}).items():
         print_comparison_row(case_type, row)
@@ -448,6 +478,7 @@ def print_comparison_row(label: str, row: dict[str, Any]) -> None:
     print(
         f"{label:<23} "
         f"{_format_delta(row['queries']['delta'], digits=0):>8} "
+        f"{_format_delta(row['ndcg5']['delta']):>7} "
         f"{_format_delta(row['ndcg10']['delta']):>8} "
         f"{_format_delta(row['mrr10']['delta']):>7} "
         f"{_format_delta(row['r10']['delta']):>6} "
@@ -474,7 +505,7 @@ def print_details(results: list[QueryResult]) -> None:
         ]
         print(
             f"- {result.case.case_id} [{result.case.case_type}] "
-            f"NDCG@10={result.ndcg_at_10:.3f} R@10={result.recall_at_10:.3f} "
+            f"NDCG@5={result.ndcg_at_5:.3f} NDCG@10={result.ndcg_at_10:.3f} R@10={result.recall_at_10:.3f} "
             f"R@100={result.recall_at_100:.3f} "
             f"hits={relevant_hits} forbidden={forbidden_hits} returned={result.returned_ids[:10]}"
         )

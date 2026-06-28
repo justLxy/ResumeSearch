@@ -26,6 +26,7 @@ DOUBAO_VECTOR_DIMS = 2048
 DOUBAO_BATCH_SIZE = 64
 DOUBAO_TIMEOUT_SECONDS = 60
 DOUBAO_SEND_DIMENSIONS = True
+DOUBAO_MULTIMODAL = True
 
 _POOLING_CONFIG = json.dumps(
     {
@@ -188,6 +189,8 @@ def encode_batch(texts: list[str]) -> list[list[float]]:
 def _encode_doubao_batch(texts: list[str], *, normalize: bool = True) -> list[list[float]]:
     api_key = _doubao_api_key()
     batch_size = _positive_int(DOUBAO_BATCH_SIZE, "DOUBAO_BATCH_SIZE")
+    if DOUBAO_MULTIMODAL:
+        batch_size = 1
     vectors: list[list[float]] = []
     for start in range(0, len(texts), batch_size):
         vectors.extend(
@@ -209,16 +212,24 @@ def _request_doubao_embeddings(texts: list[str], api_key: str) -> list[list[floa
     base_url = DOUBAO_API_BASE.rstrip("/")
     model_id = _doubao_model_id()
     timeout = _positive_int(DOUBAO_TIMEOUT_SECONDS, "DOUBAO_TIMEOUT_SECONDS")
+    input_value: object = texts
+    api_path = "embeddings"
+    if DOUBAO_MULTIMODAL:
+        if len(texts) != 1:
+            raise RuntimeError("Doubao multimodal embedding requests must contain one text")
+        input_value = [{"type": "text", "text": texts[0]}]
+        api_path = "embeddings/multimodal"
+
     body: dict[str, object] = {
         "model": model_id,
-        "input": texts,
+        "input": input_value,
         "encoding_format": "float",
     }
     if DOUBAO_SEND_DIMENSIONS:
         body["dimensions"] = _current_vector_dims()
 
     response = requests.post(
-        f"{base_url}/embeddings",
+        f"{base_url}/{api_path}",
         headers={
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
@@ -239,15 +250,22 @@ def _request_doubao_embeddings(texts: list[str], api_key: str) -> list[list[floa
     except ValueError as exc:
         raise RuntimeError("Doubao embedding response is not valid JSON") from exc
     rows = payload.get("data")
+    if isinstance(rows, dict):
+        vector = rows.get("embedding")
+        return _clean_doubao_vectors([vector], len(texts))
     if not isinstance(rows, list):
-        raise RuntimeError("Doubao embedding response is missing data[]")
+        raise RuntimeError("Doubao embedding response is missing data")
     if not all(isinstance(row, dict) for row in rows):
         raise RuntimeError("Doubao embedding response data[] contains a non-object item")
     ordered_rows = sorted(rows, key=lambda item: int(item.get("index", 0)))
     vectors = [row.get("embedding") for row in ordered_rows]
-    if len(vectors) != len(texts):
+    return _clean_doubao_vectors(vectors, len(texts))
+
+
+def _clean_doubao_vectors(vectors: list[object], expected_count: int) -> list[list[float]]:
+    if len(vectors) != expected_count:
         raise RuntimeError(
-            f"Doubao embedding response count mismatch: expected {len(texts)}, got {len(vectors)}"
+            f"Doubao embedding response count mismatch: expected {expected_count}, got {len(vectors)}"
         )
     cleaned_vectors: list[list[float]] = []
     expected_dims = _current_vector_dims()
