@@ -19,8 +19,11 @@ from app import (
     _lexical_total,
     _merge_case_insensitive_skill_buckets,
     _normalize_limit,
+    _normalize_offset,
     _parse_query_constraints,
     _plan_query,
+    _rerank_document,
+    _rerank_results,
     _rrf_merge,
     _run_hybrid_search,
     _use_dense,
@@ -39,11 +42,17 @@ from import_to_es import (
 
 class SearchLogicTests(unittest.TestCase):
     def test_search_limit_defaults_to_full_result_window(self) -> None:
-        self.assertEqual(_normalize_limit(None), 10_000)
-        self.assertEqual(_normalize_limit(0), 10_000)
+        self.assertEqual(_normalize_limit(None), 100)
+        self.assertEqual(_normalize_limit(0), 100)
         self.assertEqual(_normalize_limit(20), 20)
         self.assertEqual(_normalize_limit(500), 500)
-        self.assertEqual(_normalize_limit(50_000), 10_000)
+        self.assertEqual(_normalize_limit(50_000), 1000)
+
+    def test_search_offset_is_capped_to_viewable_window(self) -> None:
+        self.assertEqual(_normalize_offset(None), 0)
+        self.assertEqual(_normalize_offset(0), 0)
+        self.assertEqual(_normalize_offset(200), 200)
+        self.assertEqual(_normalize_offset(50_000), 1000)
 
     def test_experience_uses_apply_time_for_internships_only(self) -> None:
         doc = {
@@ -899,7 +908,63 @@ class SearchLogicTests(unittest.TestCase):
         self.assertEqual(plan.intent, INTENT_SEMANTIC)
         self.assertEqual(plan.must_terms, [])
         self.assertTrue(plan.enable_dense)
-        self.assertFalse(plan.enable_rerank)
+        self.assertTrue(plan.enable_rerank)
+
+    def test_rerank_results_reorders_top_window_and_keeps_tail(self) -> None:
+        results = [
+            _formatted_result("a", "RRF 第一", "Vue3 后台管理系统", 0.9),
+            _formatted_result("b", "RRF 第二", "企业知识库 RAG 向量检索系统", 0.8),
+            _formatted_result("c", "RRF 第三", "普通 Java 后端系统", 0.7),
+        ]
+
+        with patch(
+            "app._score_rerank_documents",
+            return_value=[0.05, 0.95],
+        ):
+            reranked, warnings = _rerank_results("需要 RAG 和向量检索经验", results, top_n=2)
+
+        self.assertEqual(warnings, [])
+        self.assertEqual([item["id"] for item in reranked], ["b", "a", "c"])
+        self.assertEqual(reranked[0]["score"], 0.95)
+        self.assertEqual(reranked[0]["retrieval_debug"]["pre_rerank_rank"], 2)
+        self.assertEqual(reranked[0]["retrieval_debug"]["rerank_rank"], 1)
+        self.assertTrue(reranked[0]["retrieval_debug"]["rerank_applied"])
+        self.assertEqual(reranked[0]["retrieval_debug"]["rerank_window_size"], 2)
+        self.assertFalse(reranked[2]["retrieval_debug"]["rerank_applied"])
+        self.assertEqual(reranked[2]["retrieval_debug"]["rerank_skip_reason"], "outside_top_n")
+        self.assertEqual(reranked[2]["retrieval_debug"]["pre_rerank_rank"], 3)
+        self.assertNotIn("rerank_rank", reranked[2]["retrieval_debug"])
+
+    def test_rerank_document_uses_resume_evidence_fields(self) -> None:
+        document = _rerank_document(
+            _formatted_result(
+                "rag-1",
+                "RAG 候选",
+                "企业级RAG知识问答系统",
+                0.8,
+                skills=["RAG", "LangChain"],
+            )
+        )
+
+        self.assertIn("应聘岗位: RAG 候选", document)
+        self.assertIn("技能: RAG、LangChain", document)
+        self.assertIn("项目: 企业级RAG知识问答系统", document)
+
+    def test_rerank_document_does_not_truncate_available_project_or_internship_text(self) -> None:
+        result = _formatted_result("long-1", "算法候选", "项目1", 0.8)
+        result["source"]["projects"] = [
+            {"name": f"项目{i}", "description": f"描述{i}", "responsibility": f"职责{i}"}
+            for i in range(1, 7)
+        ]
+        result["source"]["internships"] = [
+            {"company": f"公司{i}", "department": "算法部", "title": "算法实习生", "description": f"实习描述{i}"}
+            for i in range(1, 7)
+        ]
+
+        document = _rerank_document(result)
+
+        self.assertIn("项目: 项目6 描述6 职责6", document)
+        self.assertIn("经历: 公司6 算法部 算法实习生 实习描述6", document)
 
     def test_evidence_lexical_query_covers_profile_fields(self) -> None:
         query_json = json.dumps(_evidence_lexical_query("A0009"), ensure_ascii=False)
@@ -1034,6 +1099,54 @@ def _hit(
     if matched_queries is not None:
         hit["matched_queries"] = matched_queries
     return hit
+
+
+def _formatted_result(
+    doc_id: str,
+    position_name: str,
+    project_name: str,
+    score: float,
+    *,
+    skills: list[str] | None = None,
+) -> dict:
+    skills = skills or []
+    return {
+        "id": doc_id,
+        "score": score,
+        "candidate": {
+            "highest_degree": "硕士",
+            "school": "测试大学",
+            "major": "计算机科学与技术",
+            "years_experience": 3,
+        },
+        "application": {
+            "position_name": position_name,
+            "expected_work_cities": ["北京"],
+        },
+        "skills": skills,
+        "retrieval_debug": {"rrf_score": score},
+        "source": {
+            "candidate": {
+                "highest_degree": "硕士",
+                "school": "测试大学",
+                "major": "计算机科学与技术",
+                "years_experience": 3,
+            },
+            "application": {
+                "position_name": position_name,
+                "expected_work_cities": ["北京"],
+            },
+            "skills": skills,
+            "projects": [
+                {
+                    "name": project_name,
+                    "description": "项目描述",
+                    "responsibility": "核心职责",
+                }
+            ],
+            "internships": [],
+        },
+    }
 
 
 def _evidence_hit(

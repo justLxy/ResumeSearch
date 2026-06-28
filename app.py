@@ -25,8 +25,9 @@ WEB_DIR = BASE_DIR / "web"
 logger = logging.getLogger(__name__)
 
 RRF_RANK_CONSTANT = 60
-RRF_RANK_WINDOW_SIZE = 100
-MAX_BROWSE_RESULT_SIZE = 10_000
+RRF_RANK_WINDOW_SIZE = 1000
+DEFAULT_SEARCH_LIMIT = 100
+MAX_BROWSE_RESULT_SIZE = 1000
 KNN_NUM_CANDIDATES = 300
 FACETS_CACHE_TTL_SECONDS = 60
 FILTER_VOCAB_CACHE_TTL_SECONDS = 300
@@ -39,6 +40,8 @@ DENSE_RRF_WEIGHT = 1.0
 EVIDENCE_RRF_WEIGHT = 1.2
 EVIDENCE_DENSE_RRF_WEIGHT = 1.0
 DENSE_RANK_WINDOW_SIZE = 300
+ENABLE_RERANK = True
+RERANK_TOP_N = 5
 DENSE_ABSTAIN_MIN_SAMPLE_SIZE = 20
 DENSE_ABSTAIN_IQR_MULTIPLIER = 1.5
 EVIDENCE_POOL_EXTRA_WEIGHTS = (0.30, 0.15)
@@ -55,6 +58,7 @@ INTENT_STRUCTURED = "structured"
 INTENT_SKILL_COMBO = "skill_combo"
 INTENT_SEMANTIC = "semantic"
 INTENT_JD_MATCH = "jd_match"
+RERANK_INTENTS = {INTENT_SEMANTIC, INTENT_JD_MATCH}
 EVIDENCE_VECTOR_FIELD = "evidence_vector"
 SOURCE_EXCLUDES = [
     "raw_text",
@@ -149,12 +153,15 @@ def search(
     skills: list[str] = Query(default=[]),
     min_years: float = 0,
     limit: int = 0,
+    offset: int = 0,
 ) -> dict[str, Any]:
     raw_query_text = q.strip()
-    size = _normalize_limit(limit)
+    page_size = _normalize_limit(limit)
+    page_offset = _normalize_offset(offset)
+    result_window_size = RRF_RANK_WINDOW_SIZE
     skill_vocab = _load_filter_vocab()["skills"] if skills else None
     explicit_filters = _build_filters(degree, cities, skills, min_years, skill_vocab=skill_vocab)
-    plan = _plan_query(raw_query_text, explicit_filters, size=size)
+    plan = _plan_query(raw_query_text, explicit_filters, size=result_window_size)
     query_text = plan.lexical_query
     filters = plan.filters
     retrieval_warnings: list[str] = []
@@ -180,7 +187,10 @@ def search(
         retrieval_warnings.extend(retriever_warnings)
         matched_total = _lexical_total(responses)
         candidate_total = _hybrid_total(responses)
-        results = _rrf_merge(responses, size, query_text=query_text)
+        results = _rrf_merge(responses, result_window_size, query_text=query_text)
+        if plan.enable_rerank:
+            results, rerank_warnings = _rerank_results(plan.semantic_query, results)
+            retrieval_warnings.extend(rerank_warnings)
     elif filters:
         browse_size = MAX_BROWSE_RESULT_SIZE
         body = _filter_browse_body(filters, browse_size)
@@ -208,17 +218,27 @@ def search(
         candidate_total = matched_total
         results = [_format_hit(hit) for hit in es_result.get("hits", {}).get("hits", [])]
 
+    available_count = len(results)
+    paged_results = results[page_offset : page_offset + page_size]
+    next_offset = page_offset + len(paged_results)
+    has_more = next_offset < available_count
+
     return {
         "query": q,
         "effective_query": query_text,
         "parsed_constraints": plan.constraints,
         "query_plan": plan.to_debug_dict(),
-        "total": len(results),
-        "returned_count": len(results),
+        "total": available_count,
+        "returned_count": len(paged_results),
+        "offset": page_offset,
+        "limit": page_size,
+        "result_window_size": result_window_size,
+        "has_more": has_more,
+        "next_offset": next_offset if has_more else None,
         "matched_total": matched_total,
         "candidate_total": candidate_total,
         "retrieval_warnings": retrieval_warnings,
-        "results": results,
+        "results": paged_results,
         "facets": _load_facets(),
     }
 
@@ -248,8 +268,14 @@ def get_resume(resume_id: str) -> dict[str, Any]:
 
 def _normalize_limit(limit: int | None) -> int:
     if limit is None or limit <= 0:
-        return MAX_BROWSE_RESULT_SIZE
+        return DEFAULT_SEARCH_LIMIT
     return max(1, min(limit, MAX_BROWSE_RESULT_SIZE))
+
+
+def _normalize_offset(offset: int | None) -> int:
+    if offset is None or offset <= 0:
+        return 0
+    return min(offset, MAX_BROWSE_RESULT_SIZE)
 
 def _build_filters(
     degree: str,
@@ -386,7 +412,7 @@ def _plan_query(
         must_terms=must_terms,
         should_terms=should_terms,
         enable_dense=enable_dense,
-        enable_rerank=False,
+        enable_rerank=_plan_enable_rerank(intent, semantic_query),
         rank_window_size=max(size, RRF_RANK_WINDOW_SIZE),
     )
 
@@ -462,6 +488,10 @@ def _plan_enable_dense(intent: str, semantic_query: str) -> bool:
     if intent in {INTENT_BROWSE, INTENT_EXACT_LOOKUP, INTENT_ENTITY}:
         return False
     return _use_dense(semantic_query)
+
+
+def _plan_enable_rerank(intent: str, semantic_query: str) -> bool:
+    return ENABLE_RERANK and intent in RERANK_INTENTS and _use_dense(semantic_query)
 
 
 def _parse_query_constraints(
@@ -1235,6 +1265,133 @@ def _fetch_resume_hits_for_evidence(
         hit["_id"]: hit
         for hit in result.get("hits", {}).get("hits", [])
     }
+
+
+def _rerank_results(
+    query_text: str,
+    results: list[dict[str, Any]],
+    *,
+    top_n: int = RERANK_TOP_N,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    if not ENABLE_RERANK or not query_text.strip() or len(results) < 2 or top_n <= 0:
+        return results, []
+
+    window_size = min(top_n, len(results))
+    window = results[:window_size]
+    documents = [_rerank_document(result) for result in window]
+    try:
+        scores = _score_rerank_documents(query_text, documents)
+    except Exception as exc:
+        logger.exception("reranker failed")
+        return results, [f"reranker failed: {exc}"]
+
+    if len(scores) != len(window):
+        return results, [
+            f"reranker returned {len(scores)} scores for {len(window)} candidates"
+        ]
+
+    scored: list[tuple[float, int, dict[str, Any]]] = []
+    for pre_rank, (result, score) in enumerate(zip(window, scores), start=1):
+        rerank_score = float(score)
+        item = dict(result)
+        debug = dict(item.get("retrieval_debug") or {})
+        debug.update(
+            {
+                "rerank_model": "qwen3-rerank-api",
+                "rerank_applied": True,
+                "rerank_window_size": window_size,
+                "rerank_score": round(rerank_score, 6),
+                "pre_rerank_rank": pre_rank,
+                "pre_rerank_score": item.get("score"),
+            }
+        )
+        item["retrieval_debug"] = debug
+        item["score"] = round(rerank_score, 4)
+        scored.append((rerank_score, pre_rank, item))
+
+    scored.sort(key=lambda row: (-row[0], row[1]))
+    reranked_window: list[dict[str, Any]] = []
+    for rerank_rank, (_score, _pre_rank, item) in enumerate(scored, start=1):
+        debug = dict(item.get("retrieval_debug") or {})
+        debug["rerank_rank"] = rerank_rank
+        item["retrieval_debug"] = debug
+        reranked_window.append(item)
+
+    tail: list[dict[str, Any]] = []
+    for pre_rank, result in enumerate(results[window_size:], start=window_size + 1):
+        item = dict(result)
+        debug = dict(item.get("retrieval_debug") or {})
+        debug.update(
+            {
+                "rerank_model": "qwen3-rerank-api",
+                "rerank_applied": False,
+                "rerank_skip_reason": "outside_top_n",
+                "rerank_window_size": window_size,
+                "pre_rerank_rank": pre_rank,
+            }
+        )
+        item["retrieval_debug"] = debug
+        tail.append(item)
+    return [*reranked_window, *tail], []
+
+
+def _score_rerank_documents(query_text: str, documents: list[str]) -> list[float]:
+    from rerank_service import score_pairs
+
+    return score_pairs(query_text, documents)
+
+
+def _rerank_document(result: dict[str, Any]) -> str:
+    source = result.get("source") or {}
+    candidate = source.get("candidate") or result.get("candidate") or {}
+    application = source.get("application") or result.get("application") or {}
+    lines: list[str] = []
+
+    _append_doc_line(lines, "应聘岗位", application.get("position_name"))
+    _append_doc_line(lines, "期望城市", "、".join(application.get("expected_work_cities") or []))
+    _append_doc_line(lines, "学历", candidate.get("highest_degree"))
+    _append_doc_line(lines, "学校", candidate.get("school"))
+    _append_doc_line(lines, "专业", candidate.get("major"))
+    _append_doc_line(lines, "工作年限", candidate.get("years_experience"))
+    _append_doc_line(lines, "技能", "、".join(source.get("skills") or result.get("skills") or []))
+
+    for project in source.get("projects") or []:
+        text = " ".join(
+            _clean_doc_text(project.get(field))
+            for field in ("name", "description", "responsibility")
+            if project.get(field)
+        )
+        _append_doc_line(lines, "项目", text)
+    for internship in source.get("internships") or []:
+        text = " ".join(
+            _clean_doc_text(internship.get(field))
+            for field in ("company", "department", "title", "description")
+            if internship.get(field)
+        )
+        _append_doc_line(lines, "经历", text)
+
+    debug = result.get("retrieval_debug") or {}
+    snippets = _debug_evidence_snippets(debug)
+    if snippets:
+        _append_doc_line(lines, "命中证据", _strip_html(" ".join(snippets)))
+
+    return "\n".join(line for line in lines if line.strip())
+
+
+def _append_doc_line(lines: list[str], label: str, value: Any) -> None:
+    text = _clean_doc_text(value)
+    if text:
+        lines.append(f"{label}: {text}")
+
+
+def _clean_doc_text(value: Any) -> str:
+    if value is None:
+        return ""
+    return re.sub(r"\s+", " ", str(value)).strip()
+
+
+def _strip_html(value: str) -> str:
+    return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", value)).strip()
 
 
 def _evidence_match_debug(

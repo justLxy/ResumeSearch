@@ -675,6 +675,36 @@ mark {
   font-size: 14px;
 }
 
+.load-more {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-height: 40px;
+  margin-top: 14px;
+  border: 1px solid #cfd9e7;
+  border-radius: var(--radius);
+  color: var(--primary);
+  background: var(--surface);
+  font-size: 14px;
+  font-weight: 650;
+  cursor: pointer;
+  transition:
+    border-color 160ms ease,
+    background 160ms ease,
+    color 160ms ease;
+}
+
+.load-more:hover:not(:disabled) {
+  border-color: var(--primary);
+  background: var(--primary-soft);
+}
+
+.load-more:disabled {
+  color: var(--muted);
+  cursor: wait;
+}
+
 .overlay {
   position: fixed;
   inset: 0;
@@ -950,23 +980,17 @@ mark {
   gap: 16px;
 }
 
+.debug-column {
+  display: grid;
+  align-content: start;
+  gap: 16px;
+  min-width: 0;
+}
+
 @media (min-width: 800px) {
   .debug-content {
-    grid-template-columns: 1fr 1.2fr;
-    grid-template-rows: auto auto;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.12fr);
     align-items: start;
-  }
-  .status-group {
-    grid-column: 1;
-    grid-row: 1;
-  }
-  .queries-group {
-    grid-column: 1;
-    grid-row: 2;
-  }
-  .rrf-group {
-    grid-column: 2;
-    grid-row: 1 / span 2;
   }
 }
 

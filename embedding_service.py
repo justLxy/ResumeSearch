@@ -14,7 +14,8 @@ if TYPE_CHECKING:
 
 LOCAL_PROVIDER = "local"
 DOUBAO_PROVIDER = "doubao"
-EMBEDDING_PROVIDER = DOUBAO_PROVIDER
+QWEN_PROVIDER = "qwen"
+EMBEDDING_PROVIDER = QWEN_PROVIDER
 
 LOCAL_MODEL_ID = "IEITYuan/Yuan-embedding-2.0-zh"
 LOCAL_VECTOR_DIMS = 1792
@@ -27,6 +28,16 @@ DOUBAO_BATCH_SIZE = 64
 DOUBAO_TIMEOUT_SECONDS = 60
 DOUBAO_SEND_DIMENSIONS = True
 DOUBAO_MULTIMODAL = True
+
+QWEN_API_KEY = (
+    "sk-ws-H.RYPXDXP.DATz.MEUCIEFJ1Yu1_HxHnYU6_8E_OY1f_hJaKbH9VUpaqtL1uenPAiEAyYrG7vGeOt"
+    "0RqCCBXlpzh-GwOCOxTWBcWiR3Y8YsVbk"
+)
+QWEN_API_URL = "https://dashscope.aliyuncs.com/api/v1/services/embeddings/text-embedding/text-embedding"
+QWEN_MODEL_ID = "text-embedding-v4"
+QWEN_VECTOR_DIMS = 2048
+QWEN_BATCH_SIZE = 10
+QWEN_TIMEOUT_SECONDS = 60
 
 _POOLING_CONFIG = json.dumps(
     {
@@ -58,14 +69,18 @@ def _current_provider() -> str:
     provider = EMBEDDING_PROVIDER.strip().lower()
     if provider in {"api", "ark", "volcengine"}:
         return DOUBAO_PROVIDER
-    if provider in {LOCAL_PROVIDER, DOUBAO_PROVIDER}:
+    if provider in {"dashscope", "qianwen", "qwen3", "tongyi"}:
+        return QWEN_PROVIDER
+    if provider in {LOCAL_PROVIDER, DOUBAO_PROVIDER, QWEN_PROVIDER}:
         return provider
-    raise ValueError("EMBEDDING_PROVIDER must be one of: local, doubao")
+    raise ValueError("EMBEDDING_PROVIDER must be one of: local, doubao, qwen")
 
 
 def _current_vector_dims() -> int:
     if _current_provider() == DOUBAO_PROVIDER:
         return _positive_int(DOUBAO_VECTOR_DIMS, "DOUBAO_VECTOR_DIMS")
+    if _current_provider() == QWEN_PROVIDER:
+        return _positive_int(QWEN_VECTOR_DIMS, "QWEN_VECTOR_DIMS")
     return _positive_int(LOCAL_VECTOR_DIMS, "LOCAL_VECTOR_DIMS")
 
 
@@ -86,6 +101,8 @@ def _doubao_model_id() -> str:
 def _current_model_id() -> str:
     if _current_provider() == DOUBAO_PROVIDER:
         return f"{DOUBAO_PROVIDER}:{_doubao_model_id()}"
+    if _current_provider() == QWEN_PROVIDER:
+        return f"{QWEN_PROVIDER}:{QWEN_MODEL_ID}"
     return LOCAL_MODEL_ID
 
 
@@ -166,6 +183,8 @@ def encode(texts: str | list[str], *, normalize: bool = True) -> "np.ndarray | l
         texts = [texts]
     if _current_provider() == DOUBAO_PROVIDER:
         return _encode_doubao_batch(texts, normalize=normalize)
+    if _current_provider() == QWEN_PROVIDER:
+        return _encode_qwen_batch(texts, normalize=normalize)
     return get_model().encode(texts, normalize_embeddings=normalize)
 
 
@@ -276,6 +295,84 @@ def _clean_doubao_vectors(vectors: list[object], expected_count: int) -> list[li
         if len(cleaned_vector) != expected_dims:
             raise RuntimeError(
                 f"Doubao embedding dimension mismatch: expected {expected_dims}, "
+                f"got {len(cleaned_vector)}"
+            )
+        cleaned_vectors.append(cleaned_vector)
+    return cleaned_vectors
+
+
+def _encode_qwen_batch(texts: list[str], *, normalize: bool = True) -> list[list[float]]:
+    api_key = _qwen_api_key()
+    batch_size = _positive_int(QWEN_BATCH_SIZE, "QWEN_BATCH_SIZE")
+    vectors: list[list[float]] = []
+    for start in range(0, len(texts), batch_size):
+        vectors.extend(
+            _request_qwen_embeddings(texts[start : start + batch_size], api_key)
+        )
+    return [_normalize_vector(vector) for vector in vectors] if normalize else vectors
+
+
+def _qwen_api_key() -> str:
+    api_key = QWEN_API_KEY.strip()
+    if not api_key:
+        raise RuntimeError("QWEN_API_KEY is required when EMBEDDING_PROVIDER=qwen")
+    return api_key
+
+
+def _request_qwen_embeddings(texts: list[str], api_key: str) -> list[list[float]]:
+    if not texts:
+        return []
+    timeout = _positive_int(QWEN_TIMEOUT_SECONDS, "QWEN_TIMEOUT_SECONDS")
+    body = {
+        "model": QWEN_MODEL_ID,
+        "input": {"texts": texts},
+        "parameters": {"dimension": _current_vector_dims()},
+    }
+    response = requests.post(
+        QWEN_API_URL,
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        json=body,
+        timeout=timeout,
+    )
+    try:
+        response.raise_for_status()
+    except requests.HTTPError as exc:
+        raise RuntimeError(
+            f"Qwen embedding request failed: {response.status_code} "
+            f"{response.text[:800]}"
+        ) from exc
+
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise RuntimeError("Qwen embedding response is not valid JSON") from exc
+    rows = payload.get("output", {}).get("embeddings")
+    if not isinstance(rows, list):
+        raise RuntimeError("Qwen embedding response is missing output.embeddings")
+    if not all(isinstance(row, dict) for row in rows):
+        raise RuntimeError("Qwen embedding response embeddings[] contains a non-object item")
+    ordered_rows = sorted(rows, key=lambda item: int(item.get("text_index", item.get("index", 0))))
+    vectors = [row.get("embedding") for row in ordered_rows]
+    return _clean_qwen_vectors(vectors, len(texts))
+
+
+def _clean_qwen_vectors(vectors: list[object], expected_count: int) -> list[list[float]]:
+    if len(vectors) != expected_count:
+        raise RuntimeError(
+            f"Qwen embedding response count mismatch: expected {expected_count}, got {len(vectors)}"
+        )
+    cleaned_vectors: list[list[float]] = []
+    expected_dims = _current_vector_dims()
+    for vector in vectors:
+        if not isinstance(vector, list):
+            raise RuntimeError("Qwen embedding response contains a non-list vector")
+        cleaned_vector = [float(value) for value in vector]
+        if len(cleaned_vector) != expected_dims:
+            raise RuntimeError(
+                f"Qwen embedding dimension mismatch: expected {expected_dims}, "
                 f"got {len(cleaned_vector)}"
             )
         cleaned_vectors.append(cleaned_vector)

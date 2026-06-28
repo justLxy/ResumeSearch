@@ -1,3 +1,5 @@
+const PAGE_SIZE = 100;
+
 const state = {
   query: "",
   degree: "",
@@ -5,6 +7,10 @@ const state = {
   skills: new Set(),
   minYears: 0,
   results: [],
+  availableCount: 0,
+  nextOffset: null,
+  hasMore: false,
+  loadingMore: false,
   debounceTimer: null,
   requestSeq: 0,
 };
@@ -19,6 +25,7 @@ const els = {
   totalCount: document.querySelector("#totalCount"),
   queryMode: document.querySelector("#queryMode"),
   results: document.querySelector("#results"),
+  loadMoreButton: document.querySelector("#loadMoreButton"),
   drawer: document.querySelector("#drawer"),
   overlay: document.querySelector("#overlay"),
   drawerName: document.querySelector("#drawerName"),
@@ -37,25 +44,46 @@ function escapeHtml(value) {
     .replaceAll("'", "&#039;");
 }
 
-function params() {
+function params(offset = 0) {
   const query = new URLSearchParams();
   if (state.query) query.set("q", state.query);
   if (state.degree) query.set("degree", state.degree);
   if (state.minYears) query.set("min_years", state.minYears);
   state.cities.forEach((city) => query.append("cities", city));
   state.skills.forEach((skill) => query.append("skills", skill));
+  query.set("limit", PAGE_SIZE);
+  query.set("offset", offset);
   return query.toString();
 }
 
-async function runSearch() {
+async function runSearch({ append = false } = {}) {
   const seq = ++state.requestSeq;
-  state.query = els.searchInput.value.trim();
-  els.results.innerHTML = `<div class="empty-state">检索中...</div>`;
-  const response = await fetch(`/api/search?${params()}`);
+  const offset = append ? state.nextOffset || state.results.length : 0;
+  if (!append) {
+    state.query = els.searchInput.value.trim();
+    state.results = [];
+    state.availableCount = 0;
+    state.nextOffset = null;
+    state.hasMore = false;
+    els.results.innerHTML = `<div class="empty-state">检索中...</div>`;
+  } else {
+    state.loadingMore = true;
+    updateLoadMore();
+  }
+
+  const response = await fetch(`/api/search?${params(offset)}`);
   const payload = await response.json();
-  if (seq !== state.requestSeq) return;
-  state.results = payload.results || [];
-  els.totalCount.textContent = payload.returned_count ?? state.results.length;
+  if (seq !== state.requestSeq) {
+    state.loadingMore = false;
+    return;
+  }
+  const incoming = payload.results || [];
+  state.results = append ? [...state.results, ...incoming] : incoming;
+  state.availableCount = payload.total ?? state.results.length;
+  state.nextOffset = payload.next_offset;
+  state.hasMore = Boolean(payload.has_more);
+  state.loadingMore = false;
+  updateResultCount();
   els.queryMode.textContent = state.query
     ? `搜索：${state.query}`
     : hasActiveFilters()
@@ -64,6 +92,20 @@ async function runSearch() {
   syncQuickQueryState();
   renderFacets(payload.facets || {});
   renderResults();
+  updateLoadMore();
+}
+
+function updateResultCount() {
+  const shown = state.results.length;
+  const total = state.availableCount || shown;
+  els.totalCount.textContent = total > shown ? `${shown} / ${total}` : shown;
+}
+
+function updateLoadMore() {
+  if (!els.loadMoreButton) return;
+  els.loadMoreButton.hidden = !state.hasMore && !state.loadingMore;
+  els.loadMoreButton.disabled = state.loadingMore;
+  els.loadMoreButton.textContent = state.loadingMore ? "加载中..." : "加载更多";
 }
 
 function hasActiveFilters() {
@@ -402,6 +444,24 @@ function renderResults() {
              <span class="formula-label">Dense 贡献：</span>
              <span class="formula-calc">0 (未命中) <span class="formula-eq">=</span> <span class="formula-val">0</span></span>
            </div>`;
+      const rerankHtml = `<div class="debug-group rerank-group">
+              <div class="debug-title">Rerank 重排</div>
+              <div class="debug-list">
+                ${debug.rerank_applied === true
+                  ? `<div class="debug-item"><span class="debug-label">重排状态：</span> <span class="debug-value">已进入前 ${escapeHtml(debug.rerank_window_size || 5)} 精排</span></div>
+                     <div class="debug-item"><span class="debug-label">重排模型：</span> <span class="debug-value">${escapeHtml(debug.rerank_model)}</span></div>
+                     <div class="debug-item"><span class="debug-label">排名变化：</span> <span class="debug-value">RRF #${escapeHtml(debug.pre_rerank_rank)} → Rerank #${escapeHtml(debug.rerank_rank)}</span></div>
+                     <div class="debug-item"><span class="debug-label">Rerank 分数：</span> <span class="debug-value">${escapeHtml(formatScore(debug.rerank_score, 6))}</span></div>
+                     <div class="debug-item"><span class="debug-label">重排前 RRF 分数：</span> <span class="debug-value">${escapeHtml(formatScore(debug.pre_rerank_score ?? debug.rrf_score, 6))}</span></div>`
+                  : debug.rerank_applied === false
+                    ? `<div class="debug-item warning"><span class="debug-label">重排状态：</span> <span class="debug-value">未进入前 ${escapeHtml(debug.rerank_window_size || 5)} 精排窗口</span></div>
+                     <div class="debug-item"><span class="debug-label">RRF 排名：</span> <span class="debug-value">#${escapeHtml(debug.pre_rerank_rank || index + 1)}</span></div>
+                     <div class="debug-item"><span class="debug-label">排序方式：</span> <span class="debug-value">保持 RRF 原始顺序</span></div>`
+                    : `<div class="debug-item warning"><span class="debug-label">重排状态：</span> <span class="debug-value">当前结果没有 rerank 字段</span></div>
+                     <div class="debug-item"><span class="debug-label">可能原因：</span> <span class="debug-value">结果来自旧页面缓存，或本查询未启用语义精排</span></div>
+                     <div class="debug-item"><span class="debug-label">排序方式：</span> <span class="debug-value">当前按 RRF 顺序展示</span></div>`}
+              </div>
+            </div>`;
 
       const debugPanelHtml = `
         <div class="debug-panel" style="display: none;">
@@ -410,50 +470,56 @@ function renderResults() {
             <span class="debug-header-rank">最终排名 <strong class="highlight-number">${index + 1}</strong></span>
           </div>
           <div class="debug-content">
-            <div class="debug-group status-group">
-              <div class="debug-title">召回状态与分数</div>
-              <div class="debug-list">
-                ${lexicalHtml}
-                ${denseHtml}
-                ${denseMatchesHtml}
+            <div class="debug-column">
+              <div class="debug-group status-group">
+                <div class="debug-title">召回状态与分数</div>
+                <div class="debug-list">
+                  ${lexicalHtml}
+                  ${denseHtml}
+                  ${denseMatchesHtml}
+                </div>
               </div>
-            </div>
-            
-            <div class="debug-group rrf-group">
-              <div class="debug-title">RRF 融合分数计算过程</div>
-              <div class="debug-formula-box">
-                ${lexicalFormulaRowsHtml}
-                ${denseFormulaHtml}
-                <div class="formula-divider"></div>
-                <div class="formula-row highlight-row">
-                  <span class="formula-label">基础 RRF 分数：</span>
-                  <span class="formula-calc"><span class="formula-val primary-val">${debug.raw_rrf_score !== undefined ? debug.raw_rrf_score : rrfScore}</span></span>
+
+              ${debug.matched_queries && debug.matched_queries.length ? `
+              <div class="debug-group queries-group">
+                <div class="debug-title">候选人命中详情</div>
+                <div class="debug-list">
+                  ${debug.term_coverage !== undefined ? `<div class="debug-item"><span class="debug-label">查询词覆盖：</span> <span class="debug-value">${debug.term_coverage}</span></div>` : ''}
+                  <div class="debug-item"><span class="debug-label">最佳匹配：</span> <span class="debug-value tier-${debug.lexical_tier || 0}">${lexicalTierLabel(debug.lexical_tier || 0)} <span class="tier-desc">(层级 ${debug.lexical_tier || 0})</span></span></div>
+                  ${matchedQueriesHtml}
                 </div>
-                ${debug.score_multiplier !== undefined ? `
-                <div class="formula-row" style="margin-bottom: 4px;">
-                  <span class="formula-label">层级与覆盖度奖励系数：</span>
-                  <span class="formula-calc"><span class="formula-val" style="color: var(--text);">x${debug.score_multiplier.toFixed(2)}</span></span>
-                </div>
-                <div style="text-align: right; color: #94a3b8; font-size: 12px; margin-bottom: 8px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace; letter-spacing: 0.5px;">
-                  1.0(基础) + 0.15×${debug.lexical_tier || 0}(层级) + 0.05×${debug.term_coverage || 0}(覆盖数)
-                </div>
-                <div class="formula-divider strong"></div>
-                <div class="formula-row final-row">
-                  <span class="formula-label">最终加权得分：</span>
-                  <span class="formula-calc"><span class="formula-val final-val">${rrfScore}</span></span>
-                </div>` : ''}
-              </div>
+              </div>` : ''}
             </div>
 
-            ${debug.matched_queries && debug.matched_queries.length ? `
-            <div class="debug-group queries-group">
-              <div class="debug-title">候选人命中详情</div>
-              <div class="debug-list">
-                ${debug.term_coverage !== undefined ? `<div class="debug-item"><span class="debug-label">查询词覆盖：</span> <span class="debug-value">${debug.term_coverage}</span></div>` : ''}
-                <div class="debug-item"><span class="debug-label">最佳匹配：</span> <span class="debug-value tier-${debug.lexical_tier || 0}">${lexicalTierLabel(debug.lexical_tier || 0)} <span class="tier-desc">(层级 ${debug.lexical_tier || 0})</span></span></div>
-                ${matchedQueriesHtml}
+            <div class="debug-column">
+              <div class="debug-group rrf-group">
+                <div class="debug-title">RRF 融合分数计算过程</div>
+                <div class="debug-formula-box">
+                  ${lexicalFormulaRowsHtml}
+                  ${denseFormulaHtml}
+                  <div class="formula-divider"></div>
+                  <div class="formula-row highlight-row">
+                    <span class="formula-label">基础 RRF 分数：</span>
+                    <span class="formula-calc"><span class="formula-val primary-val">${debug.raw_rrf_score !== undefined ? debug.raw_rrf_score : rrfScore}</span></span>
+                  </div>
+                  ${debug.score_multiplier !== undefined ? `
+                  <div class="formula-row" style="margin-bottom: 4px;">
+                    <span class="formula-label">层级与覆盖度奖励系数：</span>
+                    <span class="formula-calc"><span class="formula-val" style="color: var(--text);">x${debug.score_multiplier.toFixed(2)}</span></span>
+                  </div>
+                  <div style="text-align: right; color: #94a3b8; font-size: 12px; margin-bottom: 8px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace; letter-spacing: 0.5px;">
+                    1.0(基础) + 0.15×${debug.lexical_tier || 0}(层级) + 0.05×${debug.term_coverage || 0}(覆盖数)
+                  </div>
+                  <div class="formula-divider strong"></div>
+                  <div class="formula-row final-row">
+                    <span class="formula-label">最终加权得分：</span>
+                    <span class="formula-calc"><span class="formula-val final-val">${rrfScore}</span></span>
+                  </div>` : ''}
+                </div>
               </div>
-            </div>` : ''}
+
+              ${rerankHtml}
+            </div>
           </div>
         </div>
       `;
@@ -712,6 +778,11 @@ document.querySelectorAll(".quick-queries button").forEach((button) => {
 });
 els.drawerClose.addEventListener("click", closeDrawer);
 els.overlay.addEventListener("click", closeDrawer);
+els.loadMoreButton.addEventListener("click", () => {
+  if (!state.loadingMore && state.hasMore) {
+    runSearch({ append: true });
+  }
+});
 
 function buildMetaLineHTML(item) {
   const source = item.source || {};

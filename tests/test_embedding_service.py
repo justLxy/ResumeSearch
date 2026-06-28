@@ -90,6 +90,72 @@ def test_doubao_embedding_backend_validates_vector_dimensions(monkeypatch) -> No
         embedding_service.encode_batch(["text"])
 
 
+def test_qwen_embedding_backend_posts_dashscope_request(monkeypatch) -> None:
+    monkeypatch.setattr(embedding_service, "EMBEDDING_PROVIDER", "qwen")
+    monkeypatch.setattr(embedding_service, "QWEN_API_KEY", "test-key")
+    monkeypatch.setattr(embedding_service, "QWEN_MODEL_ID", "text-embedding-v4")
+    monkeypatch.setattr(embedding_service, "QWEN_VECTOR_DIMS", 3)
+    monkeypatch.setattr(embedding_service, "QWEN_BATCH_SIZE", 2)
+
+    calls: list[dict] = []
+
+    def fake_post(url, *, headers, json, timeout):
+        calls.append(
+            {
+                "url": url,
+                "headers": headers,
+                "json": json,
+                "timeout": timeout,
+            }
+        )
+        return FakeResponse(
+            {
+                "output": {
+                    "embeddings": [
+                        {"text_index": 1, "embedding": [0, 3, 4]},
+                        {"text_index": 0, "embedding": [6, 8, 0]},
+                    ]
+                }
+            }
+        )
+
+    monkeypatch.setattr(embedding_service.requests, "post", fake_post)
+
+    vectors = embedding_service.encode_batch(["first", "second"])
+
+    assert calls == [
+        {
+            "url": "https://dashscope.aliyuncs.com/api/v1/services/embeddings/text-embedding/text-embedding",
+            "headers": {
+                "Authorization": "Bearer test-key",
+                "Content-Type": "application/json",
+            },
+            "json": {
+                "model": "text-embedding-v4",
+                "input": {"texts": ["first", "second"]},
+                "parameters": {"dimension": 3},
+            },
+            "timeout": 60,
+        }
+    ]
+    assert vectors[0] == pytest.approx([0.6, 0.8, 0.0])
+    assert vectors[1] == pytest.approx([0.0, 0.6, 0.8])
+
+
+def test_qwen_embedding_backend_validates_vector_dimensions(monkeypatch) -> None:
+    monkeypatch.setattr(embedding_service, "EMBEDDING_PROVIDER", "qwen")
+    monkeypatch.setattr(embedding_service, "QWEN_API_KEY", "test-key")
+    monkeypatch.setattr(embedding_service, "QWEN_VECTOR_DIMS", 2)
+
+    def fake_post(url, *, headers, json, timeout):
+        return FakeResponse({"output": {"embeddings": [{"text_index": 0, "embedding": [1, 2, 3]}]}})
+
+    monkeypatch.setattr(embedding_service.requests, "post", fake_post)
+
+    with pytest.raises(RuntimeError, match="dimension mismatch"):
+        embedding_service.encode_batch(["text"])
+
+
 def test_encode_single_accepts_list_vectors_from_api_backend(monkeypatch) -> None:
     monkeypatch.setattr(embedding_service, "EMBEDDING_PROVIDER", "doubao")
     monkeypatch.setattr(
