@@ -408,11 +408,16 @@ def _plan_query(
         if not semantic_query:
             semantic_query = raw_query
 
-    known_skills = _planner_known_skills(facets) if raw_query else set()
-    llm_filters = _filters_from_llm_constraints(parsed_query.get("constraints") or {}, known_skills)
+    llm_filters = _filters_from_llm_constraints(parsed_query.get("constraints") or {})
     filters = [*explicit_filters, *llm_filters]
     enable_dense = bool(parsed_query.get("enable_dense")) and bool(semantic_query)
-    enable_rerank = ENABLE_RERANK and bool(raw_query) and bool(lexical_query) and bool(semantic_query)
+    enable_rerank = (
+        ENABLE_RERANK
+        and intent == INTENT_SEMANTIC
+        and bool(raw_query)
+        and bool(lexical_query)
+        and bool(semantic_query)
+    )
     return QueryPlan(
         raw_query=raw_query,
         intent=intent,
@@ -516,7 +521,7 @@ def _query_parser_system_prompt() -> str:
         "- 即使某些技能也放入 constraints.skills，也不要从 lexical_query/semantic_query 中删除这些技能词；技能词仍然是 BM25 和语义召回的重要线索。\n"
         "- 已放入 constraints 的学历、城市、年限不要再出现在 lexical_query 或 semantic_query 中，避免污染词面检索和 embedding。\n"
         "- keyword 意图下，如果用户只输入了学历、城市、年限这类纯筛选条件（没有任何检索关键词），则 lexical_query 和 semantic_query 都返回空字符串。\n"
-        "- skills 只放明确被用户当作硬条件的技能；泛化语义能力不要硬塞进 skills。\n"
+        "- skills 可记录用户明确点名的技能，供解释与检索调试；泛化语义能力不要硬塞进 skills。\n"
     )
 
 
@@ -637,10 +642,7 @@ def _normalize_plan_intent(
     return INTENT_SEMANTIC if lexical_query else INTENT_BROWSE
 
 
-def _filters_from_llm_constraints(
-    constraints: dict[str, Any],
-    skill_vocab: set[str] | None = None,
-) -> list[dict[str, Any]]:
+def _filters_from_llm_constraints(constraints: dict[str, Any]) -> list[dict[str, Any]]:
     filters: list[dict[str, Any]] = []
     degree = constraints.get("degree")
     if degree:
@@ -648,8 +650,6 @@ def _filters_from_llm_constraints(
     cities = _clean_string_list(constraints.get("cities"))
     if cities:
         filters.append({"terms": {"application.expected_work_cities": _dedupe(cities)}})
-    for skill in _dedupe_casefold(_clean_string_list(constraints.get("skills"))):
-        filters.append(_skill_filter(skill, skill_vocab))
     min_years = _clean_float(constraints.get("min_years"))
     if min_years is not None and min_years > 0:
         filters.append({"range": {"candidate.years_experience": {"gte": min_years}}})
@@ -681,12 +681,6 @@ def _clean_float(value: Any) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
-
-
-def _planner_known_skills(facets: dict[str, Any] | None = None) -> set[str]:
-    if facets is not None:
-        return _facet_keys(facets, "skills")
-    return _load_filter_vocab()["skills"]
 
 
 def _query_tokens(query_text: str) -> list[str]:
@@ -843,7 +837,6 @@ def _evidence_lexical_query(query_text: str) -> dict[str, Any]:
                         ],
                         "type": "best_fields",
                         "operator": "or",
-                        "minimum_should_match": "2<70%",
                         "boost": 1,
                     }
                 },

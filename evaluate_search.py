@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from statistics import mean
@@ -24,6 +24,7 @@ class EvalCase:
     relevant_ids: set[str]
     forbidden_ids: set[str]
     expect_empty: bool
+    api_params: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -147,9 +148,17 @@ def load_cases(path: Path) -> EvalCaseSet:
                 relevant_ids=relevant_ids,
                 forbidden_ids=forbidden_ids,
                 expect_empty=bool(raw.get("expect_empty", False)),
+                api_params=_load_api_params(raw),
             )
         )
     return EvalCaseSet(cases=cases, skipped=skipped)
+
+
+def _load_api_params(raw: dict[str, Any]) -> dict[str, Any]:
+    api_params = raw.get("api_params") or {}
+    if not isinstance(api_params, dict):
+        raise ValueError(f"{raw.get('id', '<unknown>')} api_params must be an object")
+    return api_params
 
 
 def fetch_ids(query: dict[str, Any]) -> set[str]:
@@ -167,7 +176,7 @@ def fetch_ids(query: dict[str, Any]) -> set[str]:
 
 
 def evaluate_case(client: TestClient, case: EvalCase, limit: int) -> QueryResult:
-    response = client.get("/api/search", params={"q": case.query, "limit": limit})
+    response = client.get("/api/search", params=_search_params(case, limit))
     response.raise_for_status()
     payload = response.json()
     returned_ids = [item["id"] for item in payload.get("results", [])]
@@ -187,6 +196,18 @@ def evaluate_case(client: TestClient, case: EvalCase, limit: int) -> QueryResult
         forbidden_at_10=sum(1 for doc_id in returned_ids[:10] if doc_id in case.forbidden_ids),
         empty_success=(len(returned_ids) == 0) if case.expect_empty else None,
     )
+
+
+def _search_params(case: EvalCase, limit: int) -> list[tuple[str, str]]:
+    params: list[tuple[str, str]] = [("q", case.query), ("limit", str(limit))]
+    for key, value in case.api_params.items():
+        if key in {"q", "limit"} or value in (None, ""):
+            continue
+        values = value if isinstance(value, list) else [value]
+        for item in values:
+            if item not in (None, ""):
+                params.append((str(key), str(item)))
+    return params
 
 
 def _load_relevance(raw: dict[str, Any]) -> dict[str, float]:
@@ -302,6 +323,7 @@ def result_to_detail(result: QueryResult) -> dict[str, Any]:
         "id": result.case.case_id,
         "type": result.case.case_type,
         "query": result.case.query,
+        "api_params": result.case.api_params,
         "returned_ids": result.returned_ids,
         "relevant_hits_at_10": [
             doc_id for doc_id in result.returned_ids[:10] if doc_id in result.case.relevant_ids

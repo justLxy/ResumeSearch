@@ -4,6 +4,7 @@ from evaluate_search import (
     build_report,
     compare_reports,
     load_report,
+    _search_params,
     write_report,
 )
 
@@ -136,6 +137,36 @@ def test_compare_reports_returns_metric_deltas() -> None:
     assert comparison["by_type"]["semantic"]["r10"]["delta"] == 0.3
     assert comparison["by_type"]["semantic"]["r100"]["delta"] == 0.5
     assert comparison["by_type"]["entity"]["ndcg10"]["delta"] is None
+
+
+def test_search_params_include_optional_api_filters() -> None:
+    case = EvalCase(
+        case_id="structured_empty",
+        query="",
+        case_type="structured_filter",
+        relevance={"resume-1": 3.0},
+        relevant_ids={"resume-1"},
+        forbidden_ids=set(),
+        expect_empty=False,
+        api_params={
+            "degree": "本科",
+            "cities": ["北京", "上海"],
+            "skills": ["Python", "SQL"],
+            "min_years": 3,
+            "limit": 999,
+        },
+    )
+
+    assert _search_params(case, 100) == [
+        ("q", ""),
+        ("limit", "100"),
+        ("degree", "本科"),
+        ("cities", "北京"),
+        ("cities", "上海"),
+        ("skills", "Python"),
+        ("skills", "SQL"),
+        ("min_years", "3"),
+    ]
 
 
 def _result(

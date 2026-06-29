@@ -7,6 +7,7 @@ from app import (
     EVIDENCE_DENSE_RETRIEVER,
     EVIDENCE_RETRIEVER,
     INTENT_KEYWORD,
+    INTENT_LOOKUP,
     INTENT_SEMANTIC,
     _build_filters,
     _call_deepseek_query_parser,
@@ -831,7 +832,14 @@ class SearchLogicTests(unittest.TestCase):
             ],
         )
 
-    def test_query_plan_uses_llm_keyword_constraints_with_system_rerank(self) -> None:
+    def test_evidence_partial_terms_is_any_term_fallback(self) -> None:
+        body = _evidence_lexical_query("Python Java C++")
+        partial_query = _find_multi_match_by_name(body, "evidence_term:partial_terms:W1")
+
+        self.assertEqual(partial_query["operator"], "or")
+        self.assertNotIn("minimum_should_match", partial_query)
+
+    def test_query_plan_uses_llm_keyword_constraints_without_rerank(self) -> None:
         with patch(
             "app._call_deepseek_query_parser",
             return_value={
@@ -865,11 +873,15 @@ class SearchLogicTests(unittest.TestCase):
         self.assertEqual(plan.lexical_query, "推荐系统")
         self.assertEqual(plan.semantic_query, "推荐系统")
         self.assertFalse(plan.enable_dense)
-        self.assertTrue(plan.enable_rerank)
+        self.assertFalse(plan.enable_rerank)
         self.assertEqual(plan.must_terms, ["推荐系统"])
-        self.assertIn({"term": {"skills": "推荐系统"}}, plan.filters)
+        self.assertEqual(plan.constraints["skills"], ["推荐系统"])
+        self.assertNotIn({"term": {"skills": "推荐系统"}}, plan.filters)
+        self.assertIn({"term": {"candidate.highest_degree": "本科"}}, plan.filters)
+        self.assertIn({"terms": {"application.expected_work_cities": ["北京"]}}, plan.filters)
+        self.assertIn({"range": {"candidate.years_experience": {"gte": 0.5}}}, plan.filters)
 
-    def test_query_plan_canonicalizes_llm_skill_filters_case_insensitively(self) -> None:
+    def test_query_plan_keeps_llm_skill_constraints_soft(self) -> None:
         with patch(
             "app._call_deepseek_query_parser",
             return_value={
@@ -892,7 +904,32 @@ class SearchLogicTests(unittest.TestCase):
                 },
             )
 
-        self.assertIn({"term": {"skills": "Java"}}, plan.filters)
+        self.assertEqual(plan.constraints["skills"], ["java"])
+        self.assertNotIn({"term": {"skills": "java"}}, plan.filters)
+        self.assertNotIn({"term": {"skills": "Java"}}, plan.filters)
+
+    def test_query_plan_disables_rerank_for_lookup_queries(self) -> None:
+        with patch(
+            "app._call_deepseek_query_parser",
+            return_value={
+                "intent": "lookup",
+                "lexical_query": "M20260013",
+                "semantic_query": "M20260013",
+                "constraints": {},
+                "enable_dense": False,
+                "enable_rerank": True,
+            },
+        ):
+            plan = _plan_query(
+                "M20260013",
+                [],
+                size=10,
+                facets={"degrees": [], "cities": [], "skills": []},
+            )
+
+        self.assertEqual(plan.intent, INTENT_LOOKUP)
+        self.assertFalse(plan.enable_dense)
+        self.assertFalse(plan.enable_rerank)
 
     def test_query_plan_routes_semantic_as_hybrid_query(self) -> None:
         with patch(
@@ -953,7 +990,7 @@ class SearchLogicTests(unittest.TestCase):
         self.assertEqual(plan.intent, INTENT_KEYWORD)
         self.assertEqual(plan.must_terms, ["北京大学"])
         self.assertFalse(plan.enable_dense)
-        self.assertTrue(plan.enable_rerank)
+        self.assertFalse(plan.enable_rerank)
 
     def test_query_plan_routes_natural_language_to_semantic(self) -> None:
         with patch(
@@ -1135,6 +1172,25 @@ class SearchLogicTests(unittest.TestCase):
         self.assertIn("keyword", evidence_props["title"]["fields"])
         self.assertIn("name", evidence_props["candidate"]["properties"])
         self.assertIn("company", evidence_props["application"]["properties"])
+
+
+def _find_multi_match_by_name(node: object, name: str) -> dict:
+    if isinstance(node, dict):
+        multi_match = node.get("multi_match")
+        if isinstance(multi_match, dict) and multi_match.get("_name") == name:
+            return multi_match
+        for value in node.values():
+            try:
+                return _find_multi_match_by_name(value, name)
+            except AssertionError:
+                continue
+    elif isinstance(node, list):
+        for value in node:
+            try:
+                return _find_multi_match_by_name(value, name)
+            except AssertionError:
+                continue
+    raise AssertionError(f"multi_match query not found: {name}")
 
 
 def _response(
