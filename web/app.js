@@ -208,16 +208,20 @@ function formatParserSummary(payload) {
     html: `
       <details class="parser-debug" title="${escapeHtml(title)}">
         <summary class="parser-summary">
-          <span class="parser-label">🔍 搜索解析</span>
+          <span class="parser-label">搜索解析</span>
           <span class="parser-chip parser-chip-intent">${escapeHtml(intentLabel)}</span>
           ${denseEnabled
-            ? '<span class="parser-chip parser-chip-dense">向量召回</span>'
+            ? '<span class="parser-chip is-active">向量召回</span>'
             : ""}
           ${rerankEnabled
-            ? '<span class="parser-chip parser-chip-rerank">精排重排</span>'
+            ? '<span class="parser-chip is-active">精排重排</span>'
             : ""}
         </summary>
         <div class="parser-panel">
+          <div class="parser-panel-head">
+            <span class="parser-panel-title">搜索解析</span>
+            <span class="parser-panel-sub">Query Plan · Debug</span>
+          </div>
           ${detailHtml}
         </div>
       </details>
@@ -267,7 +271,7 @@ function formatParserValue(value, type = inferParserValueType(value)) {
     return '<span class="parser-empty">未抽取</span>';
   }
   if (type === "boolean") {
-    return `<span class="parser-status ${value ? "is-on" : "is-off"}">${value ? "已启用" : "未启用"}</span>`;
+    return `<span class="parser-status ${value ? "is-on" : "is-off"}"><span class="parser-status-dot"></span>${value ? "已启用" : "未启用"}</span>`;
   }
   if (type === "list") {
     if (!Array.isArray(value) || !value.length) {

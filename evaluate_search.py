@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -284,6 +285,10 @@ PLANNER_EVAL_FIELDS = (
     "enable_rerank",
 )
 PLANNER_BOOL_FIELDS = {"enable_dense", "enable_rerank"}
+# 这两个字段不做逐字比对：长 JD / 语义类的 lexical_query 由 LLM 压缩，不会逐字
+# 等于评测集里写的期望文本。改为"子集/包含"判定——期望文本里的每个核心词都出现
+# 在实际值里即算通过。这样既不产生假失配，又能测出"核心检索词有没有被丢掉"。
+PLANNER_SUBSET_FIELDS = {"lexical_query", "semantic_query"}
 
 
 def evaluate_query_plan(actual: dict[str, Any], expected: dict[str, Any]) -> dict[str, Any]:
@@ -309,7 +314,7 @@ def evaluate_query_plan(actual: dict[str, Any], expected: dict[str, Any]) -> dic
         for field in expected_fields
     }
     field_matches = {
-        field: actual_values[field] == expected_values[field]
+        field: _planner_field_matches(field, expected_values[field], actual_values[field])
         for field in expected_fields
     }
     mismatched_fields = [
@@ -325,6 +330,33 @@ def evaluate_query_plan(actual: dict[str, Any], expected: dict[str, Any]) -> dic
         "expected": expected_values,
         "actual": actual_values,
     }
+
+
+def _planner_field_matches(field: str, expected: Any, actual: Any) -> bool:
+    """文本字段用"核心词包含"判定，其余字段逐字相等。
+
+    期望文本里的每个核心词都作为子串出现在实际文本里即算通过。用子串而非
+    token 集合，是因为中文分词粒度不一致（如期望"应急响应"，实际压缩成
+    "蓝队应急响应"一个 token），子串能正确判定核心词没有丢。
+    """
+    if field in PLANNER_SUBSET_FIELDS:
+        expected_terms = _planner_terms(expected)
+        actual_text = "" if actual is None else str(actual).casefold()
+        if not expected_terms:
+            # 期望为空（如 keyword 纯筛选场景）时不约束实际值——该字段对检索无影响。
+            return True
+        return all(term in actual_text for term in expected_terms)
+    return actual == expected
+
+
+def _planner_terms(value: Any) -> list[str]:
+    if not value:
+        return []
+    return [
+        token.casefold()
+        for token in re.split(r"[\s,，、;/；]+", str(value).strip())
+        if token
+    ]
 
 
 def _normalize_planner_value(field: str, value: Any) -> Any:

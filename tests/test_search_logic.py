@@ -127,6 +127,51 @@ class SearchLogicTests(unittest.TestCase):
         )
         self.assertTrue(planner_eval["field_matches"]["lexical_query"])
 
+    def test_planner_eval_lexical_uses_token_subset(self) -> None:
+        # 期望的核心词都出现在实际（被 LLM 压缩/扩展的）lexical_query 里 → 视为通过，
+        # 不要求逐字相等。
+        planner_eval = evaluate_query_plan(
+            {
+                "intent": "semantic",
+                "lexical_query": "LLM RAG 企业知识库 向量检索 召回排序 Python PyTorch",
+                "semantic_query": "岗位：LLM/RAG 应用工程师……",
+                "enable_dense": True,
+                "enable_rerank": True,
+            },
+            {
+                "intent": "semantic",
+                "lexical_query": "RAG 向量检索",
+                "semantic_query": "岗位：LLM/RAG 应用工程师……",
+                "enable_dense": True,
+                "enable_rerank": True,
+            },
+        )
+
+        self.assertTrue(planner_eval["exact_match"])
+        self.assertTrue(planner_eval["field_matches"]["lexical_query"])
+
+    def test_planner_eval_lexical_flags_dropped_core_term(self) -> None:
+        # 期望的核心词没有全部出现在实际 lexical_query 里 → 判失配（核心词被丢）。
+        planner_eval = evaluate_query_plan(
+            {
+                "intent": "semantic",
+                "lexical_query": "RAG 向量检索",
+                "semantic_query": "x",
+                "enable_dense": True,
+                "enable_rerank": True,
+            },
+            {
+                "intent": "semantic",
+                "lexical_query": "RAG 向量检索 知识图谱",
+                "semantic_query": "x",
+                "enable_dense": True,
+                "enable_rerank": True,
+            },
+        )
+
+        self.assertFalse(planner_eval["field_matches"]["lexical_query"])
+        self.assertIn("lexical_query", planner_eval["mismatched_fields"])
+
     def test_search_limit_defaults_to_full_result_window(self) -> None:
         self.assertEqual(_normalize_limit(None), 100)
         self.assertEqual(_normalize_limit(0), 100)

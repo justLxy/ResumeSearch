@@ -2,7 +2,7 @@
 
 一个面向招聘场景的 **混合检索原型系统**，围绕"**证据切片**"（Evidence Chunks）这一核心设计——将每份简历按结构化段落拆分为可独立检索的语义片段，在证据粒度上同时进行 BM25 词面检索和 kNN 向量检索，再按候选人维度聚合后通过 RRF 融合排序。
 
-系统以 **Elasticsearch 9.x** 为检索引擎，以 **DeepSeek V4 Flash** 作为在线 **LLM Query Planner** 实现用户 query 的意图分类（精确查找/关键词检索/语义检索）与结构化约束抽取，以 **Qwen text-embedding-v4**（可选豆包 API 或本地 Yuan 1.5B）提供 2048 维证据向量化，以 **Qwen3 Reranker** 对 RRF 融合后的 top-N 结果做精排。前端为无框架纯 HTML/CSS/JS 单页应用，包含动态筛选面板、Debug 排名可解释性面板和完整的检索质量评估框架（76 条评测用例，覆盖 9 种查询类型，支持 P@K / R@K / MRR / NDCG 等指标）。
+系统以 **Elasticsearch 9.x** 为检索引擎，以 **DeepSeek V4 Flash** 作为在线 **LLM Query Planner** 实现用户 query 的意图分类（精确查找/关键词检索/语义检索）与结构化约束抽取，以 **Qwen text-embedding-v4**（可选豆包 API 或本地 Yuan 1.5B）提供 2048 维证据向量化，以 **Qwen3 Reranker** 对 RRF 融合后的 top-N 结果做精排。前端为无框架纯 HTML/CSS/JS 单页应用，包含动态筛选面板、Debug 排名可解释性面板和完整的检索质量评估框架（77 条评测用例，覆盖 9 种查询类型，支持 P@K / R@K / MRR / NDCG 等指标）。
 
 > **Parser 概念边界**：本项目当前只有用户输入 query 会调用 LLM。离线简历解析不依赖 LLM，`resume_parser.py` 是针对 HTML `.doc` 简历的规则化解析器；`app.py` 中的 LLM Query Planner 只负责在线检索时解析用户 query。数据文件里的 `parser_version`（如 `html-doc-v1` 或实验数据中的 `llm-diverse-v2`）描述的是简历数据来源/生成版本，不代表检索服务运行时会用 LLM 解析简历。
 
@@ -143,6 +143,8 @@
 | `web/app.js`            | 前端交互逻辑：搜索触发、facet 渲染、结果卡片、Debug 面板        |
 | `web/styles.css`        | 前端样式                                                         |
 | `evaluate_search.py`    | 检索质量评估脚本，基于 eval_queries.jsonl 计算 P@K / R@K / MRR / 分级 NDCG |
+| `generate_mock_resumes.py` | 确定性生成贴合真实字段结构的模拟简历（mock-realistic-v1，含 hard negative） |
+| `build_eval_queries.py` | 基于生成数据的 ground-truth 确定性派生 eval_queries.jsonl 的 qrels |
 | `tests/test_search_logic.py` | 单元测试，覆盖查询解析、RRF 融合、过滤器构建等核心逻辑     |
 
 ---
@@ -978,7 +980,7 @@ RRF 是**纯排名融合**，本质上永远会把结果页填满——它没有
 
 项目包含一套基于 JSONL 格式的评估框架 (`evaluate_search.py` + `eval_queries.jsonl`)。当前评测集定位为 **向量模型/语义检索/精排评测集**，用于比较 embedding 模型、观察 hard negative 误召回、评估 rerank 对头部排序的收益与回退。
 
-当前 `eval_queries.jsonl` 包含 76 条查询：
+当前 `eval_queries.jsonl` 包含 77 条查询（由 `build_eval_queries.py` 基于生成数据的 ground-truth 确定性派生，详见第 10 节）：
 
 | 类型 | 数量 | 设计目的 |
 |------|------|----------|
@@ -987,10 +989,10 @@ RRF 是**纯排名融合**，本质上永远会把结果页填满——它没有
 | `negative_semantic` | 8 | 库中不存在的人才需求，检查 no-result 判定 |
 | `skill_combo` | 8 | 多技能组合查询，检查 BM25、向量和 RRF 是否能稳定覆盖组合能力 |
 | `structured_filter` | 8 | 结构化约束 + 检索文本，检查 Query Planner 抽取出的学历/城市/年限过滤是否正确 |
-| `exact_lookup` | 8 | 编号、手机号、邮箱、岗位编号等精确查找，检查实体查询不会被向量泛化污染 |
-| `entity_exact` | 8 | 学校、公司、候选人等实体查询，检查短语/精确匹配优先级 |
-| `major_query` | 8 | 专业名查询，检查中英文专业、相近专业和跨字段泛化的边界 |
-| `jd_match` | 12 | 长 JD 匹配，检查 LLM Query Planner 与 reranker 的协同效果 |
+| `exact_lookup` | 8 | 编号、手机号、邮箱等精确查找，检查实体查询不会被向量泛化污染 |
+| `entity_exact` | 8 | 学校等实体查询（相关集动态圈定），检查短语/精确匹配优先级 |
+| `major_query` | 8 | 专业名查询（相关集动态圈定），检查中英文专业、相近专业和跨字段泛化的边界 |
+| `jd_match` | 13 | 长 JD 匹配，检查 LLM Query Planner 与 reranker 的协同效果 |
 
 评测集使用 3/2/1 分级相关性：
 
@@ -1036,7 +1038,7 @@ python evaluate_search.py --output reports/current.json --compare-to reports/bas
 python evaluate_search.py --details
 ```
 
-评估脚本默认请求 100 条结果，同时输出整体指标和按查询类型分组的指标，便于观察 `semantic_capability`、`paraphrase_intent`、`hard_negative_boundary`、`cross_language`、`negative_semantic` 等查询族的收益与回退。当前 `eval_queries.jsonl` 使用静态分级 qrels，与 `data/ai_generated.jsonl` 的 100 条模拟简历对齐，避免动态相关集为空时大量跳过用例。
+评估脚本默认请求 100 条结果，同时输出整体指标和按查询类型分组的指标，便于观察 `semantic_capability`、`cross_language`、`negative_semantic`、`structured_filter`、`jd_match` 等查询族的收益与回退。当前 `eval_queries.jsonl`（77 条）由 `build_eval_queries.py` 基于 `data/ai_generated.jsonl`（200 份 `mock-realistic-v1` 模拟简历）的生成 ground-truth 派生：语义/技能/JD 类的相关集来自岗位族归属，实体/专业类用 `relevant_es_query` 在索引上动态圈定，负例 `expect_empty=true`。planner 评测对 `lexical_query`/`semantic_query` 用核心词子串包含判定（不要求 LLM 逐字复现被压缩的原句），其余字段逐字相等。
 
 ### 评估用例格式
 
@@ -1245,7 +1247,7 @@ python evaluate_search.py --details --output reports/current.json
 
 ### 10.3 当前指标基线
 
-最新 `reports/current.json`（100 条模拟简历 + 76 条评测 query）：overall NDCG@10≈0.96、MRR@10≈1.0、R@100≈0.99、empty_acc=1.0。详见第 7 节。
+最新 `reports/current.json`（200 份 `mock-realistic-v1` 模拟简历 + 77 条评测 query）：overall NDCG@10≈0.97、MRR@10≈0.99、R@100=1.0、empty_acc=1.0、forbidden@10=0、planner 全字段=1.0。R@5/R@10 偏低是相关集变大的分母效应（实体类相关集 60+），属健康口径。详见第 7 节。
 
 ### 10.4 后续可继续的方向
 
