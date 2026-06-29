@@ -567,12 +567,10 @@ input:focus-visible {
 }
 
 .parser-panel {
-  position: absolute;
-  top: calc(100% + 10px);
-  right: 0;
-  z-index: 40;
+  position: fixed;
+  z-index: 60;
   width: min(540px, calc(100vw - 32px));
-  max-height: min(520px, 64vh);
+  max-height: min(520px, calc(100vh - 120px));
   overflow: auto;
   padding: 0;
   border: 1px solid var(--line);
@@ -1651,10 +1649,8 @@ mark {
   }
 
   .parser-panel {
-    right: auto;
-    left: 0;
     width: min(100%, calc(100vw - 32px));
-    max-height: 56vh;
+    max-height: min(56vh, calc(100vh - 120px));
     text-align: left;
   }
 

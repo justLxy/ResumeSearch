@@ -96,12 +96,54 @@ function updateQueryMode(payload) {
     const { html, title } = formatParserSummary(payload);
     els.queryMode.innerHTML = html;
     els.queryMode.title = title;
+    wireParserPanel();
     return;
   }
   els.queryMode.textContent = hasActiveFilters()
     ? "按筛选浏览"
     : "浏览全部候选人";
   els.queryMode.title = "";
+}
+
+// Debug 面板用 position:fixed 脱离结果区的 overflow 裁剪上下文，打开时按
+// summary 的位置实时定位，并在滚动/缩放时跟随，关闭时解绑监听。
+function wireParserPanel() {
+  const details = els.queryMode.querySelector(".parser-debug");
+  if (!details) return;
+  const summary = details.querySelector(".parser-summary");
+  const panel = details.querySelector(".parser-panel");
+  if (!summary || !panel) return;
+
+  const reposition = () => {
+    if (!details.open) return;
+    const rect = summary.getBoundingClientRect();
+    const margin = 16;
+    const width = panel.offsetWidth;
+    // 右对齐到 summary 右缘，但不溢出视口左右边界
+    let left = rect.right - width;
+    left = Math.max(margin, Math.min(left, window.innerWidth - width - margin));
+    panel.style.left = `${Math.round(left)}px`;
+    panel.style.top = `${Math.round(rect.bottom + 10)}px`;
+  };
+
+  const onDocClick = (event) => {
+    if (details.open && !details.contains(event.target)) {
+      details.open = false;
+    }
+  };
+
+  details.addEventListener("toggle", () => {
+    if (details.open) {
+      reposition();
+      window.addEventListener("scroll", reposition, true);
+      window.addEventListener("resize", reposition);
+      document.addEventListener("click", onDocClick);
+    } else {
+      window.removeEventListener("scroll", reposition, true);
+      window.removeEventListener("resize", reposition);
+      document.removeEventListener("click", onDocClick);
+    }
+  });
 }
 
 const intentLabelMap = {
