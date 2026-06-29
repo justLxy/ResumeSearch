@@ -17,9 +17,11 @@ from app import (
     _format_hit,
     _hybrid_total,
     _lexical_total,
+    _lookup_fast_path,
     _merge_case_insensitive_skill_buckets,
     _normalize_limit,
     _normalize_offset,
+    _parse_query_with_llm,
     _plan_query,
     _query_parser_system_prompt,
     _rerank_document,
@@ -60,10 +62,7 @@ class SearchLogicTests(unittest.TestCase):
                                         "lexical_query": "RAG 向量检索",
                                         "semantic_query": "RAG 向量检索",
                                         "constraints": {},
-                                        "must_terms": [],
-                                        "should_terms": [],
                                         "enable_dense": True,
-                                        "enable_rerank": True,
                                     },
                                     ensure_ascii=False,
                                 )
@@ -959,8 +958,6 @@ class SearchLogicTests(unittest.TestCase):
                     "cities": ["北京"],
                     "skills": ["推荐系统"],
                 },
-                "must_terms": ["推荐系统"],
-                "should_terms": [],
                 "enable_dense": False,
                 "enable_rerank": False,
             },
@@ -981,7 +978,6 @@ class SearchLogicTests(unittest.TestCase):
         self.assertEqual(plan.semantic_query, "推荐系统")
         self.assertFalse(plan.enable_dense)
         self.assertFalse(plan.enable_rerank)
-        self.assertEqual(plan.must_terms, ["推荐系统"])
         self.assertEqual(plan.constraints["skills"], ["推荐系统"])
         self.assertNotIn({"term": {"skills": "推荐系统"}}, plan.filters)
         self.assertIn({"term": {"candidate.highest_degree": "本科"}}, plan.filters)
@@ -989,7 +985,7 @@ class SearchLogicTests(unittest.TestCase):
         self.assertIn({"range": {"candidate.years_experience": {"gte": 0.5}}}, plan.filters)
         debug_plan = plan.to_debug_dict()
         self.assertEqual(debug_plan["raw_query"], "0.5年以上 北京 本科 推荐系统")
-        self.assertEqual(debug_plan["query_text"], "推荐系统")
+        self.assertEqual(debug_plan["lexical_query"], "推荐系统")
         self.assertEqual(debug_plan["constraints"]["skills"], ["推荐系统"])
 
     def test_query_plan_treats_degree_floor_as_range_filter(self) -> None:
@@ -1080,8 +1076,6 @@ class SearchLogicTests(unittest.TestCase):
                 "lexical_query": "推荐系统 NLP SQL",
                 "semantic_query": "推荐系统 NLP SQL",
                 "constraints": {},
-                "must_terms": ["推荐系统", "NLP", "SQL"],
-                "should_terms": [],
                 "enable_dense": True,
                 "enable_rerank": False,
             },
@@ -1099,7 +1093,6 @@ class SearchLogicTests(unittest.TestCase):
 
         self.assertEqual(plan.intent, INTENT_SEMANTIC)
         self.assertEqual(plan.filters, [])
-        self.assertEqual(plan.must_terms, ["推荐系统", "NLP", "SQL"])
         self.assertTrue(plan.enable_dense)
         self.assertTrue(plan.enable_rerank)
 
@@ -1111,8 +1104,6 @@ class SearchLogicTests(unittest.TestCase):
                 "lexical_query": "北京大学",
                 "semantic_query": "",
                 "constraints": {},
-                "must_terms": ["北京大学"],
-                "should_terms": [],
                 "enable_dense": False,
                 "enable_rerank": False,
             },
@@ -1129,7 +1120,6 @@ class SearchLogicTests(unittest.TestCase):
             )
 
         self.assertEqual(plan.intent, INTENT_KEYWORD)
-        self.assertEqual(plan.must_terms, ["北京大学"])
         self.assertFalse(plan.enable_dense)
         self.assertFalse(plan.enable_rerank)
 
@@ -1141,8 +1131,6 @@ class SearchLogicTests(unittest.TestCase):
                 "lexical_query": "推荐系统召回 NLP 模型落地",
                 "semantic_query": "做过推荐系统召回和 NLP 模型落地的人",
                 "constraints": {},
-                "must_terms": [],
-                "should_terms": ["推荐系统召回", "NLP", "模型落地"],
                 "enable_dense": True,
                 "enable_rerank": True,
             },
@@ -1159,7 +1147,6 @@ class SearchLogicTests(unittest.TestCase):
             )
 
         self.assertEqual(plan.intent, INTENT_SEMANTIC)
-        self.assertEqual(plan.must_terms, [])
         self.assertTrue(plan.enable_dense)
         self.assertTrue(plan.enable_rerank)
 
@@ -1447,6 +1434,80 @@ def _evidence_hit(
     if matched_queries is not None:
         hit["matched_queries"] = matched_queries
     return hit
+
+
+class QueryPlanFastPathAndCacheTests(unittest.TestCase):
+    def setUp(self) -> None:
+        import app
+
+        app._query_plan_cache.clear()
+
+    def test_email_lookup_short_circuits_llm(self) -> None:
+        with patch("app._call_deepseek_query_parser") as mock_llm:
+            parsed = _parse_query_with_llm("zhangwei_mock@example.com")
+
+        mock_llm.assert_not_called()
+        self.assertEqual(parsed["intent"], INTENT_LOOKUP)
+        self.assertEqual(parsed["parser"], "regex_fast_path")
+        self.assertFalse(parsed["enable_dense"])
+
+    def test_phone_and_candidate_no_fast_path(self) -> None:
+        self.assertEqual(_lookup_fast_path("13800138000")["intent"], INTENT_LOOKUP)
+        self.assertEqual(_lookup_fast_path("M20260013")["intent"], INTENT_LOOKUP)
+        self.assertEqual(_lookup_fast_path("A0009")["intent"], INTENT_LOOKUP)
+
+    def test_multi_token_and_entity_queries_skip_fast_path(self) -> None:
+        self.assertIsNone(_lookup_fast_path("北京大学"))
+        self.assertIsNone(_lookup_fast_path("M20260013 推荐系统"))
+        self.assertIsNone(_lookup_fast_path("Python"))
+
+    def test_repeated_query_is_served_from_cache(self) -> None:
+        payload = {
+            "intent": "semantic",
+            "lexical_query": "RAG 向量检索",
+            "semantic_query": "RAG 向量检索",
+            "constraints": {},
+            "enable_dense": True,
+        }
+        with patch(
+            "app._call_deepseek_query_parser", return_value=payload
+        ) as mock_llm:
+            first = _parse_query_with_llm("找做过 RAG 的人")
+            second = _parse_query_with_llm("找做过 RAG 的人")
+
+        self.assertEqual(mock_llm.call_count, 1)
+        self.assertEqual(first["intent"], "semantic")
+        self.assertEqual(second["intent"], "semantic")
+        # Cached copies must be independent so downstream mutation can't leak.
+        first["constraints"]["mutated"] = True
+        self.assertNotIn("mutated", second["constraints"])
+
+    def test_cache_key_normalizes_whitespace_and_case(self) -> None:
+        payload = {
+            "intent": "keyword",
+            "lexical_query": "北京大学",
+            "semantic_query": "",
+            "constraints": {},
+            "enable_dense": False,
+        }
+        with patch(
+            "app._call_deepseek_query_parser", return_value=payload
+        ) as mock_llm:
+            _parse_query_with_llm("北京大学")
+            _parse_query_with_llm("  北京大学  ")
+
+        self.assertEqual(mock_llm.call_count, 1)
+
+    def test_failed_parse_is_not_cached(self) -> None:
+        with patch(
+            "app._call_deepseek_query_parser", side_effect=RuntimeError("boom")
+        ) as mock_llm:
+            first = _parse_query_with_llm("做过推荐系统的人")
+            second = _parse_query_with_llm("做过推荐系统的人")
+
+        self.assertEqual(mock_llm.call_count, 2)
+        self.assertIn("parser_warning", first["constraints"])
+        self.assertIn("parser_warning", second["constraints"])
 
 
 if __name__ == "__main__":

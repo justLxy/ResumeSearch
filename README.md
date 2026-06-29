@@ -498,7 +498,7 @@ encode_batch(texts: list[str]) -> list[list[float]]  # 批量编码
 
 **Step 2：LLM Query Planner** (`_parse_query_with_llm`)
 
-这是在线检索阶段的 query parser，与离线简历解析器是两套独立机制。自由文本 query 不再依赖本地正则、后缀判断或词表精确匹配来解析。系统会调用 DeepSeek `deepseek-v4-flash`，并在请求体中显式设置 `thinking: {"type": "disabled"}` 以降低延迟，把用户输入解析为一个结构化 QueryPlan：
+这是在线检索阶段的 query parser，与离线简历解析器是两套独立机制。除了邮箱、手机号、候选人编号、岗位编号这类**单 token 唯一标识符**会先走正则 fast-path 直接判定为 `lookup`（100% 可判定，无需为最廉价的查询付一次 LLM 往返），其余自由文本一律交给 LLM：系统调用 DeepSeek `deepseek-v4-flash`，请求体显式设置 `thinking: {"type": "disabled"}` 以降低延迟，并优先使用 `response_format: json_schema` 严格结构化输出（接口若不支持则自动回退到 `json_object`），把用户输入解析为一个结构化 QueryPlan。解析结果按规范化后的 query 文本做带 TTL 的 LRU 缓存（默认 5 分钟、512 条），命中后跳过 LLM 调用——这对前端防抖自动搜索和重复 query 场景能显著降低延迟与 API 成本（解析失败的 fallback 不入缓存，避免污染）：
 
 ```
 输入: "0.5年以上 北京 本科 Python 自然语言处理"
@@ -526,9 +526,9 @@ QueryPlan 的字段分工：
 - `semantic_query`：交给 embedding 和 reranker 的语义检索文本。
 - `enable_dense`：是否启用 evidence kNN 向量召回。
 
-`enable_rerank` 不是 LLM Query Planner 的职责。只要存在实际检索文本且 `ENABLE_RERANK=True`，系统都会对 RRF 后的 top-N 候选启用 Qwen3 reranker；空 query 浏览和纯筛选浏览不做 rerank。
+`enable_rerank` 不是 LLM Query Planner 的职责。系统根据 `intent` 自动判定：只有 `intent == semantic`（且 `ENABLE_RERANK=True`、lexical/semantic query 均非空）时，才对 RRF 后的 top-N 候选启用 Qwen3 reranker。`lookup`（编号/手机/邮箱精确定位）、`keyword`（实体精确匹配）、`browse`（空 query / 纯筛选）都不做 rerank——这些场景词面/精确匹配本身就是最强信号，cross-encoder 重排只会增加延迟并可能扰乱已经正确的头部排序。
 
-如果 DeepSeek 调用失败，系统会退化为保守的词面检索：保留原始 query 作为 `lexical_query`，不启用 dense，但仍会在 BM25/RRF 候选上执行系统级 rerank，避免解析失败导致搜索接口不可用。
+如果 DeepSeek 调用失败，系统会退化为保守的词面检索：保留原始 query 作为 `lexical_query`，intent 兜底为 `semantic`，不启用 dense；此时仍满足 `intent == semantic` 的 rerank 条件，因此会在 BM25/RRF 候选上执行系统级 rerank，避免解析失败导致搜索接口不可用。
 
 #### 5.1.1 LLM Query Planner 的意图分类与检索策略路由
 
@@ -556,7 +556,7 @@ search(): embedding API 调用失败 → 运行时降级关
 LLM API 整体挂掉 → 兜底关（_llm_parser_fallback）
 ```
 
-`enable_rerank` 不受 LLM 控制——系统根据 `ENABLE_RERANK` 常量及三个 query 字段是否非空自动判定。
+`enable_rerank` 不受 LLM 控制——系统根据 `ENABLE_RERANK` 常量、`intent == semantic` 及三个 query 字段是否非空自动判定。
 
 ##### 与经典 Self-Querying 的对比
 
@@ -1139,6 +1139,8 @@ python evaluate_search.py --details --output reports/current.json
 | `QUERY_PARSER_API_URL`       | `https://api.deepseek.com/chat/completions` | DeepSeek OpenAI-compatible Chat Completions 接口 |
 | `QUERY_PARSER_API_KEY`       | 已硬编码 | DeepSeek API key，开发阶段直接写在代码中      |
 | `QUERY_PARSER_TIMEOUT_SECONDS` | 30   | Query Planner 请求超时时间                    |
+| `QUERY_PLAN_CACHE_TTL_SECONDS` | 300  | Query Planner 解析结果缓存时间（规范化 query 为 key） |
+| `QUERY_PLAN_CACHE_MAX_ENTRIES` | 512  | Query Planner 解析结果 LRU 缓存最大条数        |
 | `DeepSeek thinking`          | `disabled` | Query Planner 请求体设置 `thinking: {"type": "disabled"}`，优先低延迟 |
 | `DENSE_ABSTAIN_MIN_SAMPLE_SIZE` | 20  | Dense 自适应拒绝召回所需的最小样本数        |
 | `DENSE_ABSTAIN_IQR_MULTIPLIER` | 1.5  | Dense 上侧离群围栏的 IQR 倍率               |

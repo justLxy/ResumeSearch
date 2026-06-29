@@ -114,7 +114,6 @@ const intentLabelMap = {
 const parserFieldLabels = {
   raw_query: "原始 Query",
   intent: "查询意图",
-  query_text: "执行词面 Query",
   lexical_query: "词面检索",
   semantic_query: "语义检索",
   constraints: "结构化约束",
@@ -123,8 +122,6 @@ const parserFieldLabels = {
   cities: "城市",
   skills: "技能",
   min_years: "最低年限",
-  must_terms: "必须词",
-  should_terms: "可选词",
   enable_dense: "向量召回",
   enable_rerank: "精排重排",
   rank_window_size: "召回窗口",
@@ -134,12 +131,9 @@ const parserFieldLabels = {
 const parserConsumedPlanFields = new Set([
   "raw_query",
   "intent",
-  "query_text",
   "lexical_query",
   "semantic_query",
   "constraints",
-  "must_terms",
-  "should_terms",
   "enable_dense",
   "enable_rerank",
   "rank_window_size",
@@ -177,8 +171,7 @@ function formatParserSummary(payload) {
       wide: true,
       rows: [
         parserRow("raw_query", plan.raw_query ?? payload?.query ?? state.query),
-        parserRow("query_text", plan.query_text ?? payload?.effective_query),
-        parserRow("lexical_query", plan.lexical_query),
+        parserRow("lexical_query", plan.lexical_query ?? payload?.effective_query),
         parserRow("semantic_query", plan.semantic_query),
       ],
     },
@@ -193,10 +186,8 @@ function formatParserSummary(payload) {
       ],
     },
     {
-      title: "术语与执行参数",
+      title: "执行参数",
       rows: [
-        parserRow("must_terms", plan.must_terms, { type: "list" }),
-        parserRow("should_terms", plan.should_terms, { type: "list" }),
         parserRow("rank_window_size", plan.rank_window_size),
         parserRow("filter_count", plan.filter_count),
       ],

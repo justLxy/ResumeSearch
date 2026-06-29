@@ -4,7 +4,9 @@ import html
 import json
 import logging
 import re
+import threading
 import time
+from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
@@ -66,6 +68,34 @@ QUERY_PARSER_API_URL = "https://api.deepseek.com/chat/completions"
 QUERY_PARSER_API_KEY = "sk-1eed8c88508842c2a023399a7ed6b5c0"
 QUERY_PARSER_TIMEOUT_SECONDS = 30
 QUERY_PARSER_MAX_VOCAB_ITEMS = 120
+QUERY_PLAN_CACHE_TTL_SECONDS = 300
+QUERY_PLAN_CACHE_MAX_ENTRIES = 512
+# Strict json_schema for DeepSeek structured output. All keys are required and
+# additionalProperties is closed so the model can't drift the shape; the
+# sanitizer still normalizes values, but the schema removes whole-field omissions.
+QUERY_PLAN_JSON_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["intent", "lexical_query", "semantic_query", "constraints", "enable_dense"],
+    "properties": {
+        "intent": {"type": "string", "enum": ["browse", "lookup", "keyword", "semantic"]},
+        "lexical_query": {"type": "string"},
+        "semantic_query": {"type": "string"},
+        "enable_dense": {"type": "boolean"},
+        "constraints": {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["degree", "min_degree", "cities", "skills", "min_years"],
+            "properties": {
+                "degree": {"type": ["string", "null"], "enum": ["博士", "硕士", "本科", None]},
+                "min_degree": {"type": ["string", "null"], "enum": ["博士", "硕士", "本科", None]},
+                "cities": {"type": "array", "items": {"type": "string"}},
+                "skills": {"type": "array", "items": {"type": "string"}},
+                "min_years": {"type": ["number", "null"]},
+            },
+        },
+    },
+}
 SOURCE_EXCLUDES = [
     "raw_text",
     "raw_sections",
@@ -112,11 +142,8 @@ class QueryPlan:
     intent: str
     filters: list[dict[str, Any]]
     constraints: dict[str, Any]
-    query_text: str
     lexical_query: str
     semantic_query: str
-    must_terms: list[str]
-    should_terms: list[str]
     enable_dense: bool
     enable_rerank: bool
     rank_window_size: int
@@ -125,12 +152,9 @@ class QueryPlan:
         return {
             "raw_query": self.raw_query,
             "intent": self.intent,
-            "query_text": self.query_text,
             "lexical_query": self.lexical_query,
             "semantic_query": self.semantic_query,
             "constraints": self.constraints,
-            "must_terms": self.must_terms,
-            "should_terms": self.should_terms,
             "enable_dense": self.enable_dense,
             "enable_rerank": self.enable_rerank,
             "rank_window_size": self.rank_window_size,
@@ -140,6 +164,8 @@ class QueryPlan:
 
 _facets_cache: tuple[float, dict[str, Any]] | None = None
 _filter_vocab_cache: tuple[float, dict[str, set[str]]] | None = None
+_query_plan_cache: "OrderedDict[str, tuple[float, dict[str, Any]]]" = OrderedDict()
+_query_plan_cache_lock = threading.Lock()
 app = FastAPI(title="Resume Search Prototype")
 app.mount("/static", StaticFiles(directory=WEB_DIR), name="static")
 
@@ -168,9 +194,10 @@ def search(
     page_size = _normalize_limit(limit)
     page_offset = _normalize_offset(offset)
     result_window_size = RRF_RANK_WINDOW_SIZE
+    facets = _load_facets()
     skill_vocab = _load_filter_vocab()["skills"] if skills else None
     explicit_filters = _build_filters(degree, cities, skills, min_years, skill_vocab=skill_vocab)
-    plan = _plan_query(raw_query_text, explicit_filters, size=result_window_size)
+    plan = _plan_query(raw_query_text, explicit_filters, size=result_window_size, facets=facets)
     query_text = plan.lexical_query
     filters = plan.filters
     retrieval_warnings: list[str] = []
@@ -249,7 +276,7 @@ def search(
         "candidate_total": candidate_total,
         "retrieval_warnings": retrieval_warnings,
         "results": paged_results,
-        "facets": _load_facets(),
+        "facets": facets,
     }
 
 
@@ -409,13 +436,10 @@ def _skill_label_score(value: str) -> int:
 def _empty_parsed_query() -> dict[str, Any]:
     return {
         "intent": INTENT_BROWSE,
-        "query_text": "",
         "lexical_query": "",
         "semantic_query": "",
         "filters": [],
         "constraints": {},
-        "must_terms": [],
-        "should_terms": [],
         "enable_dense": False,
         "enable_rerank": False,
         "parser": QUERY_PARSER_PROVIDER,
@@ -431,13 +455,13 @@ def _plan_query(
 ) -> QueryPlan:
     raw_query = raw_query_text.strip()
     parsed_query = _parse_query_with_llm(raw_query, facets=facets) if raw_query else _empty_parsed_query()
-    lexical_query = str(parsed_query.get("lexical_query") or parsed_query.get("query_text") or "").strip()
+    lexical_query = str(parsed_query.get("lexical_query") or "").strip()
     semantic_query = str(parsed_query.get("semantic_query") or lexical_query).strip()
     intent = _normalize_plan_intent(parsed_query.get("intent"), raw_query, lexical_query, parsed_query.get("constraints") or {})
 
     # 防御：lookup / semantic 意图下 lexical_query 不应为空。
-    # LLM 偶尔会脑抽返回空字符串（尤其是开了 thinking 模式时），
-    # 导致搜索退化到浏览模式。此处用 raw_query 兜底。
+    # 极少数情况下 LLM 仍可能返回空字符串，导致搜索退化到浏览模式；
+    # 此处用 raw_query 兜底。
     if not lexical_query and raw_query and intent in (INTENT_LOOKUP, INTENT_SEMANTIC):
         lexical_query = raw_query
         if not semantic_query:
@@ -457,12 +481,9 @@ def _plan_query(
         raw_query=raw_query,
         intent=intent,
         filters=filters,
-        constraints=parsed_query["constraints"],
-        query_text=lexical_query,
+        constraints=parsed_query.get("constraints") or {},
         lexical_query=lexical_query,
         semantic_query=semantic_query,
-        must_terms=_clean_string_list(parsed_query.get("must_terms")),
-        should_terms=_clean_string_list(parsed_query.get("should_terms")),
         enable_dense=enable_dense,
         enable_rerank=enable_rerank,
         rank_window_size=max(size, RRF_RANK_WINDOW_SIZE),
@@ -473,17 +494,103 @@ def _parse_query_with_llm(
     raw_query: str,
     facets: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    if not raw_query.strip():
+    query = raw_query.strip()
+    if not query:
         return _empty_parsed_query()
 
+    # Fast-path: unambiguous unique identifiers (email / phone / candidate_no /
+    # position_code) are 100% resolvable by regex. Short-circuit the LLM so the
+    # cheapest queries don't pay a network round-trip.
+    fast_path = _lookup_fast_path(query)
+    if fast_path is not None:
+        return fast_path
+
+    cached = _get_cached_query_plan(query)
+    if cached is not None:
+        return cached
+
     try:
-        payload = _call_deepseek_query_parser(raw_query, facets=facets)
+        payload = _call_deepseek_query_parser(query, facets=facets)
     except Exception as exc:
         logger.exception("LLM query parser failed")
-        fallback = _llm_parser_fallback(raw_query)
+        fallback = _llm_parser_fallback(query)
         fallback["constraints"]["parser_warning"] = str(exc)
+        # Don't cache fallbacks: a transient LLM outage shouldn't poison the
+        # cache for the whole TTL.
         return fallback
-    return _sanitize_llm_query_plan(payload, raw_query)
+    sanitized = _sanitize_llm_query_plan(payload, query)
+    _set_cached_query_plan(query, sanitized)
+    return sanitized
+
+
+_LOOKUP_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+_LOOKUP_PHONE_RE = re.compile(r"^1[3-9]\d{9}$")
+_LOOKUP_CANDIDATE_NO_RE = re.compile(r"^[A-Za-z]?\d{6,}$")
+_LOOKUP_POSITION_CODE_RE = re.compile(r"^[A-Za-z]\d{3,}$")
+
+
+def _lookup_fast_path(query: str) -> dict[str, Any] | None:
+    """Return a lookup plan for unambiguous single-token identifiers, else None.
+
+    Only fires for a single whitespace-free token that matches a known
+    identifier shape. Anything with spaces or mixed content falls through to
+    the LLM, which is better at disambiguating intent.
+    """
+    if not query or any(ch.isspace() for ch in query):
+        return None
+    is_identifier = (
+        _LOOKUP_EMAIL_RE.match(query)
+        or _LOOKUP_PHONE_RE.match(query)
+        or _LOOKUP_CANDIDATE_NO_RE.match(query)
+        or _LOOKUP_POSITION_CODE_RE.match(query)
+    )
+    if not is_identifier:
+        return None
+    return {
+        "intent": INTENT_LOOKUP,
+        "lexical_query": query,
+        "semantic_query": query,
+        "filters": [],
+        "constraints": {},
+        "enable_dense": False,
+        "enable_rerank": False,
+        "parser": "regex_fast_path",
+    }
+
+
+def _query_plan_cache_key(query: str) -> str:
+    return re.sub(r"\s+", " ", query).strip().casefold()
+
+
+def _get_cached_query_plan(query: str) -> dict[str, Any] | None:
+    key = _query_plan_cache_key(query)
+    now = time.monotonic()
+    with _query_plan_cache_lock:
+        entry = _query_plan_cache.get(key)
+        if entry is None:
+            return None
+        expires_at, plan = entry
+        if expires_at <= now:
+            _query_plan_cache.pop(key, None)
+            return None
+        _query_plan_cache.move_to_end(key)
+        return _deep_copy_plan(plan)
+
+
+def _set_cached_query_plan(query: str, plan: dict[str, Any]) -> None:
+    key = _query_plan_cache_key(query)
+    expires_at = time.monotonic() + QUERY_PLAN_CACHE_TTL_SECONDS
+    with _query_plan_cache_lock:
+        _query_plan_cache[key] = (expires_at, _deep_copy_plan(plan))
+        _query_plan_cache.move_to_end(key)
+        while len(_query_plan_cache) > QUERY_PLAN_CACHE_MAX_ENTRIES:
+            _query_plan_cache.popitem(last=False)
+
+
+def _deep_copy_plan(plan: dict[str, Any]) -> dict[str, Any]:
+    # Cached plans are mutated downstream (e.g. parser_warning injection), so
+    # hand out independent copies to keep the cache entry pristine.
+    return json.loads(json.dumps(plan, ensure_ascii=False))
 
 
 def _call_deepseek_query_parser(
@@ -503,23 +610,13 @@ def _call_deepseek_query_parser(
                 ),
             },
         ],
-        "response_format": {"type": "json_object"},
+        "response_format": _query_parser_response_format(),
         "thinking": {"type": "disabled"},
         "temperature": 0,
         "max_tokens": 900,
         "stream": False,
     }
-    response = requests.post(
-        QUERY_PARSER_API_URL,
-        headers={
-            "Authorization": f"Bearer {QUERY_PARSER_API_KEY}",
-            "Content-Type": "application/json",
-        },
-        json=body,
-        timeout=QUERY_PARSER_TIMEOUT_SECONDS,
-    )
-    response.raise_for_status()
-    data = response.json()
+    data = _post_query_parser(body)
     content = (
         data.get("choices", [{}])[0]
         .get("message", {})
@@ -528,6 +625,64 @@ def _call_deepseek_query_parser(
     if not isinstance(content, str) or not content.strip():
         raise RuntimeError(f"query parser response has no content: {data}")
     return json.loads(_strip_json_fence(content))
+
+
+# DeepSeek 较新接口支持 json_schema 严格结构化输出；旧接口只支持 json_object。
+# 优先用 schema 约束（能根治 LLM 偶发返回空 lexical_query 等问题），
+# 如果接口拒绝 schema 则自动回退到 json_object，并记住该结果避免重复试探。
+_structured_output_supported = True
+_structured_output_lock = threading.Lock()
+
+
+def _query_parser_response_format() -> dict[str, Any]:
+    with _structured_output_lock:
+        use_schema = _structured_output_supported
+    if not use_schema:
+        return {"type": "json_object"}
+    return {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "resume_query_plan",
+            "strict": True,
+            "schema": QUERY_PLAN_JSON_SCHEMA,
+        },
+    }
+
+
+def _post_query_parser(body: dict[str, Any]) -> dict[str, Any]:
+    headers = {
+        "Authorization": f"Bearer {QUERY_PARSER_API_KEY}",
+        "Content-Type": "application/json",
+    }
+    response = requests.post(
+        QUERY_PARSER_API_URL,
+        headers=headers,
+        json=body,
+        timeout=QUERY_PARSER_TIMEOUT_SECONDS,
+    )
+    # If the endpoint can't honor a json_schema response_format, retry once with
+    # the widely-supported json_object mode and stop attempting schema mode.
+    status_code = getattr(response, "status_code", None)
+    if (
+        status_code in (400, 422)
+        and body.get("response_format", {}).get("type") == "json_schema"
+    ):
+        global _structured_output_supported
+        with _structured_output_lock:
+            _structured_output_supported = False
+        logger.warning(
+            "query parser json_schema rejected (HTTP %s); falling back to json_object",
+            response.status_code,
+        )
+        retry_body = {**body, "response_format": {"type": "json_object"}}
+        response = requests.post(
+            QUERY_PARSER_API_URL,
+            headers=headers,
+            json=retry_body,
+            timeout=QUERY_PARSER_TIMEOUT_SECONDS,
+        )
+    response.raise_for_status()
+    return response.json()
 
 
 def _query_parser_system_prompt() -> str:
@@ -641,20 +796,17 @@ def _sanitize_llm_query_plan(payload: dict[str, Any], raw_query: str) -> dict[st
     if min_years is not None and min_years > 0:
         cleaned_constraints["min_years"] = min_years
 
-    lexical_query = str(payload.get("lexical_query") or payload.get("query_text") or "").strip()
+    lexical_query = str(payload.get("lexical_query") or "").strip()
     semantic_query = str(payload.get("semantic_query") or "").strip()
     intent = _normalize_plan_intent(payload.get("intent"), raw_query, lexical_query, cleaned_constraints)
     enable_dense = bool(payload.get("enable_dense")) and bool(semantic_query)
 
     return {
         "intent": intent,
-        "query_text": lexical_query,
         "lexical_query": lexical_query,
         "semantic_query": semantic_query,
         "filters": [],
         "constraints": cleaned_constraints,
-        "must_terms": _clean_string_list(payload.get("must_terms")),
-        "should_terms": _clean_string_list(payload.get("should_terms")),
         "enable_dense": enable_dense,
         "enable_rerank": False,
         "parser": QUERY_PARSER_PROVIDER,
@@ -665,13 +817,10 @@ def _llm_parser_fallback(raw_query: str) -> dict[str, Any]:
     query = raw_query.strip()
     return {
         "intent": INTENT_SEMANTIC if query else INTENT_BROWSE,
-        "query_text": query,
         "lexical_query": query,
         "semantic_query": query,
         "filters": [],
         "constraints": {},
-        "must_terms": [],
-        "should_terms": [],
         "enable_dense": False,
         "enable_rerank": False,
         "parser": QUERY_PARSER_PROVIDER,
