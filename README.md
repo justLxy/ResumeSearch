@@ -1,14 +1,8 @@
 # 简历检索系统 (ResumeSearch)
 
-一个面向校招/实习简历筛选场景的 **混合检索原型系统**。系统以 Elasticsearch 为核心引擎，实现了 **结构化过滤 + 中文 BM25 全文检索 + 短语匹配 + 证据切片向量检索 + RRF 融合排序**，并配套前端 Web 界面供交互使用。
+一个面向招聘场景的 **混合检索原型系统**，围绕"**证据切片**"（Evidence Chunks）这一核心设计——将每份简历按结构化段落拆分为可独立检索的语义片段，在证据粒度上同时进行 BM25 词面检索和 kNN 向量检索，再按候选人维度聚合后通过 RRF 融合排序。
 
-> **适读对象**：项目新接手者、面试评审方、需要理解系统全貌的协作开发者。读完本文档后，你应当能回答以下问题：
->
-> - 这个项目的完整数据链路是怎样的（从 `.doc` 文件到可搜索索引）？
-> - 用户输入一个 query 后，系统经历了哪些步骤才返回结果？
-> - 为什么需要"证据索引"？它比直接对整份简历做向量化好在哪里？
-> - RRF 融合排序具体是怎么计算的？
-> - 系统有哪些已知边界和可优化方向？
+系统以 **Elasticsearch 9.x** 为检索引擎，以 **DeepSeek V4 Flash** 作为 LLM Query Planner 实现意图分类（精确查找/关键词检索/语义检索）与结构化约束抽取，以 **Qwen text-embedding-v4**（可选豆包 API 或本地 Yuan 1.5B）提供 2048 维证据向量化，以 **Qwen3 Reranker** 对 RRF 融合后的 top-N 结果做精排。前端为无框架纯 HTML/CSS/JS 单页应用，包含动态筛选面板、Debug 排名可解释性面板和完整的检索质量评估框架（94 条评测用例，覆盖 9 种查询类型，支持 P@K / R@K / MRR / NDCG 等指标）。
 
 ---
 
@@ -32,8 +26,7 @@
 - [7. 检索效果评估](#7-检索效果评估)
 - [8. 本地部署与运行](#8-本地部署与运行)
   - [9. 配置项与常量](#9-配置项与常量)
-- [10. 与旧 README 的差异说明](#10-与旧-readme-的差异说明)
-- [11. 当前实现说明与后续优化方向](#11-当前实现说明与后续优化方向)
+- [10. 当前实现说明与后续优化方向](#10-当前实现说明与后续优化方向)
 
 ---
 
@@ -316,7 +309,6 @@ python resume_parser.py data/ --jsonl -o parsed_resumes.jsonl
    - evidence_id 格式：{resume_id}:{section_type}:{ordinal}
    - 每个证据片段冗余存储了候选人基本信息和申请信息，
      便于在证据索引上直接做过滤和词面检索
-   - 证据文本有字符预算控制（长经历 section 512 字符, skills 256 字符）
    - 证据文本会排除公司名、学校名、姓名等实体，
      避免这些高频信息干扰词面证据和语义向量的表达
 
@@ -559,15 +551,7 @@ search(): embedding API 调用失败 → 运行时降级关
 LLM API 整体挂掉 → 兜底关（_llm_parser_fallback）
 ```
 
-`enable_rerank` 不受 LLM 控制。只要 `ENABLE_RERANK=True` 且 `raw_query`、`lexical_query`、`semantic_query` 三者都非空，系统就对 RRF 后的 top-N 执行 Qwen3 rerank 重排。LLM 的 system prompt 明确写了"不要输出 rerank 开关"。
-
-##### semantic_query 的生成规则
-
-```
-semantic_query = LLM 输出的 semantic_query || lexical_query（兜底）
-```
-
-这是 `_plan_query` 中的一行兜底逻辑：`semantic_query = str(parsed_query.get("semantic_query") or lexical_query).strip()`。当 LLM 按要求为 `lookup`/`keyword` 返回空的 `semantic_query` 时，系统自动用 `lexical_query` 填充。**但这不等于语义检索被启用**——`enable_dense=False` 保证了 Dense 路不会实际执行，填充后的 `semantic_query` 仅在 rerank 阶段作为参考文本。
+`enable_rerank` 不受 LLM 控制——系统根据 `ENABLE_RERANK` 常量及三个 query 字段是否非空自动判定。
 
 ##### 与经典 Self-Querying 的对比
 
@@ -1164,9 +1148,6 @@ python evaluate_search.py --details --output reports/current.json
 | 常量                           | 值     | 说明                                       |
 |--------------------------------|--------|--------------------------------------------|
 | `BULK_BATCH_SIZE`              | 100    | Bulk API 每批文档数                        |
-| `SECTION_SEMANTIC_CHAR_BUDGET` | 512    | 每个 section 证据的最大字符数              |
-| `SKILLS_SEMANTIC_CHAR_BUDGET`  | 256    | 技能证据的最大字符数                       |
-| `PROFILE_LEXICAL_CHAR_BUDGET`  | 768    | 档案证据的最大字符数                       |
 | `VECTOR_EVIDENCE_SECTION_TYPES`| `{project, internship}` | 需要向量化的证据类型；技能标签和教育经历只走词面检索 |
 
 ### `embedding_service.py` 中的关键常量
@@ -1203,60 +1184,3 @@ python evaluate_search.py --details --output reports/current.json
 | `RERANK_BATCH_SIZE` | 20 | reranker 每批候选文档数 |
 | `RERANK_TIMEOUT_SECONDS` | 60 | reranker API 请求超时时间 |
 
----
-
-## 10. 与旧 README 的差异说明
-
-旧版 README 中有部分内容与当前代码实现已存在较大出入，以下列出主要差异：
-
-| 旧 README 描述                         | 实际代码实现                                                |
-|----------------------------------------|-------------------------------------------------------------|
-| 主索引上的 BM25 检索作为独立路线        | 当前已移除主索引上的独立 BM25 路线，所有词面检索统一在证据索引上进行 |
-| 候选人级别的整文档向量（`semantic_profile_vector`、`role_vector` 等） | 已标记为 obsolete，导入时主动删除。当前向量化只在证据索引的切片级别进行 |
-| 4 个候选人向量字段（`skills_vector`、`projects_vector` 等） | 已标记为 `LEGACY_CANDIDATE_VECTOR_FIELDS`，不再生成和使用 |
-| 多路 BM25 + 多路 Dense 的检索架构       | 简化为 Evidence BM25 + Evidence Dense 两路                   |
-| RRF 直接使用各路排名                    | 增加了 lexical_tier 加分和 term_coverage 加分机制            |
-
----
-
-## 11. 当前实现说明与后续优化方向
-
-### 当前已实现功能
-
-- ✅ HTML 格式 `.doc` 简历解析，提取 12+ 类结构化字段
-- ✅ 双索引架构：候选人主索引 + 证据切片索引
-- ✅ 证据切片级别的向量化（非整文档向量化）
-- ✅ 中文 IK 分词 + 多层权重 BM25 检索
-- ✅ kNN 向量近邻检索
-- ✅ 手动 RRF 融合排序（含 tier 加分 + coverage 加分）
-- ✅ DeepSeek `deepseek-v4-flash` LLM Query Planner（intent、结构化约束、lexical/semantic query、dense 开关）
-- ✅ Qwen3 reranker 系统级精排有实际检索文本的 RRF top-N 候选
-- ✅ Facet 聚合驱动的动态筛选面板
-- ✅ 完整的检索排序可解释性 Debug 面板
-- ✅ 检索质量评估框架 (P@K / R@K / MRR / NDCG)
-- ✅ 单元测试覆盖
-
-### 已知设计边界与可优化方向
-
-**数据处理层面**：
-
-1. **简历解析仅支持 HTML 格式 `.doc`**——不支持 PDF、`.docx`、纯文本等格式。如需支持更多格式，可引入 Apache Tika 或 python-docx。
-2. **工作经验仅从实习经历计算**——项目经历不纳入工时统计。如需更精确的经验估算，可考虑加权不同类型的经历。
-3. **模型下载依赖网络**——生产环境应预先下载模型到本地或内网镜像。
-
-**检索层面**：
-
-4. **Query Planner 依赖外部 LLM API**——DeepSeek 失败时会退化为保守词面检索，不会中断搜索，但会暂时失去结构化解析和 dense 开关判断。
-5. **LLM 解析结果还没有基于评测集自动校准**——当前通过 prompt 约束输出 schema，尚未用 qrels / hard negative 反向优化 query planner prompt 或训练轻量本地 planner。
-6. **Rerank 仍是通用文本重排模型**——Qwen3 reranker 能提升头部排序，但还不是用招聘匹配数据训练出的领域 cross-encoder。
-7. **负例与 no-result 判定仍需加强**——当前 dense abstain 可以抑制一部分无意义向量召回，但“库中没有合适候选人”的置信度校准仍是后续重点。
-8. **filter 子句在证据索引上基于冗余字段**——如果冗余字段与主索引不一致（理论上不应发生，但增量更新时需注意），可能导致过滤遗漏。
-
-**工程层面**：
-
-9. **ES 地址硬编码**——`ES_URL` 在代码中写死为 `localhost:9200`，生产部署需通过环境变量或配置文件管理。
-10. **API key 开发阶段硬编码**——DeepSeek、Qwen、豆包和 reranker key 都直接写在源码顶部，便于本地实验；生产环境需要改为密钥管理。
-11. **无认证机制**——API 和 ES 连接均无认证，仅适用于内网开发环境。
-12. **外部 API 调用在请求链路内同步执行**——Query Planner、embedding、reranker 都可能影响延迟。高并发场景应拆出服务、加缓存或异步队列。
-13. **Facet 和词表使用内存缓存**——多实例部署时各实例缓存不一致。可改用 Redis 或直接每次查询（ES 聚合查询通常很快）。
-14. **前端无虚拟滚动**——当前通过“加载更多”分页浏览 RRF 窗口，数据量更大时可引入虚拟滚动或服务端分页。

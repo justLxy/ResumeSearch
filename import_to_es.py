@@ -19,9 +19,6 @@ DEFAULT_EVIDENCE_INDEX = "resume_evidence_v1"
 DEFAULT_EVIDENCE_ALIAS = "resume_evidence_current"
 BULK_BATCH_SIZE = 100
 REQUEST_TIMEOUT_SECONDS = 90
-SECTION_SEMANTIC_CHAR_BUDGET = 512
-SKILLS_SEMANTIC_CHAR_BUDGET = 256
-PROFILE_LEXICAL_CHAR_BUDGET = 768
 SEMANTIC_PROFILE_VERSION = "semantic-profile-v6"
 EMBEDDING_NORMALIZED = True
 LEGACY_CANDIDATE_VECTOR_FIELDS = (
@@ -808,7 +805,6 @@ def _resume_evidence_docs(doc: dict[str, Any]) -> list[dict[str, Any]]:
                 _profile_line("项目描述", item.get("description")),
                 _profile_line("项目职责", item.get("responsibility")),
             ],
-            SECTION_SEMANTIC_CHAR_BUDGET,
         )
         if text:
             items.append(_evidence_doc(doc, "project", index, item.get("name") or "项目经历", text))
@@ -821,7 +817,6 @@ def _resume_evidence_docs(doc: dict[str, Any]) -> list[dict[str, Any]]:
                 _profile_line("实习职位", item.get("title")),
                 _profile_line("实习描述", item.get("description")),
             ],
-            SECTION_SEMANTIC_CHAR_BUDGET,
         )
         title = " / ".join(value for value in [item.get("company"), item.get("title")] if value)
         if text:
@@ -835,7 +830,6 @@ def _resume_evidence_docs(doc: dict[str, Any]) -> list[dict[str, Any]]:
                 _profile_line("研究方向", item.get("research_direction")),
                 _profile_line("实验室方向", item.get("lab_name")),
             ],
-            SECTION_SEMANTIC_CHAR_BUDGET,
         )
         title = " / ".join(value for value in [item.get("school"), item.get("major")] if value)
         if text:
@@ -858,7 +852,6 @@ def _resume_evidence_docs(doc: dict[str, Any]) -> list[dict[str, Any]]:
                 _profile_line("获奖级别", item.get("level")),
                 _profile_line("获奖描述", item.get("description")),
             ],
-            SECTION_SEMANTIC_CHAR_BUDGET,
         )
         if text:
             items.append(
@@ -1010,16 +1003,15 @@ def _merge_spans(spans: list[tuple[date, date]]) -> list[tuple[date, date]]:
     return [(start, end) for start, end in merged]
 
 
-def _semantic_text(doc: dict[str, Any], lines: list[Any], max_chars: int) -> str:
+def _semantic_text(doc: dict[str, Any], lines: list[Any]) -> str:
     cleaned = _strip_semantic_exclusions(_compact_join(lines), _semantic_exclusions(doc))
-    return _budgeted_join(cleaned.splitlines(), max_chars)
+    return cleaned
 
 
 def _skills_semantic_text(doc: dict[str, Any]) -> str:
     return _semantic_text(
         doc,
         [_profile_line("能力标签", "，".join(doc.get("skills") or []))],
-        SKILLS_SEMANTIC_CHAR_BUDGET,
     )
 
 
@@ -1081,7 +1073,7 @@ def _profile_lexical_text(doc: dict[str, Any]) -> str:
         *wish_lines,
         *education_lines,
     ]
-    return _budgeted_join(_compact_join(lines).splitlines(), PROFILE_LEXICAL_CHAR_BUDGET)
+    return _compact_join(lines)
 
 
 def _profile_line(label: str, value: Any) -> str:
@@ -1093,23 +1085,6 @@ def _profile_line(label: str, value: Any) -> str:
     if not text:
         return ""
     return f"{label}：{text}"
-
-
-def _budgeted_join(lines: list[str], max_chars: int) -> str:
-    result: list[str] = []
-    used = 0
-    for line in _compact_join(lines).splitlines():
-        extra = len(line) + (1 if result else 0)
-        if used + extra <= max_chars:
-            result.append(line)
-            used += extra
-            continue
-
-        remaining = max_chars - used - (1 if result else 0)
-        if remaining > 20:
-            result.append(line[: remaining - 3].rstrip() + "...")
-        break
-    return "\n".join(result)
 
 
 def _semantic_exclusions(doc: dict[str, Any]) -> tuple[str, ...]:
