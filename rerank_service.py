@@ -80,16 +80,14 @@ def _build_payload(query: str, documents: list[str]) -> dict[str, Any]:
         parameters["instruct"] = RERANK_INSTRUCT
     return {
         "model": RERANK_MODEL_ID,
-        "input": {
-            "query": query.strip(),
-            "documents": [_clean_document(document) for document in documents],
-        },
+        "query": query.strip(),
+        "documents": [_clean_document(document) for document in documents],
         "parameters": parameters,
     }
 
 
 def _extract_scores(data: dict[str, Any], expected_count: int) -> list[float]:
-    results = data.get("output", {}).get("results")
+    results = data.get("results") or data.get("output", {}).get("results")
     if not isinstance(results, list):
         raise RuntimeError(f"rerank API response missing output.results: {data}")
 

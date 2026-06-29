@@ -77,6 +77,7 @@ DEGREE_ALIASES = {
     "学士": "本科",
     "本科": "本科",
 }
+DEGREE_ORDER = ("本科", "硕士", "博士")
 CANONICAL_SKILL_LABELS = {
     "c": "C",
     "c++": "C++",
@@ -304,6 +305,33 @@ def _normalize_highest_degree(degree: str) -> str:
     return DEGREE_ALIASES.get(degree, degree)
 
 
+def _normalize_degree_value(degree: str) -> str:
+    normalized = _normalize_highest_degree(str(degree).strip())
+    return normalized if normalized in DEGREE_ORDER else ""
+
+
+def _degree_floor_from_query(raw_query: str) -> str:
+    compact_query = re.sub(r"\s+", "", raw_query)
+    for label, canonical in sorted(
+        DEGREE_ALIASES.items(),
+        key=lambda item: len(item[0]),
+        reverse=True,
+    ):
+        if canonical not in DEGREE_ORDER:
+            continue
+        if re.search(rf"{re.escape(label)}(?:及以上|及其以上|或以上|以上)", compact_query):
+            return canonical
+    return ""
+
+
+def _degree_floor_filter(min_degree: str) -> dict[str, Any]:
+    normalized = _normalize_degree_value(min_degree)
+    if not normalized:
+        return {"term": {"candidate.highest_degree": _normalize_highest_degree(str(min_degree))}}
+    start = DEGREE_ORDER.index(normalized)
+    return {"terms": {"candidate.highest_degree": list(DEGREE_ORDER[start:])}}
+
+
 def _dedupe(values: list[str]) -> list[str]:
     seen: set[str] = set()
     result: list[str] = []
@@ -507,6 +535,7 @@ def _query_parser_system_prompt() -> str:
         '  "semantic_query": "给 embedding/rerank 使用的语义需求文本；不得包含已抽取到 constraints 的学历/城市/年限纯筛选词；不启用语义时为空字符串",\n'
         '  "constraints": {\n'
         '    "degree": null|"博士"|"硕士"|"本科",\n'
+        '    "min_degree": null|"博士"|"硕士"|"本科",\n'
         '    "cities": ["北京"],\n'
         '    "skills": ["Python"],\n'
         '    "min_years": null|0.5\n'
@@ -517,6 +546,7 @@ def _query_parser_system_prompt() -> str:
         "- lookup: 候选人编号、岗位编号、手机号、邮箱等唯一标识符直接定位查询；dense=false。\n"
         "- keyword: 关键词检索——学校、公司、专业、姓名、岗位名等实体查询，或含学历/城市/年限+关键词的混合筛选查询；dense=false。注意：只把实体核心名称放入 lexical_query，修饰词如\"实习\"\"大学\"\"硕士\"等不要混进去。例如\"阿里巴巴实习\" → lexical_query=\"阿里巴巴\"。\n"
         "- semantic: 语义检索——自然语言能力描述（如\"做过大规模分布式系统架构设计\"）、多技能组合（如\"Python PyTorch NLP 大模型\"）、长岗位描述或 JD 粘贴；dense=true。\n"
+        "- 学历精确要求（如\"本科\"）放入 degree；学历下限要求（如\"本科及以上\"\"硕士及以上\"）放入 min_degree，不要放入 degree。\n"
         "- 负向约束如\"不要纯推荐排序\"不要变成硬过滤；把核心正向需求放入 semantic_query，负向信息可留在 semantic_query 里。\n"
         "- 即使某些技能也放入 constraints.skills，也不要从 lexical_query/semantic_query 中删除这些技能词；技能词仍然是 BM25 和语义召回的重要线索。\n"
         "- 已放入 constraints 的学历、城市、年限不要再出现在 lexical_query 或 semantic_query 中，避免污染词面检索和 embedding。\n"
@@ -570,8 +600,12 @@ def _sanitize_llm_query_plan(payload: dict[str, Any], raw_query: str) -> dict[st
 
     constraints = payload.get("constraints") if isinstance(payload.get("constraints"), dict) else {}
     cleaned_constraints: dict[str, Any] = {}
+    min_degree = _normalize_degree_value(str(constraints.get("min_degree") or "").strip())
+    min_degree = min_degree or _degree_floor_from_query(raw_query)
     degree = constraints.get("degree")
-    if degree:
+    if min_degree:
+        cleaned_constraints["min_degree"] = min_degree
+    elif degree:
         cleaned_constraints["degree"] = _normalize_highest_degree(str(degree).strip())
     cities = _clean_string_list(constraints.get("cities"))
     if cities:
@@ -644,7 +678,12 @@ def _normalize_plan_intent(
 
 def _filters_from_llm_constraints(constraints: dict[str, Any]) -> list[dict[str, Any]]:
     filters: list[dict[str, Any]] = []
-    degree = constraints.get("degree")
+    min_degree = constraints.get("min_degree")
+    if min_degree:
+        filters.append(_degree_floor_filter(str(min_degree)))
+        degree = None
+    else:
+        degree = constraints.get("degree")
     if degree:
         filters.append({"term": {"candidate.highest_degree": _normalize_highest_degree(str(degree))}})
     cities = _clean_string_list(constraints.get("cities"))

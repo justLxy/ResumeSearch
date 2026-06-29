@@ -340,11 +340,15 @@ function formatMatchedQuery(q) {
     typeLabel = "词面命中";
     typeClass = "term";
     key = `evidence_${key.replace("evidence_term:", "")}`;
+  } else if (key.startsWith("evidence_match:")) {
+    typeLabel = "普通命中";
+    typeClass = "match";
+    key = `evidence_${key.replace("evidence_match:", "")}`;
   }
   
   const fieldName = queryNameMap[key] || key;
   const text = weight ? `${fieldName} (权重:${weight})` : fieldName;
-  return { typeClass, typeLabel, text, fieldName };
+  return { typeClass, typeLabel, text, fieldName, weightValue: Number(weight || 0) };
 }
 
 function lexicalTierLabel(tier) {
@@ -497,12 +501,14 @@ function renderResults() {
         .map(q => formatMatchedQuery(q))
         .filter(Boolean);
         
-      const tierRank = { "exact": 3, "phrase": 2, "term": 1, "other": 0 };
+      const tierRank = { "exact": 4, "phrase": 3, "term": 2, "match": 1, "other": 0 };
       const uniqueMap = new Map();
       rawQueries.forEach(q => {
-        const uniqueKey = `${q.typeClass}:${q.fieldName}`;
+        const uniqueKey = q.fieldName;
         const existing = uniqueMap.get(uniqueKey);
-        if (!existing || tierRank[q.typeClass] > tierRank[existing.typeClass]) {
+        const currentRank = tierRank[q.typeClass] ?? 0;
+        const existingRank = tierRank[existing?.typeClass] ?? -1;
+        if (!existing || currentRank > existingRank || (currentRank === existingRank && q.weightValue > (existing.weightValue || 0))) {
           uniqueMap.set(uniqueKey, q);
         }
       });
@@ -510,7 +516,7 @@ function renderResults() {
       const validQueries = Array.from(uniqueMap.values()).sort((a, b) => tierRank[b.typeClass] - tierRank[a.typeClass]);
 
       const matchedQueriesHtml = validQueries.length 
-        ? ["exact", "phrase", "term", "other"].map(typeClass => {
+        ? ["exact", "phrase", "term", "match", "other"].map(typeClass => {
             const group = validQueries.filter(q => q.typeClass === typeClass);
             if (!group.length) return "";
             return `<div class="debug-item"><span class="debug-label">${escapeHtml(group[0].typeLabel)}：</span>

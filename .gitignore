@@ -24,3 +24,6 @@ elasticsearch-*/
 generate_mock_resumes.py
 mock_resumes*.jsonl
 parsed_resumes*.jsonl
+
+
+奇安信集团-*

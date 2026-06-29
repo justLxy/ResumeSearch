@@ -881,6 +881,36 @@ class SearchLogicTests(unittest.TestCase):
         self.assertIn({"terms": {"application.expected_work_cities": ["北京"]}}, plan.filters)
         self.assertIn({"range": {"candidate.years_experience": {"gte": 0.5}}}, plan.filters)
 
+    def test_query_plan_treats_degree_floor_as_range_filter(self) -> None:
+        with patch(
+            "app._call_deepseek_query_parser",
+            return_value={
+                "intent": "semantic",
+                "lexical_query": "大模型 RAG Agent",
+                "semantic_query": "大模型 RAG Agent",
+                "constraints": {
+                    "degree": "本科",
+                    "skills": ["RAG"],
+                },
+                "enable_dense": True,
+                "enable_rerank": True,
+            },
+        ):
+            plan = _plan_query(
+                "本科及以上 大模型 RAG Agent",
+                [],
+                size=10,
+                facets={
+                    "degrees": [{"key": "本科"}, {"key": "硕士"}, {"key": "博士"}],
+                    "cities": [],
+                    "skills": [{"key": "RAG"}],
+                },
+            )
+
+        self.assertEqual(plan.constraints["min_degree"], "本科")
+        self.assertNotIn({"term": {"candidate.highest_degree": "本科"}}, plan.filters)
+        self.assertIn({"terms": {"candidate.highest_degree": ["本科", "硕士", "博士"]}}, plan.filters)
+
     def test_query_plan_keeps_llm_skill_constraints_soft(self) -> None:
         with patch(
             "app._call_deepseek_query_parser",
