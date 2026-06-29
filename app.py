@@ -1526,6 +1526,9 @@ def _rrf_merge(
             debug["evidence_inner_score"] = round(float(evidence_pools[doc_id]["score"]), 6)
             debug["evidence_support_count"] = evidence_pools[doc_id]["support_count"]
             debug["evidence_rrf_contribution"] = round(evidence_contribution, 6)
+            # 用实际参与计分的意图感知权重覆盖逐响应的 _rrf_weight，
+            # 否则 debug 面板会显示陈旧的 1.2 而与贡献数学不符。
+            debug["evidence_weight"] = round(evidence_weight, 3)
 
     # --- 将 dense 聚合到候选人维度，每个候选人只做一次 RRF。 ---
     dense_pools = {
