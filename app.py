@@ -42,6 +42,12 @@ EVIDENCE_DENSE_RETRIEVER = "evidence_dense"
 DENSE_RRF_WEIGHT = 1.0
 EVIDENCE_RRF_WEIGHT = 1.2
 EVIDENCE_DENSE_RRF_WEIGHT = 1.0
+# 意图感知的路由权重：semantic 意图（JD / 长自然语言 / 多技能组合）下，BM25 词面
+# 的价值低（长文本压缩成关键词本就有损），应让 dense 语义召回主导；keyword / lookup
+# 等实体/精确查询则保持 BM25 主导。这样 JD 匹配走"原文 dense 召回 + cross-encoder
+# 精排"的正解，而不是依赖压缩关键词的 BM25。
+EVIDENCE_RRF_WEIGHT_SEMANTIC = 1.0
+EVIDENCE_DENSE_RRF_WEIGHT_SEMANTIC = 1.5
 DENSE_RANK_WINDOW_SIZE = 300
 ENABLE_RERANK = True
 RERANK_TOP_N = 20
@@ -208,6 +214,9 @@ def search(
     plan = _plan_query(raw_query_text, explicit_filters, size=result_window_size, facets=facets)
     query_text = plan.lexical_query
     filters = plan.filters
+    # 意图感知的 RRF 路由权重：semantic（JD/长文本/多技能）让 dense 主导，
+    # 其余意图保持 BM25 主导。
+    evidence_weight, dense_weight = _rrf_route_weights(plan.intent)
     retrieval_warnings: list[str] = []
 
     if query_text:
@@ -232,7 +241,13 @@ def search(
         retrieval_warnings.extend(retriever_warnings)
         matched_total = _lexical_total(responses)
         candidate_total = _hybrid_total(responses)
-        results = _rrf_merge(responses, result_window_size, query_text=query_text)
+        results = _rrf_merge(
+            responses,
+            result_window_size,
+            query_text=query_text,
+            evidence_weight=evidence_weight,
+            dense_weight=dense_weight,
+        )
         if plan.enable_rerank:
             results, rerank_warnings = _rerank_results(plan.semantic_query, results)
             retrieval_warnings.extend(rerank_warnings)
@@ -1274,6 +1289,18 @@ def _evidence_knn_body(
     return body
 
 
+def _rrf_route_weights(intent: str | None) -> tuple[float, float]:
+    """按意图返回 (evidence_bm25_weight, dense_weight)。
+
+    semantic（JD / 长自然语言 / 多技能组合）让 dense 语义召回主导——这类查询
+    的有效信号在原文语义里，压缩成关键词的 BM25 价值低且可能引入噪声。其余意图
+    （keyword 实体、lookup 精确）保持 BM25 主导，尊重精确匹配。
+    """
+    if intent == INTENT_SEMANTIC:
+        return EVIDENCE_RRF_WEIGHT_SEMANTIC, EVIDENCE_DENSE_RRF_WEIGHT_SEMANTIC
+    return EVIDENCE_RRF_WEIGHT, DENSE_RRF_WEIGHT
+
+
 def _run_hybrid_search(
     query_text: str,
     query_vector: list[float],
@@ -1387,6 +1414,9 @@ def _rrf_merge(
     responses: list[dict[str, Any]],
     limit: int,
     query_text: str = "",
+    *,
+    evidence_weight: float = EVIDENCE_RRF_WEIGHT,
+    dense_weight: float = DENSE_RRF_WEIGHT,
 ) -> list[dict[str, Any]]:
     rrf_scores: dict[str, float] = {}
     dense_route_ranks: dict[str, list[int]] = {}
@@ -1487,7 +1517,7 @@ def _rrf_merge(
     }
     for doc_id in evidence_group_ids:
         ev_rank = evidence_group_rank[doc_id]
-        evidence_contribution = EVIDENCE_RRF_WEIGHT / (RRF_RANK_CONSTANT + ev_rank)
+        evidence_contribution = evidence_weight / (RRF_RANK_CONSTANT + ev_rank)
         rrf_scores[doc_id] = rrf_scores.get(doc_id, 0) + evidence_contribution
         best_rank[doc_id] = min(best_rank.get(doc_id, ev_rank), ev_rank)
         debug = retrieval_debug.get(doc_id)
@@ -1517,7 +1547,7 @@ def _rrf_merge(
     for doc_id in dense_group_ids:
         dense_rank = all_dense_group_rank.get(doc_id, dense_best_route_rank.get(doc_id, 10**9))
         dense_pool = dense_pools[doc_id]
-        dense_contribution = DENSE_RRF_WEIGHT / (RRF_RANK_CONSTANT + dense_rank)
+        dense_contribution = dense_weight / (RRF_RANK_CONSTANT + dense_rank)
         rrf_scores[doc_id] = rrf_scores.get(doc_id, 0) + dense_contribution
         best_rank[doc_id] = min(best_rank.get(doc_id, dense_rank), dense_rank)
         debug = retrieval_debug.setdefault(
@@ -1547,7 +1577,7 @@ def _rrf_merge(
         debug["dense_rank"] = dense_rank
         debug["dense_group_rank"] = dense_rank
         debug["dense_inner_score"] = round(float(dense_pool["score"]), 6)
-        debug["dense_outer_weight"] = round(DENSE_RRF_WEIGHT, 3)
+        debug["dense_outer_weight"] = round(dense_weight, 3)
         debug["dense_support_count"] = dense_pool["support_count"]
         debug["dense_pooling"] = "top_k_route_rerank"
         debug["dense_rrf_contribution"] = round(dense_contribution, 6)

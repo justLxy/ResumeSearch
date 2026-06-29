@@ -5424,8 +5424,8 @@
         "M20260155",
         "M20260121",
         "M20260127",
-        "M20260058",
         "M20260133",
+        "M20260058",
         "M20260170",
         "M20260033",
         "M20260093",
@@ -8549,15 +8549,14 @@
           "skills": [
             "SAP",
             "ABAP",
-            "FICO",
-            "ERP"
+            "FICO"
           ]
         },
         "enable_dense": true,
         "enable_rerank": true,
         "filter_count": 0,
         "intent": "semantic",
-        "lexical_query": "SAP ABAP 财务模块实施顾问 FICO 企业 ERP 上线",
+        "lexical_query": "SAP ABAP 财务模块实施顾问 FICO 企业ERP上线",
         "rank_window_size": 1000,
         "raw_query": "SAP ABAP 财务模块实施顾问，熟悉 FICO 和企业 ERP 上线",
         "semantic_query": "SAP ABAP 财务模块实施顾问，熟悉 FICO 和企业 ERP 上线"
@@ -8929,7 +8928,13 @@
       },
       "query": "嵌入式 RTOS 固件开发、单片机驱动和电机控制",
       "query_plan": {
-        "constraints": {},
+        "constraints": {
+          "skills": [
+            "RTOS",
+            "单片机",
+            "电机控制"
+          ]
+        },
         "enable_dense": true,
         "enable_rerank": true,
         "filter_count": 0,
@@ -10195,7 +10200,8 @@
             "Three.js",
             "Vue3",
             "React",
-            "TypeScript"
+            "TypeScript",
+            "shader"
           ]
         },
         "enable_dense": true,
@@ -11527,7 +11533,7 @@
   ],
   "meta": {
     "evidence_index_alias": "resume_evidence_current",
-    "generated_at": "2026-06-29T14:15:52+00:00",
+    "generated_at": "2026-06-29T14:51:50+00:00",
     "index_alias": "resumes_current",
     "limit": 100,
     "qrels": "eval_queries.jsonl",

@@ -825,9 +825,11 @@ Step 1: 检索路内部聚合 (Chunk to Candidate Top-K Pooling)
   - Evidence BM25 路：按候选人名下 top-k 词面证据重排，得出 evidence_group_rank
   - Evidence kNN 路：按候选人名下 top-k 向量证据重排，得出 dense_group_rank
 
-Step 2: 计算基础 RRF 分数 (Standard RRF)
-  - evidence BM25 贡献：weight(1.2) / (60 + evidence_group_rank)
-  - dense 贡献：weight(1.0) / (60 + dense_group_rank)
+Step 2: 计算基础 RRF 分数 (Standard RRF, 意图感知权重)
+  - keyword/lookup 意图：evidence BM25 weight=1.2 主导，dense weight=1.0
+  - semantic 意图（JD/长文本/多技能）：dense weight=1.5 主导，evidence BM25 weight=1.0
+  - evidence BM25 贡献：evidence_weight / (60 + evidence_group_rank)
+  - dense 贡献：dense_weight / (60 + dense_group_rank)
   - 基础 RRF = 两者之和
 
 Step 3: 匹配层级 (Lexical Tier) 加分
@@ -852,6 +854,19 @@ Step 6: 排序输出
 #### 为什么要做 tier 加分
 
 纯 RRF 只看排名，不区分"匹配质量"。但在简历检索场景下，精确匹配（比如 `skills` 字段中恰好有 "Python"）的可信度远高于仅分词命中（"Python" 出现在项目描述中但可能只是顺带提到）。Tier 加分让精确匹配的候选人获得额外优势。
+
+#### 意图感知的 BM25↔Dense 权重（JD / 长文本匹配的正解）
+
+RRF 两路的外层权重不是固定的，而是**按 query 意图切换**（`_rrf_route_weights`）：
+
+| 意图 | evidence BM25 权重 | dense 权重 | 理由 |
+|---|---|---|---|
+| `keyword` / `lookup` | 1.2（主导） | 1.0 | 实体/编号/精确匹配，词面精确性最可靠 |
+| `semantic`（JD / 长 NL / 多技能） | 1.0 | **1.5（主导）** | 长文本的有效信号在原文语义里，dense 召回 + cross-encoder 精排是正解 |
+
+**为什么 JD 匹配要 dense 主导**：长 JD（几十个能力点、职责/要求/加分项）被 LLM Query Planner 压成 BM25 关键词时是**有损**的——丢失权重区分、结构语义和多面性，且压缩结果不可控。而 dense 路用的是 `semantic_query` **原文**（未压缩），reranker 也用 JD 原文做 cross-encoder 精排——这两者才是长文本匹配的可靠武器。因此 semantic 意图下让 dense 主导排序，BM25 退为补充召回；压缩关键词只影响 BM25 这一路，不再主导最终排名。
+
+> 这是当前业界主流的长文本检索范式——"长上下文 dense 召回 + cross-encoder 精排"。更进一步的 late-interaction（ColBERT 的 MaxSim 思想，把 JD 拆成需求单元 × 简历证据切片做多对多匹配）是后续可选的进阶方向，本系统的证据切片 + reranker 架构已具备其雏形。
 
 ### 5.4 结果格式化与返回
 
@@ -1158,9 +1173,11 @@ python evaluate_search.py --details --output reports/current.json
 | `RRF_RANK_WINDOW_SIZE`       | 1000   | Evidence BM25 召回证据片段数，也是 RRF 后保留的最大候选人窗口 |
 | `DEFAULT_SEARCH_LIMIT`       | 100    | `/api/search` 默认返回候选人数               |
 | `KNN_NUM_CANDIDATES`         | 300    | kNN 检索的候选池大小                         |
-| `DENSE_RRF_WEIGHT`           | 1.0    | Dense 路在 RRF 中的外层权重                  |
-| `EVIDENCE_RRF_WEIGHT`        | 1.2    | Evidence BM25 路在 RRF 中的权重              |
+| `DENSE_RRF_WEIGHT`           | 1.0    | Dense 路在 RRF 中的外层权重（keyword/lookup 意图） |
+| `EVIDENCE_RRF_WEIGHT`        | 1.2    | Evidence BM25 路在 RRF 中的权重（keyword/lookup 意图） |
 | `EVIDENCE_DENSE_RRF_WEIGHT`  | 1.0    | Evidence kNN 路在 RRF 中的权重               |
+| `EVIDENCE_RRF_WEIGHT_SEMANTIC` | 1.0  | semantic 意图下 BM25 路权重（退为补充）       |
+| `EVIDENCE_DENSE_RRF_WEIGHT_SEMANTIC` | 1.5 | semantic 意图下 dense 路权重（主导，JD/长文本正解） |
 | `DENSE_RANK_WINDOW_SIZE`     | 300    | Dense 检索的最大结果窗口                     |
 | `ENABLE_RERANK`              | `True` | 是否对 `intent == semantic` 的 query 启用 Qwen3 reranker |
 | `RERANK_TOP_N`               | 20     | RRF 后进入 reranker 的候选人数               |
