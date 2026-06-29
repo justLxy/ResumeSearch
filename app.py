@@ -45,9 +45,13 @@ EVIDENCE_DENSE_RRF_WEIGHT = 1.0
 DENSE_RANK_WINDOW_SIZE = 300
 ENABLE_RERANK = True
 RERANK_TOP_N = 20
-DENSE_ABSTAIN_MIN_SAMPLE_SIZE = 20
-DENSE_ABSTAIN_IQR_MULTIPLIER = 1.5
-DENSE_ABSTAIN_MIN_MARGIN = 0.02
+# Cross-encoder 重排分带有绝对的 query-doc 相关性语义（不像余弦相似度，余弦只
+# 在同一 query 的批次内可比）。在评测集上实测：真实语义 query 的最高分都 >=0.84，
+# 而库中无相关候选的离域 query 最高分 <=0.33，中间是一条很宽的空白带。若重排窗口
+# 中最相关的候选都低于此地板，说明 reranker 在告诉我们这里没有真正相关的人，于是
+# 弃权返回空，而不是让 RRF 用噪声填满整页。这是基于模型自身输出的绝对相关性判定，
+# 不是挂在 query 文本模式上的规则——它从不检查 query 内容。
+RERANK_RELEVANCE_FLOOR = 0.5
 EVIDENCE_POOL_EXTRA_WEIGHTS = (0.30, 0.15)
 QUERY_TERM_COVERAGE_BOOST = 0.001
 MAX_QUERY_COVERAGE_TERMS = 8
@@ -74,9 +78,9 @@ QUERY_PLAN_CACHE_MAX_ENTRIES = 512
 # 几乎必然算命中。对 min_years 过滤施加软容差带，召回边界候选，真实年限仍由排序体现。
 MIN_YEARS_TOLERANCE_RATIO = 0.10
 MIN_YEARS_TOLERANCE_FLOOR = 0.5
-# Strict json_schema for DeepSeek structured output. All keys are required and
-# additionalProperties is closed so the model can't drift the shape; the
-# sanitizer still normalizes values, but the schema removes whole-field omissions.
+# DeepSeek 严格结构化输出的 json_schema。所有字段都设为 required 且关闭
+# additionalProperties，防止模型漂移输出结构；sanitizer 仍会规范化字段值，
+# 但 schema 能从源头消除整字段缺失（如偶发不返回 lexical_query）。
 QUERY_PLAN_JSON_SCHEMA = {
     "type": "object",
     "additionalProperties": False,
@@ -207,7 +211,7 @@ def search(
     retrieval_warnings: list[str] = []
 
     if query_text:
-        # Evidence-first retrieval: search evidence chunks, then aggregate back to resumes.
+        # 证据优先检索：先检索证据切片，再按 resume_id 聚合回候选人维度。
         use_dense = plan.enable_dense
         query_vector: list[float] = []
         if use_dense:
@@ -232,6 +236,10 @@ def search(
         if plan.enable_rerank:
             results, rerank_warnings = _rerank_results(plan.semantic_query, results)
             retrieval_warnings.extend(rerank_warnings)
+            # 重排弃权（无真正相关候选）时，让上报的计数与空结果集保持一致。
+            if not results:
+                matched_total = 0
+                candidate_total = 0
     elif filters:
         browse_size = MAX_BROWSE_RESULT_SIZE
         body = _filter_browse_body(filters, browse_size)
@@ -304,7 +312,7 @@ def get_resume(resume_id: str) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# query builders
+# 查询构建
 # ---------------------------------------------------------------------------
 
 def _normalize_limit(limit: int | None) -> int:
@@ -515,9 +523,8 @@ def _parse_query_with_llm(
     if not query:
         return _empty_parsed_query()
 
-    # Fast-path: unambiguous unique identifiers (email / phone / candidate_no /
-    # position_code) are 100% resolvable by regex. Short-circuit the LLM so the
-    # cheapest queries don't pay a network round-trip.
+    # 快速通道：邮箱 / 手机号 / 候选人编号 / 岗位编号这类唯一标识符可被正则 100%
+    # 判定。直接短路 LLM，避免最廉价的查询白白付一次网络往返。
     fast_path = _lookup_fast_path(query)
     if fast_path is not None:
         return fast_path
@@ -532,8 +539,7 @@ def _parse_query_with_llm(
         logger.exception("LLM query parser failed")
         fallback = _llm_parser_fallback(query)
         fallback["constraints"]["parser_warning"] = str(exc)
-        # Don't cache fallbacks: a transient LLM outage shouldn't poison the
-        # cache for the whole TTL.
+        # 不缓存 fallback：LLM 短暂故障不应污染整个 TTL 内的缓存。
         return fallback
     sanitized = _sanitize_llm_query_plan(payload, query)
     _set_cached_query_plan(query, sanitized)
@@ -547,11 +553,10 @@ _LOOKUP_POSITION_CODE_RE = re.compile(r"^[A-Za-z]\d{3,}$")
 
 
 def _lookup_fast_path(query: str) -> dict[str, Any] | None:
-    """Return a lookup plan for unambiguous single-token identifiers, else None.
+    """对无歧义的单 token 标识符返回 lookup 计划，否则返回 None。
 
-    Only fires for a single whitespace-free token that matches a known
-    identifier shape. Anything with spaces or mixed content falls through to
-    the LLM, which is better at disambiguating intent.
+    仅对不含空白、且匹配已知标识符形态的单一 token 生效。带空格或混合内容的
+    查询一律交给 LLM——它更擅长消解意图歧义。
     """
     if not query or any(ch.isspace() for ch in query):
         return None
@@ -605,8 +610,8 @@ def _set_cached_query_plan(query: str, plan: dict[str, Any]) -> None:
 
 
 def _deep_copy_plan(plan: dict[str, Any]) -> dict[str, Any]:
-    # Cached plans are mutated downstream (e.g. parser_warning injection), so
-    # hand out independent copies to keep the cache entry pristine.
+    # 缓存的计划在下游会被改写（如注入 parser_warning），因此返回独立副本，
+    # 保持缓存条目不被污染。
     return json.loads(json.dumps(plan, ensure_ascii=False))
 
 
@@ -678,8 +683,8 @@ def _post_query_parser(body: dict[str, Any]) -> dict[str, Any]:
         json=body,
         timeout=QUERY_PARSER_TIMEOUT_SECONDS,
     )
-    # If the endpoint can't honor a json_schema response_format, retry once with
-    # the widely-supported json_object mode and stop attempting schema mode.
+    # 若接口不支持 json_schema 响应格式，则用广泛支持的 json_object 重试一次，
+    # 并停止后续的 schema 尝试。
     status_code = getattr(response, "status_code", None)
     if (
         status_code in (400, 422)
@@ -1269,51 +1274,6 @@ def _evidence_knn_body(
     return body
 
 
-def _dense_confidence(response: dict[str, Any]) -> dict[str, Any]:
-    scores = [
-        float(hit.get("_score") or 0)
-        for hit in response.get("hits", {}).get("hits", [])
-    ]
-    sample_size = len(scores)
-    if sample_size < DENSE_ABSTAIN_MIN_SAMPLE_SIZE:
-        return {
-            "abstained": False,
-            "reason": "insufficient_sample",
-            "sample_size": sample_size,
-        }
-
-    top_score = max(scores)
-    q1 = _percentile(scores, 0.25)
-    q3 = _percentile(scores, 0.75)
-    iqr = q3 - q1
-    threshold = q3 + (DENSE_ABSTAIN_IQR_MULTIPLIER * iqr)
-    accepted_threshold = threshold + DENSE_ABSTAIN_MIN_MARGIN
-    abstained = not (iqr > 0 and top_score > accepted_threshold)
-    return {
-        "abstained": abstained,
-        "reason": "flat_distribution" if abstained else "clear_head",
-        "sample_size": sample_size,
-        "top_score": round(top_score, 6),
-        "q1": round(q1, 6),
-        "q3": round(q3, 6),
-        "iqr": round(iqr, 6),
-        "threshold": round(threshold, 6),
-        "min_margin": round(DENSE_ABSTAIN_MIN_MARGIN, 6),
-        "accepted_threshold": round(accepted_threshold, 6),
-    }
-
-
-def _percentile(values: list[float], fraction: float) -> float:
-    if not values:
-        return 0.0
-    sorted_values = sorted(values)
-    position = (len(sorted_values) - 1) * fraction
-    lower = int(position)
-    upper = min(lower + 1, len(sorted_values) - 1)
-    ratio = position - lower
-    return (sorted_values[lower] * (1 - ratio)) + (sorted_values[upper] * ratio)
-
-
 def _run_hybrid_search(
     query_text: str,
     query_vector: list[float],
@@ -1359,8 +1319,7 @@ def _run_hybrid_search(
             try:
                 response = future.result()
             except Exception as exc:
-                # One retriever failing should not crash the entire search;
-                # degrade gracefully with whatever retriever(s) succeeded.
+                # 单路检索失败不应让整个搜索崩溃；用成功的那一路（或几路）降级返回。
                 logger.exception("%s retriever failed", name)
                 warnings.append(f"{name} retriever failed: {exc}")
                 continue
@@ -1368,14 +1327,6 @@ def _run_hybrid_search(
             response["_rrf_weight"] = weight
             if field:
                 response["_vector_field"] = field
-            if _is_dense_retriever(name):
-                confidence = _dense_confidence(response)
-                response["_dense_confidence"] = confidence
-                if confidence["abstained"]:
-                    response["hits"]["hits"] = []
-                    warnings.append(
-                        f"{name} abstained: dense score distribution has no clear head"
-                    )
             responses.append(response)
     return responses, warnings
 
@@ -1386,7 +1337,7 @@ def _retriever_index_alias(retriever_name: str) -> str:
     return INDEX_ALIAS
 
 # ---------------------------------------------------------------------------
-# manual RRF merge  (ES Basic license does not include built-in RRF)
+# 手写 RRF 融合（ES Basic 许可证不含内置 RRF）
 # ---------------------------------------------------------------------------
 
 def _is_evidence_retriever(name: Any) -> bool:
@@ -1517,7 +1468,7 @@ def _rrf_merge(
                 if len(matches) < 3:
                     matches.append(dense_match)
 
-    # --- Aggregate evidence BM25 to candidate level, then RRF once per candidate. ---
+    # --- 将证据 BM25 聚合到候选人维度，每个候选人只做一次 RRF。 ---
     evidence_pools = {
         doc_id: _evidence_pool_score(ranks)
         for doc_id, ranks in evidence_route_ranks.items()
@@ -1546,7 +1497,7 @@ def _rrf_merge(
             debug["evidence_support_count"] = evidence_pools[doc_id]["support_count"]
             debug["evidence_rrf_contribution"] = round(evidence_contribution, 6)
 
-    # --- Aggregate dense to candidate level, then RRF once per candidate. ---
+    # --- 将 dense 聚合到候选人维度，每个候选人只做一次 RRF。 ---
     dense_pools = {
         doc_id: _evidence_pool_score(ranks)
         for doc_id, ranks in dense_route_ranks.items()
@@ -1702,6 +1653,15 @@ def _rerank_results(
     if len(scores) != len(window):
         return results, [
             f"reranker returned {len(scores)} scores for {len(window)} candidates"
+        ]
+
+    # 绝对相关性弃权：若连最相关的候选都低于相关性地板，说明库中没有真正匹配
+    # 此 query 的人。返回空，而不是把 RRF 那页噪声端上来。
+    top_rerank_score = max(float(score) for score in scores)
+    if top_rerank_score < RERANK_RELEVANCE_FLOOR:
+        return [], [
+            f"reranker abstained: top relevance {top_rerank_score:.3f} "
+            f"below floor {RERANK_RELEVANCE_FLOOR}"
         ]
 
     scored: list[tuple[float, int, dict[str, Any]]] = []
@@ -1903,8 +1863,8 @@ def _evidence_snippet(hit: dict[str, Any], retriever_name: str | None = None) ->
         escaped_raw = html.escape(raw[:100] + ("..." if len(raw) > 100 else ""))
         return f'<span class="snippet-label dense-label">Dense 匹配</span> {escaped_raw}'
         
-    # If it's a BM25 hit without highlights, it means it only matched global candidate attributes.
-    # Return empty string to prevent irrelevant chunk text from cluttering the UI.
+    # 无高亮的 BM25 命中意味着它只匹配到了候选人的全局属性字段，
+    # 返回空串以避免无关的切片文本污染 UI。
     return ""
 
 def _matched_term_coverage(hit: dict[str, Any]) -> int:
@@ -1962,7 +1922,7 @@ def _accepted_hits(response: dict[str, Any]) -> list[tuple[int, dict[str, Any], 
 
 
 # ---------------------------------------------------------------------------
-# hit formatting
+# 结果格式化
 # ---------------------------------------------------------------------------
 
 def _format_hit(hit: dict[str, Any], rrf_score: float | None = None) -> dict[str, Any]:
@@ -2132,7 +2092,7 @@ def _safe_snippet(snippet: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# facets / health
+# facet 聚合 / 健康检查
 # ---------------------------------------------------------------------------
 
 def _load_facets() -> dict[str, Any]:

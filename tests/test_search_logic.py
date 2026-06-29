@@ -11,7 +11,6 @@ from app import (
     INTENT_SEMANTIC,
     _build_filters,
     _call_deepseek_query_parser,
-    _dense_confidence,
     _default_snippet,
     _evidence_lexical_query,
     _format_hit,
@@ -272,90 +271,6 @@ class SearchLogicTests(unittest.TestCase):
             {EVIDENCE_RETRIEVER, EVIDENCE_DENSE_RETRIEVER},
         )
         self.assertTrue(all("resume_evidence_current" in path for path in calls))
-
-    def test_dense_confidence_abstains_when_scores_have_no_clear_head(self) -> None:
-        scores = (
-            ([0.7521] * 50)
-            + ([0.7594] * 24)
-            + ([0.7672] * 21)
-            + [0.7852, 0.7850, 0.7815, 0.7804, 0.7782]
-        )
-        response = _response(
-            EVIDENCE_DENSE_RETRIEVER,
-            [_hit(f"dense-{index}", f"候选人 {index}", score=score) for index, score in enumerate(scores)],
-        )
-
-        confidence = _dense_confidence(response)
-
-        self.assertTrue(confidence["abstained"])
-        self.assertEqual(confidence["reason"], "flat_distribution")
-
-    def test_dense_confidence_keeps_clear_head_distribution(self) -> None:
-        scores = (
-            ([0.8443] * 50)
-            + ([0.8502] * 24)
-            + ([0.8569] * 21)
-            + [0.9100, 0.9032, 0.8990, 0.8923, 0.8805]
-        )
-        response = _response(
-            EVIDENCE_DENSE_RETRIEVER,
-            [_hit(f"dense-{index}", f"候选人 {index}", score=score) for index, score in enumerate(scores)],
-        )
-
-        confidence = _dense_confidence(response)
-
-        self.assertFalse(confidence["abstained"])
-        self.assertEqual(confidence["reason"], "clear_head")
-        self.assertIn("accepted_threshold", confidence)
-
-    def test_dense_confidence_abstains_when_clear_head_margin_is_too_small(self) -> None:
-        scores = (
-            ([0.639084] * 65)
-            + ([0.653257] * 63)
-            + ([0.66743] * 64)
-            + [0.719456, 0.701, 0.695, 0.690, 0.685]
-        )
-        response = _response(
-            EVIDENCE_DENSE_RETRIEVER,
-            [_hit(f"dense-{index}", f"候选人 {index}", score=score) for index, score in enumerate(scores)],
-        )
-
-        confidence = _dense_confidence(response)
-
-        self.assertTrue(confidence["abstained"])
-        self.assertGreater(confidence["top_score"], confidence["threshold"])
-        self.assertLessEqual(confidence["top_score"], confidence["accepted_threshold"])
-
-    def test_hybrid_search_clears_dense_hits_when_dense_abstains(self) -> None:
-        flat_scores = (
-            ([0.7521] * 50)
-            + ([0.7594] * 24)
-            + ([0.7672] * 21)
-            + [0.7852, 0.7850, 0.7815, 0.7804, 0.7782]
-        )
-
-        def fake_es(_method: str, _path: str, body: dict) -> dict:
-            if "knn" in body:
-                hits = [
-                    _hit(f"dense-{index}", f"候选人 {index}", score=score)
-                    for index, score in enumerate(flat_scores)
-                ]
-                return {"hits": {"total": {"value": len(hits)}, "hits": hits}}
-            return {"hits": {"total": {"value": 0}, "hits": []}}
-
-        with patch("app._es", side_effect=fake_es):
-            responses, warnings = _run_hybrid_search(
-                "哥伦比亚",
-                [0.1, 0.2, 0.3],
-                [],
-                100,
-                use_dense=True,
-            )
-
-        dense_response = next(response for response in responses if response["_retriever_name"] == EVIDENCE_DENSE_RETRIEVER)
-        self.assertEqual(dense_response["hits"]["hits"], [])
-        self.assertTrue(dense_response["_dense_confidence"]["abstained"])
-        self.assertEqual(warnings, ["evidence_dense abstained: dense score distribution has no clear head"])
 
     def test_hybrid_merge_keeps_dense_candidates_when_dense_route_is_present(self) -> None:
         lexical_response = _response(
@@ -1175,6 +1090,39 @@ class SearchLogicTests(unittest.TestCase):
         self.assertEqual(reranked[2]["retrieval_debug"]["rerank_skip_reason"], "outside_top_n")
         self.assertEqual(reranked[2]["retrieval_debug"]["pre_rerank_rank"], 3)
         self.assertNotIn("rerank_rank", reranked[2]["retrieval_debug"])
+
+    def test_rerank_results_abstains_when_top_score_below_floor(self) -> None:
+        results = [
+            _formatted_result("a", "弱相关一", "Oracle DBA 数据库巡检", 0.9),
+            _formatted_result("b", "弱相关二", "SAP 财务实施", 0.8),
+        ]
+
+        # Both candidates score below the relevance floor -> abstain (empty).
+        with patch(
+            "app._score_rerank_documents",
+            return_value=[0.28, 0.31],
+        ):
+            reranked, warnings = _rerank_results("量子计算芯片设计经验", results, top_n=2)
+
+        self.assertEqual(reranked, [])
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("abstained", warnings[0])
+
+    def test_rerank_results_keeps_window_when_one_candidate_clears_floor(self) -> None:
+        results = [
+            _formatted_result("a", "弱相关", "Oracle DBA 数据库巡检", 0.9),
+            _formatted_result("b", "强相关", "企业知识库 RAG 向量检索系统", 0.8),
+        ]
+
+        # One candidate clears the floor -> keep the window (no abstain).
+        with patch(
+            "app._score_rerank_documents",
+            return_value=[0.28, 0.91],
+        ):
+            reranked, warnings = _rerank_results("需要 RAG 经验", results, top_n=2)
+
+        self.assertEqual(warnings, [])
+        self.assertEqual([item["id"] for item in reranked], ["b", "a"])
 
     def test_rerank_document_uses_resume_evidence_fields(self) -> None:
         document = _rerank_document(

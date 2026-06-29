@@ -909,7 +909,7 @@ def _evidence_doc(
     candidate = doc.get("candidate") or {}
     application = doc.get("application") or {}
     
-    # Extract all schools from education history
+    # 从教育经历中提取所有学校
     all_schools = []
     if candidate.get("school"):
         all_schools.append(str(candidate.get("school")).strip())

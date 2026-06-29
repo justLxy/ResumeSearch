@@ -115,9 +115,8 @@ def _download_from_modelscope() -> str:
 
     model_dir = snapshot_download(LOCAL_MODEL_ID)
 
-    # ModelScope flattens all files to root level, but sentence_transformers
-    # expects 1_Pooling/ and 2_Dense/ as subdirectories with their own config
-    # and weight files. Reconstruct these subdirectories.
+    # ModelScope 会把所有文件平铺到根目录，但 sentence_transformers 期望
+    # 1_Pooling/ 和 2_Dense/ 作为各自带 config 和权重文件的子目录。这里重建这些子目录。
     pooling_dir = os.path.join(model_dir, "1_Pooling")
     os.makedirs(pooling_dir, exist_ok=True)
     with open(os.path.join(pooling_dir, "config.json"), "w") as f:
@@ -127,9 +126,8 @@ def _download_from_modelscope() -> str:
     os.makedirs(dense_dir, exist_ok=True)
     with open(os.path.join(dense_dir, "config.json"), "w") as f:
         f.write(_DENSE_CONFIG)
-    # The Dense layer has its own small weight files (~7MB each), separate
-    # from the root full-model weights. Download them from HuggingFace directly
-    # into the 2_Dense/ subdirectory.
+    # Dense 层有自己的小权重文件（各约 7MB），与根目录的全模型权重分开。
+    # 从 HuggingFace 直接下载到 2_Dense/ 子目录。
     _fetch_dense_weights(dense_dir)
 
     return model_dir
