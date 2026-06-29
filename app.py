@@ -70,6 +70,10 @@ QUERY_PARSER_TIMEOUT_SECONDS = 30
 QUERY_PARSER_MAX_VOCAB_ITEMS = 120
 QUERY_PLAN_CACHE_TTL_SECONDS = 300
 QUERY_PLAN_CACHE_MAX_ENTRIES = 512
+# "N 年以上" 是用户的模糊表达，不是精确边界：一个 3.9 年的候选人对 "4 年以上"
+# 几乎必然算命中。对 min_years 过滤施加软容差带，召回边界候选，真实年限仍由排序体现。
+MIN_YEARS_TOLERANCE_RATIO = 0.10
+MIN_YEARS_TOLERANCE_FLOOR = 0.5
 # Strict json_schema for DeepSeek structured output. All keys are required and
 # additionalProperties is closed so the model can't drift the shape; the
 # sanitizer still normalizes values, but the schema removes whole-field omissions.
@@ -331,8 +335,21 @@ def _build_filters(
         for skill in _dedupe_casefold(skills):
             filters.append(_skill_filter(skill, skill_vocab))
     if min_years > 0:
-        filters.append({"range": {"candidate.years_experience": {"gte": min_years}}})
+        filters.append(_min_years_filter(min_years))
     return filters
+
+
+def _min_years_filter(min_years: float) -> dict[str, Any]:
+    """Range filter on years_experience with a soft tolerance band.
+
+    "N 年以上" is a fuzzy ask, not a hard boundary. We lower the gte by the
+    larger of a ratio (10%) or a flat floor (0.5y) so near-misses like a 3.9y
+    candidate still surface for a "4 年以上" query; true seniority is preserved
+    by ranking, not by clipping the candidate set.
+    """
+    tolerance = max(min_years * MIN_YEARS_TOLERANCE_RATIO, MIN_YEARS_TOLERANCE_FLOOR)
+    effective_floor = max(0.0, round(min_years - tolerance, 3))
+    return {"range": {"candidate.years_experience": {"gte": effective_floor}}}
 
 
 def _normalize_highest_degree(degree: str) -> str:
@@ -627,10 +644,11 @@ def _call_deepseek_query_parser(
     return json.loads(_strip_json_fence(content))
 
 
-# DeepSeek 较新接口支持 json_schema 严格结构化输出；旧接口只支持 json_object。
-# 优先用 schema 约束（能根治 LLM 偶发返回空 lexical_query 等问题），
-# 如果接口拒绝 schema 则自动回退到 json_object，并记住该结果避免重复试探。
-_structured_output_supported = True
+# DeepSeek 较新接口支持 json_schema 严格结构化输出；但实测 deepseek-v4-flash
+# 会拒绝 json_schema（HTTP 400），因此默认用广泛支持的 json_object，并靠
+# _sanitize_llm_query_plan 做字段兜底。若将来切换到支持 schema 的模型，把
+# _structured_output_supported 初值改回 True 即可自动启用严格模式 + 自动回退。
+_structured_output_supported = False
 _structured_output_lock = threading.Lock()
 
 
@@ -864,7 +882,7 @@ def _filters_from_llm_constraints(constraints: dict[str, Any]) -> list[dict[str,
         filters.append({"terms": {"application.expected_work_cities": _dedupe(cities)}})
     min_years = _clean_float(constraints.get("min_years"))
     if min_years is not None and min_years > 0:
-        filters.append({"range": {"candidate.years_experience": {"gte": min_years}}})
+        filters.append(_min_years_filter(min_years))
     return filters
 
 

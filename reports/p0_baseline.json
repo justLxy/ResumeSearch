@@ -122,18 +122,18 @@
     },
     "structured_filter": {
       "empty_accuracy": 1.0,
-      "forbidden10": 3,
+      "forbidden10": 1,
       "judged": 7,
-      "mrr10": 1.0,
-      "ndcg10": 0.9577025841477336,
-      "ndcg5": 0.9577025841477336,
-      "p10": 0.3,
-      "p5": 0.45714285714285713,
+      "mrr10": 0.8571428571428571,
+      "ndcg10": 0.7621304187026124,
+      "ndcg5": 0.790602737786915,
+      "p10": 0.2,
+      "p5": 0.34285714285714286,
       "queries": 8,
-      "r10": 0.9285714285714286,
-      "r100": 0.9285714285714286,
-      "r5": 0.8571428571428571,
-      "r50": 0.9285714285714286
+      "r10": 0.6952380952380952,
+      "r100": 0.6952380952380952,
+      "r5": 0.6666666666666666,
+      "r50": 0.6952380952380952
     }
   },
   "details": [
@@ -3868,9 +3868,9 @@
       "forbidden_hits_at_10": [],
       "id": "structured_empty_query_beijing_bachelor_8y",
       "mrr10": 1.0,
-      "ndcg10": 1.0000000000000002,
+      "ndcg10": 0.8006937664098821,
       "ndcg5": 1.0000000000000002,
-      "p10": 1.0,
+      "p10": 0.7,
       "p5": 1.0,
       "planner_eval": {
         "actual": {
@@ -3912,21 +3912,18 @@
         "raw_query": "",
         "semantic_query": ""
       },
-      "r10": 1.0,
-      "r100": 1.0,
+      "r10": 0.7,
+      "r100": 0.7,
       "r5": 0.5,
-      "r50": 1.0,
+      "r50": 0.7,
       "relevant_grades_at_10": {
         "M20260010": 3.0,
-        "M20260022": 3.0,
         "M20260037": 3.0,
         "M20260039": 3.0,
         "M20260048": 3.0,
         "M20260054": 3.0,
         "M20260059": 3.0,
-        "M20260072": 3.0,
-        "M20260076": 3.0,
-        "M20260097": 3.0
+        "M20260072": 3.0
       },
       "relevant_hits_at_10": [
         "M20260039",
@@ -3934,9 +3931,6 @@
         "M20260054",
         "M20260059",
         "M20260072",
-        "M20260076",
-        "M20260097",
-        "M20260022",
         "M20260037",
         "M20260010"
       ],
@@ -3946,9 +3940,6 @@
         "M20260054",
         "M20260059",
         "M20260072",
-        "M20260076",
-        "M20260097",
-        "M20260022",
         "M20260037",
         "M20260010"
       ],
@@ -3964,16 +3955,14 @@
         "lexical_query": "RAG LangChain",
         "semantic_query": "RAG LangChain"
       },
-      "forbidden10": 1,
-      "forbidden_hits_at_10": [
-        "M20260005"
-      ],
+      "forbidden10": 0,
+      "forbidden_hits_at_10": [],
       "id": "structured_rag_beijing_master_4y",
-      "mrr10": 1.0,
-      "ndcg10": 1.0,
-      "ndcg5": 1.0,
-      "p10": 0.3,
-      "p5": 0.6,
+      "mrr10": 0.0,
+      "ndcg10": 0.0,
+      "ndcg5": 0.0,
+      "p10": 0.0,
+      "p5": 0.0,
       "planner_eval": {
         "actual": {
           "enable_dense": true,
@@ -4024,38 +4013,13 @@
         "raw_query": "北京 硕士 4年以上 RAG LangChain",
         "semantic_query": "RAG LangChain"
       },
-      "r10": 1.0,
-      "r100": 1.0,
-      "r5": 1.0,
-      "r50": 1.0,
-      "relevant_grades_at_10": {
-        "M20260013": 3.0,
-        "M20260046": 3.0,
-        "M20260086": 3.0
-      },
-      "relevant_hits_at_10": [
-        "M20260013",
-        "M20260046",
-        "M20260086"
-      ],
-      "returned_ids": [
-        "M20260013",
-        "M20260046",
-        "M20260086",
-        "M20260016",
-        "M20260005",
-        "M20260062",
-        "M20260066",
-        "M20260056",
-        "M20260001",
-        "M20260044",
-        "M20260069",
-        "M20260031",
-        "M20260094",
-        "M20260051",
-        "M20260089",
-        "M20260083"
-      ],
+      "r10": 0.0,
+      "r100": 0.0,
+      "r5": 0.0,
+      "r50": 0.0,
+      "relevant_grades_at_10": {},
+      "relevant_hits_at_10": [],
+      "returned_ids": [],
       "type": "structured_filter"
     },
     {
@@ -4237,10 +4201,7 @@
         "M20260051",
         "M20260001",
         "M20260062",
-        "M20260082",
-        "M20260049",
-        "M20260078",
-        "M20260034"
+        "M20260049"
       ],
       "type": "structured_filter"
     },
@@ -4420,16 +4381,14 @@
         "lexical_query": "Java 架构",
         "semantic_query": "Java 架构"
       },
-      "forbidden10": 1,
-      "forbidden_hits_at_10": [
-        "M20260100"
-      ],
+      "forbidden10": 0,
+      "forbidden_hits_at_10": [],
       "id": "structured_java_hangzhou_master_8y",
       "mrr10": 1.0,
-      "ndcg10": 1.0,
-      "ndcg5": 1.0,
-      "p10": 0.3,
-      "p5": 0.6,
+      "ndcg10": 0.8303010754742701,
+      "ndcg5": 0.8303010754742701,
+      "p10": 0.2,
+      "p5": 0.4,
       "planner_eval": {
         "actual": {
           "enable_dense": true,
@@ -4479,25 +4438,21 @@
         "raw_query": "杭州 硕士 8年以上 Java 架构",
         "semantic_query": "Java 架构"
       },
-      "r10": 1.0,
-      "r100": 1.0,
-      "r5": 1.0,
-      "r50": 1.0,
+      "r10": 0.6666666666666666,
+      "r100": 0.6666666666666666,
+      "r5": 0.6666666666666666,
+      "r50": 0.6666666666666666,
       "relevant_grades_at_10": {
         "M20260012": 3.0,
-        "M20260049": 2.0,
         "M20260080": 3.0
       },
       "relevant_hits_at_10": [
         "M20260080",
-        "M20260012",
-        "M20260049"
+        "M20260012"
       ],
       "returned_ids": [
         "M20260080",
-        "M20260012",
-        "M20260049",
-        "M20260100"
+        "M20260012"
       ],
       "type": "structured_filter"
     },
@@ -4639,9 +4594,7 @@
       "query_plan": {
         "constraints": {
           "skills": [
-            "RAG",
-            "向量检索",
-            "大模型"
+            "RAG"
           ]
         },
         "enable_dense": true,
@@ -5203,8 +5156,7 @@
       "query_plan": {
         "constraints": {
           "skills": [
-            "Java",
-            "JVM"
+            "Java"
           ]
         },
         "enable_dense": true,
@@ -7706,7 +7658,7 @@
           "enable_dense": true,
           "enable_rerank": true,
           "intent": "semantic",
-          "lexical_query": "SAP ABAP 财务模块实施顾问 FICO 企业 ERP 上线",
+          "lexical_query": "SAP ABAP 财务模块实施顾问 FICO 企业ERP上线",
           "semantic_query": "SAP ABAP 财务模块实施顾问，熟悉 FICO 和企业 ERP 上线"
         },
         "available": true,
@@ -7745,7 +7697,7 @@
         "enable_rerank": true,
         "filter_count": 0,
         "intent": "semantic",
-        "lexical_query": "SAP ABAP 财务模块实施顾问 FICO 企业 ERP 上线",
+        "lexical_query": "SAP ABAP 财务模块实施顾问 FICO 企业ERP上线",
         "rank_window_size": 1000,
         "raw_query": "SAP ABAP 财务模块实施顾问，熟悉 FICO 和企业 ERP 上线",
         "semantic_query": "SAP ABAP 财务模块实施顾问，熟悉 FICO 和企业 ERP 上线"
@@ -7885,11 +7837,7 @@
       },
       "query": "医学影像放疗计划系统 DICOM 三维重建和临床算法验证",
       "query_plan": {
-        "constraints": {
-          "skills": [
-            "DICOM"
-          ]
-        },
+        "constraints": {},
         "enable_dense": true,
         "enable_rerank": true,
         "filter_count": 0,
@@ -9461,15 +9409,11 @@
           "skills": [
             "应急响应",
             "日志取证",
-            "勒索软件溯源",
             "流量分析",
             "威胁狩猎",
-            "ATT&CK",
             "ELK",
             "SIEM",
-            "SOAR",
-            "安全运营",
-            "护网防守"
+            "SOAR"
           ]
         },
         "enable_dense": true,
@@ -9655,8 +9599,19 @@
       "query_plan": {
         "constraints": {
           "skills": [
+            "红队攻防",
+            "AD域渗透",
+            "内网横向移动",
+            "C2通信",
+            "免杀绕过",
+            "钓鱼社工",
+            "漏洞利用",
+            "自动化打点",
             "Go",
-            "C++"
+            "C++",
+            "攻击工具开发",
+            "蓝队检测",
+            "反溯源"
           ]
         },
         "enable_dense": true,
@@ -10208,7 +10163,7 @@
           "enable_dense": true,
           "enable_rerank": true,
           "intent": "semantic",
-          "lexical_query": "C++ 低延迟 高频交易 实时交易 网络收发 内核旁路 RDMA Solarflare 无锁队列 多线程调度 延迟优化 C++17 Linux 性能 profiling",
+          "lexical_query": "C++ 低延迟 高频交易 实时交易 网络收发 内核旁路 RDMA Solarflare 无锁队列 多线程调度 延迟优化 Linux profiling",
           "semantic_query": "岗位：C++ 低延迟系统专家。职责：建设高频交易或实时交易基础设施，优化网络收发、内核旁路、RDMA/Solarflare、无锁队列、多线程调度和端到端延迟。要求精通 C++17、Linux、性能 profiling，有极致低延迟系统经验。"
         },
         "available": true,
@@ -10241,14 +10196,14 @@
             "Linux",
             "RDMA",
             "Solarflare",
-            "C++17"
+            "profiling"
           ]
         },
         "enable_dense": true,
         "enable_rerank": true,
         "filter_count": 0,
         "intent": "semantic",
-        "lexical_query": "C++ 低延迟 高频交易 实时交易 网络收发 内核旁路 RDMA Solarflare 无锁队列 多线程调度 延迟优化 C++17 Linux 性能 profiling",
+        "lexical_query": "C++ 低延迟 高频交易 实时交易 网络收发 内核旁路 RDMA Solarflare 无锁队列 多线程调度 延迟优化 Linux profiling",
         "rank_window_size": 1000,
         "raw_query": "岗位：C++ 低延迟系统专家。职责：建设高频交易或实时交易基础设施，优化网络收发、内核旁路、RDMA/Solarflare、无锁队列、多线程调度和端到端延迟。要求精通 C++17、Linux、性能 profiling，有极致低延迟系统经验。",
         "semantic_query": "岗位：C++ 低延迟系统专家。职责：建设高频交易或实时交易基础设施，优化网络收发、内核旁路、RDMA/Solarflare、无锁队列、多线程调度和端到端延迟。要求精通 C++17、Linux、性能 profiling，有极致低延迟系统经验。"
@@ -10433,7 +10388,6 @@
             "PRD",
             "竞品分析",
             "GTM",
-            "售前",
             "B端安全"
           ]
         },
@@ -10623,11 +10577,17 @@
       "query_plan": {
         "constraints": {
           "skills": [
+            "计算机视觉",
+            "多模态",
+            "目标检测",
+            "异常行为识别",
+            "TensorRT",
+            "ONNX",
+            "模型剪枝量化",
+            "内容安全风控",
             "PyTorch",
             "CUDA",
-            "C++",
-            "TensorRT",
-            "ONNX"
+            "C++"
           ]
         },
         "enable_dense": true,
@@ -10960,7 +10920,7 @@
   ],
   "meta": {
     "evidence_index_alias": "resume_evidence_current",
-    "generated_at": "2026-06-29T12:37:03+00:00",
+    "generated_at": "2026-06-29T12:23:06+00:00",
     "index_alias": "resumes_current",
     "limit": 100,
     "qrels": "eval_queries.jsonl",
@@ -10968,18 +10928,18 @@
   },
   "overall": {
     "empty_accuracy": 0.5555555555555556,
-    "forbidden10": 80,
+    "forbidden10": 78,
     "judged": 67,
-    "mrr10": 1.0,
-    "ndcg10": 0.9561008345025007,
-    "ndcg5": 0.9340809049850852,
-    "p10": 0.3776119402985075,
-    "p5": 0.6179104477611941,
+    "mrr10": 0.9850746268656716,
+    "ndcg10": 0.9356679216948014,
+    "ndcg5": 0.9166227120817161,
+    "p10": 0.36716417910447763,
+    "p5": 0.6059701492537314,
     "queries": 76,
-    "r10": 0.9490049751243781,
-    "r100": 0.985820895522388,
-    "r5": 0.8437988628287135,
-    "r50": 0.985820895522388
+    "r10": 0.9246268656716418,
+    "r100": 0.9614427860696517,
+    "r5": 0.8238983653162758,
+    "r50": 0.9614427860696517
   },
   "planner": {
     "evaluated": 76,
@@ -11269,7 +11229,7 @@
           "enable_dense": true,
           "enable_rerank": true,
           "intent": "semantic",
-          "lexical_query": "SAP ABAP 财务模块实施顾问 FICO 企业 ERP 上线",
+          "lexical_query": "SAP ABAP 财务模块实施顾问 FICO 企业ERP上线",
           "semantic_query": "SAP ABAP 财务模块实施顾问，熟悉 FICO 和企业 ERP 上线"
         },
         "expected": {
@@ -11602,7 +11562,7 @@
           "enable_dense": true,
           "enable_rerank": true,
           "intent": "semantic",
-          "lexical_query": "C++ 低延迟 高频交易 实时交易 网络收发 内核旁路 RDMA Solarflare 无锁队列 多线程调度 延迟优化 C++17 Linux 性能 profiling",
+          "lexical_query": "C++ 低延迟 高频交易 实时交易 网络收发 内核旁路 RDMA Solarflare 无锁队列 多线程调度 延迟优化 Linux profiling",
           "semantic_query": "岗位：C++ 低延迟系统专家。职责：建设高频交易或实时交易基础设施，优化网络收发、内核旁路、RDMA/Solarflare、无锁队列、多线程调度和端到端延迟。要求精通 C++17、Linux、性能 profiling，有极致低延迟系统经验。"
         },
         "expected": {
@@ -11989,7 +11949,7 @@
             "enable_dense": true,
             "enable_rerank": true,
             "intent": "semantic",
-            "lexical_query": "C++ 低延迟 高频交易 实时交易 网络收发 内核旁路 RDMA Solarflare 无锁队列 多线程调度 延迟优化 C++17 Linux 性能 profiling",
+            "lexical_query": "C++ 低延迟 高频交易 实时交易 网络收发 内核旁路 RDMA Solarflare 无锁队列 多线程调度 延迟优化 Linux profiling",
             "semantic_query": "岗位：C++ 低延迟系统专家。职责：建设高频交易或实时交易基础设施，优化网络收发、内核旁路、RDMA/Solarflare、无锁队列、多线程调度和端到端延迟。要求精通 C++17、Linux、性能 profiling，有极致低延迟系统经验。"
           },
           "expected": {
@@ -12152,7 +12112,7 @@
             "enable_dense": true,
             "enable_rerank": true,
             "intent": "semantic",
-            "lexical_query": "SAP ABAP 财务模块实施顾问 FICO 企业 ERP 上线",
+            "lexical_query": "SAP ABAP 财务模块实施顾问 FICO 企业ERP上线",
             "semantic_query": "SAP ABAP 财务模块实施顾问，熟悉 FICO 和企业 ERP 上线"
           },
           "expected": {
