@@ -45,9 +45,12 @@ ENABLE_RERANK = True
 RERANK_TOP_N = 20
 DENSE_ABSTAIN_MIN_SAMPLE_SIZE = 20
 DENSE_ABSTAIN_IQR_MULTIPLIER = 1.5
+DENSE_ABSTAIN_MIN_MARGIN = 0.02
 EVIDENCE_POOL_EXTRA_WEIGHTS = (0.30, 0.15)
 QUERY_TERM_COVERAGE_BOOST = 0.001
 MAX_QUERY_COVERAGE_TERMS = 8
+PARTIAL_TERMS_MINIMUM_SHOULD_MATCH = "70%"
+ENTITY_MATCH_MINIMUM_SHOULD_MATCH = "70%"
 COVERAGE_QUERY_PREFIX = "query_term:"
 EVIDENCE_EXACT_QUERY_PREFIX = "evidence_exact:"
 EVIDENCE_PHRASE_QUERY_PREFIX = "evidence_phrase:"
@@ -120,9 +123,12 @@ class QueryPlan:
 
     def to_debug_dict(self) -> dict[str, Any]:
         return {
+            "raw_query": self.raw_query,
             "intent": self.intent,
+            "query_text": self.query_text,
             "lexical_query": self.lexical_query,
             "semantic_query": self.semantic_query,
+            "constraints": self.constraints,
             "must_terms": self.must_terms,
             "should_terms": self.should_terms,
             "enable_dense": self.enable_dense,
@@ -186,6 +192,7 @@ def search(
             filters,
             plan.rank_window_size,
             use_dense=use_dense,
+            query_intent=plan.intent,
         )
         retrieval_warnings.extend(retriever_warnings)
         matched_total = _lexical_total(responses)
@@ -544,14 +551,31 @@ def _query_parser_system_prompt() -> str:
         "}\n\n"
         "判断准则:\n"
         "- lookup: 候选人编号、岗位编号、手机号、邮箱等唯一标识符直接定位查询；dense=false。\n"
-        "- keyword: 关键词检索——学校、公司、专业、姓名、岗位名等实体查询，或含学历/城市/年限+关键词的混合筛选查询；dense=false。注意：只把实体核心名称放入 lexical_query，修饰词如\"实习\"\"大学\"\"硕士\"等不要混进去。例如\"阿里巴巴实习\" → lexical_query=\"阿里巴巴\"。\n"
+        "- keyword: 关键词检索——学校、公司、专业、姓名、岗位名等实体查询；dense=false。注意：只把实体核心名称放入 lexical_query，修饰词如\"实习\"\"大学\"\"硕士\"等不要混进去。例如\"阿里巴巴实习\" → lexical_query=\"阿里巴巴\"。\n"
         "- semantic: 语义检索——自然语言能力描述（如\"做过大规模分布式系统架构设计\"）、多技能组合（如\"Python PyTorch NLP 大模型\"）、长岗位描述或 JD 粘贴；dense=true。\n"
+        "- 学历/城市/年限只是结构化 filter，不决定 intent。抽掉这些 filter 后，如果剩余需求是技能组合、工程能力、项目经验或 JD，intent 必须是 semantic；如果剩余需求只是学校/公司/专业/姓名/岗位实体，intent 才是 keyword。\n"
         "- 学历精确要求（如\"本科\"）放入 degree；学历下限要求（如\"本科及以上\"\"硕士及以上\"）放入 min_degree，不要放入 degree。\n"
         "- 负向约束如\"不要纯推荐排序\"不要变成硬过滤；把核心正向需求放入 semantic_query，负向信息可留在 semantic_query 里。\n"
         "- 即使某些技能也放入 constraints.skills，也不要从 lexical_query/semantic_query 中删除这些技能词；技能词仍然是 BM25 和语义召回的重要线索。\n"
         "- 已放入 constraints 的学历、城市、年限不要再出现在 lexical_query 或 semantic_query 中，避免污染词面检索和 embedding。\n"
+        "- 长 JD 或长自然语言需求中，lexical_query 不要复读原句；必须压缩为核心技能、实体、系统类型、业务短语和高价值检索词，去掉\"岗位\"\"职责\"\"要求\"\"负责\"\"熟悉\"\"优先\"等低信息量叙述词。semantic_query 才保留完整原文和上下文。\n"
         "- keyword 意图下，如果用户只输入了学历、城市、年限这类纯筛选条件（没有任何检索关键词），则 lexical_query 和 semantic_query 都返回空字符串。\n"
         "- skills 可记录用户明确点名的技能，供解释与检索调试；泛化语义能力不要硬塞进 skills。\n"
+        "\n示例:\n"
+        "输入: zhangwei_mock@example.com\n"
+        '输出: {"intent":"lookup","lexical_query":"zhangwei_mock@example.com","semantic_query":"zhangwei_mock@example.com","constraints":{"degree":null,"min_degree":null,"cities":[],"skills":[],"min_years":null},"enable_dense":false}\n'
+        "输入: Columbia University 哥伦比亚大学\n"
+        '输出: {"intent":"keyword","lexical_query":"Columbia University 哥伦比亚大学","semantic_query":"","constraints":{"degree":null,"min_degree":null,"cities":[],"skills":[],"min_years":null},"enable_dense":false}\n'
+        "输入: 北京 硕士 4年以上 RAG LangChain\n"
+        '输出: {"intent":"semantic","lexical_query":"RAG LangChain","semantic_query":"RAG LangChain","constraints":{"degree":null,"min_degree":"硕士","cities":["北京"],"skills":["RAG","LangChain"],"min_years":4},"enable_dense":true}\n'
+        "输入: 深圳 本科 5年以上 Golang Kubernetes\n"
+        '输出: {"intent":"semantic","lexical_query":"Golang Kubernetes","semantic_query":"Golang Kubernetes","constraints":{"degree":"本科","min_degree":null,"cities":["深圳"],"skills":["Golang","Kubernetes"],"min_years":5},"enable_dense":true}\n'
+        "输入: 杭州 硕士 8年以上 Java 架构\n"
+        '输出: {"intent":"semantic","lexical_query":"Java 架构","semantic_query":"Java 架构","constraints":{"degree":null,"min_degree":"硕士","cities":["杭州"],"skills":["Java"],"min_years":8},"enable_dense":true}\n'
+        "输入: 北京交通大学\n"
+        '输出: {"intent":"keyword","lexical_query":"北京交通大学","semantic_query":"","constraints":{"degree":null,"min_degree":null,"cities":[],"skills":[],"min_years":null},"enable_dense":false}\n'
+        "输入: 岗位：LLM/RAG 应用工程师。职责：负责企业知识库问答、文档解析、向量检索、召回排序、Prompt 设计和模型微调，能用 Python、PyTorch、LangChain 或 LlamaIndex 做工程落地。要求：熟悉 RAG 评测、长文本处理和业务系统集成，有 ToB 知识库项目经验优先。\n"
+        '输出: {"intent":"semantic","lexical_query":"LLM RAG 企业知识库问答 文档解析 向量检索 召回排序 Prompt 模型微调 Python PyTorch LangChain LlamaIndex RAG评测 长文本处理 ToB知识库","semantic_query":"岗位：LLM/RAG 应用工程师。职责：负责企业知识库问答、文档解析、向量检索、召回排序、Prompt 设计和模型微调，能用 Python、PyTorch、LangChain 或 LlamaIndex 做工程落地。要求：熟悉 RAG 评测、长文本处理和业务系统集成，有 ToB 知识库项目经验优先。","constraints":{"degree":null,"min_degree":null,"cities":[],"skills":["LLM","RAG","Prompt","Python","PyTorch","LangChain","LlamaIndex"],"min_years":null},"enable_dense":true}\n'
     )
 
 
@@ -762,12 +786,18 @@ def _filter_browse_body(filters: list[dict[str, Any]], size: int) -> dict[str, A
     }
 
 
-def _evidence_body(query_text: str, filters: list[dict[str, Any]], size: int) -> dict[str, Any]:
+def _evidence_body(
+    query_text: str,
+    filters: list[dict[str, Any]],
+    size: int,
+    *,
+    query_intent: str | None = None,
+) -> dict[str, Any]:
     return {
         "size": size,
         "query": {
             "bool": {
-                "must": [_evidence_lexical_query(query_text)],
+                "must": [_evidence_lexical_query(query_text, query_intent=query_intent)],
                 "filter": filters,
             }
         },
@@ -788,9 +818,110 @@ def _evidence_body(query_text: str, filters: list[dict[str, Any]], size: int) ->
     }
 
 
-def _evidence_lexical_query(query_text: str) -> dict[str, Any]:
+def _evidence_lexical_query(
+    query_text: str,
+    *,
+    query_intent: str | None = None,
+) -> dict[str, Any]:
+    if query_intent == INTENT_LOOKUP:
+        return _lookup_lexical_query(query_text)
+
     normalized_degree = _normalize_highest_degree(query_text)
+    queries = [
+        _profile_query(
+            _term_query("application.candidate_no", query_text.upper(), 60, "evidence_exact:candidate_no")
+        ),
+        _profile_query(
+            _term_query("application.position_code", query_text.upper(), 55, "evidence_exact:position_code")
+        ),
+        _profile_query(
+            _term_query("candidate.name.keyword", query_text, 45, "evidence_exact:candidate_name")
+        ),
+        _profile_query(
+            _term_query("candidate.phone", query_text, 45, "evidence_exact:candidate_phone")
+        ),
+        _profile_query(
+            _term_query("candidate.email", query_text, 45, "evidence_exact:candidate_email")
+        ),
+        _section_query(
+            "skills",
+            _term_query("skills", query_text, 40, "evidence_exact:skills"),
+        ),
+        # 实体字段: term (精确 token 匹配) + match (分词后受控召回)
+        # term 保证 "阿里巴巴" 精准命中，match 保证 "阿里巴巴实习" 也能通过分词命中。
+        # match 使用 minimum_should_match，避免 "Columbia University 哥伦比亚大学"
+        # 只凭 "大学" 这类泛词把候选池扩到全库。
+        _profile_query(_entity_field_query(
+            "candidate.all_schools.keyword", "candidate.all_schools",
+            query_text, 36, "evidence_exact:candidate_school", "evidence_match:candidate_school",
+        )),
+        _profile_query(_entity_field_query(
+            "candidate.major.keyword", "candidate.major",
+            query_text, 34, "evidence_exact:candidate_major", "evidence_match:candidate_major",
+        )),
+        _profile_query(_entity_field_query(
+            "application.company", "application.company",
+            query_text, 30, "evidence_exact:application_company", "evidence_match:company",
+        )),
+        _profile_query(_entity_field_query(
+            "application.position_name.keyword", "application.position_name",
+            query_text, 30, "evidence_exact:position_name", "evidence_match:position_name",
+        )),
+        _profile_query(
+            _term_query("candidate.highest_degree", normalized_degree, 15, "evidence_exact:highest_degree")
+        ),
+        _term_query("title.keyword", query_text, 18, "evidence_exact:title"),
+        _profile_query(
+            _match_phrase_query("candidate.major.phrase", query_text, 24, "evidence_phrase:candidate_major")
+        ),
+        _profile_query(
+            _match_phrase_query("candidate.all_schools.phrase", query_text, 18, "evidence_phrase:candidate_school")
+        ),
+        _profile_query(
+            _match_phrase_query(
+                "application.position_name.phrase",
+                query_text,
+                18,
+                "evidence_phrase:position_name",
+            ),
+        ),
+        _match_phrase_query("title.phrase", query_text, 12, "evidence_phrase:title"),
+        _match_phrase_query("text.phrase", query_text, 10, "evidence_phrase:text"),
+        {
+            "multi_match": {
+                "_name": "evidence_term:all_terms:W4",
+                "query": query_text,
+                "fields": [
+                    "title^5",
+                    "text^4",
+                    "skills_text^5",
+                ],
+                "type": "best_fields",
+                "operator": "and",
+                "boost": 4,
+            }
+        },
+        _partial_terms_query(query_text),
+    ]
     scoring_query = {
+        "dis_max": {
+            "tie_breaker": 0.0,
+            "queries": queries,
+        }
+    }
+    coverage_should = _evidence_term_coverage_queries(query_text)
+    if not coverage_should:
+        return scoring_query
+    return {
+        "bool": {
+            "must": [scoring_query],
+            "should": coverage_should,
+        }
+    }
+
+
+def _lookup_lexical_query(query_text: str) -> dict[str, Any]:
+    return {
         "dis_max": {
             "tie_breaker": 0.0,
             "queries": [
@@ -809,86 +940,25 @@ def _evidence_lexical_query(query_text: str) -> dict[str, Any]:
                 _profile_query(
                     _term_query("candidate.email", query_text, 45, "evidence_exact:candidate_email")
                 ),
-                _section_query(
-                    "skills",
-                    _term_query("skills", query_text, 40, "evidence_exact:skills"),
-                ),
-                # 实体字段: term (精确 token 匹配) + match (分词后 OR 匹配)
-                # term 保证 "阿里巴巴" 精准命中，match 保证 "阿里巴巴实习" 也能通过分词命中
-                _profile_query(_entity_field_query(
-                    "candidate.all_schools.keyword", "candidate.all_schools",
-                    query_text, 36, "evidence_exact:candidate_school", "evidence_match:candidate_school",
-                )),
-                _profile_query(_entity_field_query(
-                    "candidate.major.keyword", "candidate.major",
-                    query_text, 34, "evidence_exact:candidate_major", "evidence_match:candidate_major",
-                )),
-                _profile_query(_entity_field_query(
-                    "application.company", "application.company",
-                    query_text, 30, "evidence_exact:application_company", "evidence_match:company",
-                )),
-                _profile_query(_entity_field_query(
-                    "application.position_name.keyword", "application.position_name",
-                    query_text, 30, "evidence_exact:position_name", "evidence_match:position_name",
-                )),
-                _profile_query(
-                    _term_query("candidate.highest_degree", normalized_degree, 15, "evidence_exact:highest_degree")
-                ),
-                _term_query("title.keyword", query_text, 18, "evidence_exact:title"),
-                _profile_query(
-                    _match_phrase_query("candidate.major.phrase", query_text, 24, "evidence_phrase:candidate_major")
-                ),
-                _profile_query(
-                    _match_phrase_query("candidate.all_schools.phrase", query_text, 18, "evidence_phrase:candidate_school")
-                ),
-                _profile_query(
-                    _match_phrase_query(
-                        "application.position_name.phrase",
-                        query_text,
-                        18,
-                        "evidence_phrase:position_name",
-                    ),
-                ),
-                _match_phrase_query("title.phrase", query_text, 12, "evidence_phrase:title"),
-                _match_phrase_query("text.phrase", query_text, 10, "evidence_phrase:text"),
-                {
-                    "multi_match": {
-                        "_name": "evidence_term:all_terms:W4",
-                        "query": query_text,
-                        "fields": [
-                            "title^5",
-                            "text^4",
-                            "skills_text^5",
-                        ],
-                        "type": "best_fields",
-                        "operator": "and",
-                        "boost": 4,
-                    }
-                },
-                {
-                    "multi_match": {
-                        "_name": "evidence_term:partial_terms:W1",
-                        "query": query_text,
-                        "fields": [
-                            "title^5",
-                            "text^4",
-                            "skills_text^5",
-                        ],
-                        "type": "best_fields",
-                        "operator": "or",
-                        "boost": 1,
-                    }
-                },
             ],
         }
     }
-    coverage_should = _evidence_term_coverage_queries(query_text)
-    if not coverage_should:
-        return scoring_query
+
+
+def _partial_terms_query(query_text: str) -> dict[str, Any]:
     return {
-        "bool": {
-            "must": [scoring_query],
-            "should": coverage_should,
+        "multi_match": {
+            "_name": "evidence_term:partial_terms:W1",
+            "query": query_text,
+            "fields": [
+                "title^5",
+                "text^4",
+                "skills_text^5",
+            ],
+            "type": "best_fields",
+            "operator": "or",
+            "minimum_should_match": PARTIAL_TERMS_MINIMUM_SHOULD_MATCH,
+            "boost": 1,
         }
     }
 
@@ -905,14 +975,24 @@ def _entity_field_query(
 
     term 查询：当 query 本身就是一个完整 token 时精准命中（如 "阿里巴巴"）。
     match 查询：当 query 含修饰词时（如 "阿里巴巴实习"），经分词后在 text 字段
-    上做 OR 匹配，降低 boost 避免排在精准匹配前面。
+    上做受控 OR 匹配，降低 boost 避免排在精准匹配前面。
     """
     return {
         "dis_max": {
             "tie_breaker": 0.0,
             "queries": [
                 {"term": {keyword_field: {"value": query_text, "boost": boost, "_name": f"{term_name}:W{boost}"}}},
-                {"match": {text_field: {"query": query_text, "operator": "or", "boost": boost * 0.55, "_name": f"{match_name}:W{boost * 0.55}"}}},
+                {
+                    "match": {
+                        text_field: {
+                            "query": query_text,
+                            "operator": "or",
+                            "minimum_should_match": ENTITY_MATCH_MINIMUM_SHOULD_MATCH,
+                            "boost": boost * 0.55,
+                            "_name": f"{match_name}:W{boost * 0.55}",
+                        }
+                    }
+                },
             ],
         }
     }
@@ -1040,7 +1120,8 @@ def _dense_confidence(response: dict[str, Any]) -> dict[str, Any]:
     q3 = _percentile(scores, 0.75)
     iqr = q3 - q1
     threshold = q3 + (DENSE_ABSTAIN_IQR_MULTIPLIER * iqr)
-    abstained = not (iqr > 0 and top_score > threshold)
+    accepted_threshold = threshold + DENSE_ABSTAIN_MIN_MARGIN
+    abstained = not (iqr > 0 and top_score > accepted_threshold)
     return {
         "abstained": abstained,
         "reason": "flat_distribution" if abstained else "clear_head",
@@ -1050,6 +1131,8 @@ def _dense_confidence(response: dict[str, Any]) -> dict[str, Any]:
         "q3": round(q3, 6),
         "iqr": round(iqr, 6),
         "threshold": round(threshold, 6),
+        "min_margin": round(DENSE_ABSTAIN_MIN_MARGIN, 6),
+        "accepted_threshold": round(accepted_threshold, 6),
     }
 
 
@@ -1071,12 +1154,13 @@ def _run_hybrid_search(
     rank_window_size: int,
     *,
     use_dense: bool,
+    query_intent: str | None = None,
 ) -> tuple[list[dict[str, Any]], list[str]]:
     requests_to_run = [
         (
             EVIDENCE_RETRIEVER,
             EVIDENCE_RRF_WEIGHT,
-            _evidence_body(query_text, filters, rank_window_size),
+            _evidence_body(query_text, filters, rank_window_size, query_intent=query_intent),
             None,
         ),
     ]

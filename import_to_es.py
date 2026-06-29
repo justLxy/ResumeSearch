@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -721,7 +722,9 @@ def _enrich_doc(doc: dict[str, Any]) -> dict[str, Any]:
     doc.pop("search_text", None)
     doc.pop("embedding", None)
     candidate = doc.setdefault("candidate", {})
-    years_experience = _estimate_years_experience(doc)
+    years_experience = _coerce_years_experience(candidate.get("years_experience"))
+    if years_experience is None:
+        years_experience = _estimate_years_experience(doc)
     if years_experience is None:
         candidate.pop("years_experience", None)
     else:
@@ -963,6 +966,23 @@ def _drop_index_debug_fields(value: Any) -> Any:
         for item in value:
             _drop_index_debug_fields(item)
     return value
+
+
+def _coerce_years_experience(value: Any) -> float | None:
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        years = float(value)
+    elif isinstance(value, str):
+        match = re.search(r"\d+(?:\.\d+)?", value.strip())
+        if not match:
+            return None
+        years = float(match.group(0))
+    else:
+        return None
+    if years < 0:
+        return None
+    return round(years, 1)
 
 
 def _estimate_years_experience(doc: dict[str, Any]) -> float | None:

@@ -3,6 +3,7 @@ from evaluate_search import (
     QueryResult,
     build_report,
     compare_reports,
+    evaluate_query_plan,
     load_report,
     _search_params,
     write_report,
@@ -71,6 +72,42 @@ def test_report_json_round_trip(tmp_path) -> None:
 
     assert loaded["overall"]["queries"] == 1
     assert loaded["by_type"]["skill_combo"]["queries"] == 1
+
+
+def test_build_report_includes_query_planner_metrics() -> None:
+    result = _result(
+        case_id="structured_rag",
+        case_type="structured_filter",
+        query="北京 硕士 4年以上 RAG LangChain",
+        relevant_ids={"resume-1"},
+        returned_ids=["resume-1"],
+        expected_plan={
+            "intent": "semantic",
+            "lexical_query": "RAG LangChain",
+            "semantic_query": "RAG LangChain",
+            "enable_dense": True,
+            "enable_rerank": True,
+        },
+        query_plan={
+            "intent": "keyword",
+            "lexical_query": "RAG LangChain",
+            "semantic_query": "RAG LangChain",
+            "enable_dense": False,
+            "enable_rerank": False,
+        },
+    )
+
+    report = build_report([result], qrels_path="eval_queries.jsonl", limit=10)
+
+    assert report["planner"]["evaluated"] == 1
+    assert report["planner"]["mismatch_count"] == 1
+    assert report["planner"]["field_accuracy"]["lexical_query"] == 1.0
+    assert report["planner"]["field_accuracy"]["intent"] == 0.0
+    assert report["details"][0]["planner_eval"]["mismatched_fields"] == [
+        "intent",
+        "enable_dense",
+        "enable_rerank",
+    ]
 
 
 def test_compare_reports_returns_metric_deltas() -> None:
@@ -187,7 +224,11 @@ def _result(
     ndcg_at_10: float = 0.0,
     forbidden_at_10: int = 0,
     empty_success: bool | None = None,
+    expected_plan: dict | None = None,
+    query_plan: dict | None = None,
 ) -> QueryResult:
+    expected_plan = expected_plan or {}
+    query_plan = query_plan or {}
     return QueryResult(
         case=EvalCase(
             case_id=case_id,
@@ -197,8 +238,11 @@ def _result(
             relevant_ids=relevant_ids,
             forbidden_ids=set(),
             expect_empty=empty_success is not None,
+            expected_plan=expected_plan,
         ),
         returned_ids=returned_ids,
+        query_plan=query_plan,
+        planner_eval=evaluate_query_plan(query_plan, expected_plan),
         precision_at_5=precision_at_5,
         precision_at_10=precision_at_10,
         recall_at_5=recall_at_5,

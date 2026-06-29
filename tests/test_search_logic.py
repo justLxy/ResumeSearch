@@ -21,6 +21,7 @@ from app import (
     _normalize_limit,
     _normalize_offset,
     _plan_query,
+    _query_parser_system_prompt,
     _rerank_document,
     _rerank_results,
     _rrf_merge,
@@ -33,9 +34,11 @@ from import_to_es import (
     SEMANTIC_PROFILE_VERSION,
     VECTOR_DIMS,
     INDEX_BODY,
+    _enrich_doc,
     _resume_evidence_docs,
     _estimate_years_experience,
 )
+from evaluate_search import evaluate_query_plan
 
 
 class SearchLogicTests(unittest.TestCase):
@@ -88,6 +91,43 @@ class SearchLogicTests(unittest.TestCase):
         self.assertEqual(calls[0]["json"]["thinking"], {"type": "disabled"})
         self.assertFalse(calls[0]["json"]["stream"])
 
+    def test_query_parser_prompt_routes_structured_skill_queries_to_semantic(self) -> None:
+        prompt = _query_parser_system_prompt()
+
+        self.assertIn("学历/城市/年限只是结构化 filter，不决定 intent", prompt)
+        self.assertIn("lexical_query 不要复读原句", prompt)
+        self.assertIn("北京 硕士 4年以上 RAG LangChain", prompt)
+        self.assertIn('"intent":"semantic","lexical_query":"RAG LangChain"', prompt)
+        self.assertIn(
+            '"lexical_query":"LLM RAG 企业知识库问答 文档解析 向量检索 召回排序 Prompt 模型微调 Python PyTorch LangChain LlamaIndex RAG评测 长文本处理 ToB知识库"',
+            prompt,
+        )
+
+    def test_planner_eval_reports_field_mismatches(self) -> None:
+        planner_eval = evaluate_query_plan(
+            {
+                "intent": "keyword",
+                "lexical_query": "RAG LangChain",
+                "semantic_query": "RAG LangChain",
+                "enable_dense": False,
+                "enable_rerank": False,
+            },
+            {
+                "intent": "semantic",
+                "lexical_query": "RAG LangChain",
+                "semantic_query": "RAG LangChain",
+                "enable_dense": True,
+                "enable_rerank": True,
+            },
+        )
+
+        self.assertFalse(planner_eval["exact_match"])
+        self.assertEqual(
+            planner_eval["mismatched_fields"],
+            ["intent", "enable_dense", "enable_rerank"],
+        )
+        self.assertTrue(planner_eval["field_matches"]["lexical_query"])
+
     def test_search_limit_defaults_to_full_result_window(self) -> None:
         self.assertEqual(_normalize_limit(None), 100)
         self.assertEqual(_normalize_limit(0), 100)
@@ -134,6 +174,34 @@ class SearchLogicTests(unittest.TestCase):
             ],
         }
         self.assertIsNone(_estimate_years_experience(doc))
+
+    def test_enrich_doc_preserves_explicit_years_experience(self) -> None:
+        doc = {
+            "candidate": {"years_experience": 4.0},
+            "application": {"apply_time": "2026-06-14"},
+            "internships": [
+                {
+                    "start_date": "2022-07-01",
+                    "end_date": "2026-06-01",
+                }
+            ],
+        }
+
+        enriched = _enrich_doc(doc)
+
+        self.assertEqual(enriched["candidate"]["years_experience"], 4.0)
+        self.assertEqual(_estimate_years_experience(doc), 3.9)
+
+    def test_enrich_doc_normalizes_string_years_experience(self) -> None:
+        doc = {
+            "candidate": {"years_experience": "4年以上"},
+            "application": {"apply_time": "2026-06-14"},
+            "internships": [],
+        }
+
+        enriched = _enrich_doc(doc)
+
+        self.assertEqual(enriched["candidate"]["years_experience"], 4.0)
 
     def test_default_snippet_lists_project_names(self) -> None:
         snippet = _default_snippet(
@@ -227,7 +295,7 @@ class SearchLogicTests(unittest.TestCase):
             ([0.8443] * 50)
             + ([0.8502] * 24)
             + ([0.8569] * 21)
-            + [0.8967, 0.8932, 0.8910, 0.8873, 0.8805]
+            + [0.9100, 0.9032, 0.8990, 0.8923, 0.8805]
         )
         response = _response(
             EVIDENCE_DENSE_RETRIEVER,
@@ -238,6 +306,25 @@ class SearchLogicTests(unittest.TestCase):
 
         self.assertFalse(confidence["abstained"])
         self.assertEqual(confidence["reason"], "clear_head")
+        self.assertIn("accepted_threshold", confidence)
+
+    def test_dense_confidence_abstains_when_clear_head_margin_is_too_small(self) -> None:
+        scores = (
+            ([0.639084] * 65)
+            + ([0.653257] * 63)
+            + ([0.66743] * 64)
+            + [0.719456, 0.701, 0.695, 0.690, 0.685]
+        )
+        response = _response(
+            EVIDENCE_DENSE_RETRIEVER,
+            [_hit(f"dense-{index}", f"候选人 {index}", score=score) for index, score in enumerate(scores)],
+        )
+
+        confidence = _dense_confidence(response)
+
+        self.assertTrue(confidence["abstained"])
+        self.assertGreater(confidence["top_score"], confidence["threshold"])
+        self.assertLessEqual(confidence["top_score"], confidence["accepted_threshold"])
 
     def test_hybrid_search_clears_dense_hits_when_dense_abstains(self) -> None:
         flat_scores = (
@@ -832,12 +919,32 @@ class SearchLogicTests(unittest.TestCase):
             ],
         )
 
-    def test_evidence_partial_terms_is_any_term_fallback(self) -> None:
+    def test_evidence_partial_terms_requires_query_coverage(self) -> None:
         body = _evidence_lexical_query("Python Java C++")
         partial_query = _find_multi_match_by_name(body, "evidence_term:partial_terms:W1")
 
         self.assertEqual(partial_query["operator"], "or")
-        self.assertNotIn("minimum_should_match", partial_query)
+        self.assertEqual(partial_query["minimum_should_match"], "70%")
+
+    def test_lookup_lexical_query_uses_exact_profile_fields_only(self) -> None:
+        query_json = json.dumps(
+            _evidence_lexical_query("zhangwei_mock@example.com", query_intent=INTENT_LOOKUP),
+            ensure_ascii=False,
+        )
+
+        self.assertIn("candidate.email", query_json)
+        self.assertIn("application.candidate_no", query_json)
+        self.assertNotIn("partial_terms", query_json)
+        self.assertNotIn("multi_match", query_json)
+
+    def test_entity_field_match_requires_query_coverage(self) -> None:
+        query_json = json.dumps(
+            _evidence_lexical_query("Columbia University 哥伦比亚大学"),
+            ensure_ascii=False,
+        )
+
+        self.assertIn('"minimum_should_match": "70%"', query_json)
+        self.assertIn("evidence_match:candidate_school", query_json)
 
     def test_query_plan_uses_llm_keyword_constraints_without_rerank(self) -> None:
         with patch(
@@ -880,6 +987,10 @@ class SearchLogicTests(unittest.TestCase):
         self.assertIn({"term": {"candidate.highest_degree": "本科"}}, plan.filters)
         self.assertIn({"terms": {"application.expected_work_cities": ["北京"]}}, plan.filters)
         self.assertIn({"range": {"candidate.years_experience": {"gte": 0.5}}}, plan.filters)
+        debug_plan = plan.to_debug_dict()
+        self.assertEqual(debug_plan["raw_query"], "0.5年以上 北京 本科 推荐系统")
+        self.assertEqual(debug_plan["query_text"], "推荐系统")
+        self.assertEqual(debug_plan["constraints"]["skills"], ["推荐系统"])
 
     def test_query_plan_treats_degree_floor_as_range_filter(self) -> None:
         with patch(

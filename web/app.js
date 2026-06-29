@@ -111,9 +111,44 @@ const intentLabelMap = {
   semantic: "语义检索",
 };
 
+const parserFieldLabels = {
+  raw_query: "原始 Query",
+  intent: "查询意图",
+  query_text: "执行词面 Query",
+  lexical_query: "词面检索",
+  semantic_query: "语义检索",
+  constraints: "结构化约束",
+  degree: "学历精确",
+  min_degree: "学历下限",
+  cities: "城市",
+  skills: "技能",
+  min_years: "最低年限",
+  must_terms: "必须词",
+  should_terms: "可选词",
+  enable_dense: "向量召回",
+  enable_rerank: "精排重排",
+  rank_window_size: "召回窗口",
+  filter_count: "过滤器数量",
+};
+
+const parserConsumedPlanFields = new Set([
+  "raw_query",
+  "intent",
+  "query_text",
+  "lexical_query",
+  "semantic_query",
+  "constraints",
+  "must_terms",
+  "should_terms",
+  "enable_dense",
+  "enable_rerank",
+  "rank_window_size",
+  "filter_count",
+]);
+
 function formatParserSummary(payload) {
   const plan = payload?.query_plan || {};
-  const constraints = payload?.parsed_constraints || {};
+  const constraints = plan.constraints || payload?.parsed_constraints || {};
   const intent = plan.intent || "unknown";
   const intentLabel = intentLabelMap[intent] || intent;
   const lexical = String(plan.lexical_query || payload?.effective_query || "").trim();
@@ -122,37 +157,60 @@ function formatParserSummary(payload) {
   const semanticText = semantic || lexical || "—";
   const filters = formatParserFilters(constraints);
   const denseEnabled = Boolean(plan.enable_dense);
-
-  // 展开面板里的详情行
-  const rows = [
-    ["查询意图", intentLabel],
-    ["词面检索", lexicalText],
-  ];
-  // 只有向量召回启用时才展示语义检索文本，否则显示"未启用"
-  if (denseEnabled) {
-    rows.push(["语义检索", semanticText]);
-  }
-  rows.push(["向量召回", denseEnabled ? "已启用" : "未启用"]);
-  if (filters) {
-    rows.push(["筛选条件", filters]);
-  }
+  const rerankEnabled = Boolean(plan.enable_rerank);
 
   const title = denseEnabled
     ? `意图=${intentLabel} | 词面=${lexicalText} | 语义=${semanticText}${filters ? ` | 过滤=${filters}` : ""}`
     : `意图=${intentLabel} | 词面=${lexicalText} | 向量召回=未启用${filters ? ` | 过滤=${filters}` : ""}`;
 
-  const detailHtml = `
-    <div class="parser-detail">
-      ${rows
-        .map(([label, value]) => `
-          <div class="parser-row">
-            <span class="parser-key">${escapeHtml(label)}</span>
-            <span class="parser-value">${escapeHtml(value)}</span>
-          </div>
-        `)
-        .join("")}
-    </div>
-  `;
+  const sections = [
+    {
+      title: "意图与路由",
+      rows: [
+        parserRow("intent", intentLabel),
+        parserRow("enable_dense", denseEnabled, { type: "boolean" }),
+        parserRow("enable_rerank", rerankEnabled, { type: "boolean" }),
+      ],
+    },
+    {
+      title: "查询文本",
+      wide: true,
+      rows: [
+        parserRow("raw_query", plan.raw_query ?? payload?.query ?? state.query),
+        parserRow("query_text", plan.query_text ?? payload?.effective_query),
+        parserRow("lexical_query", plan.lexical_query),
+        parserRow("semantic_query", plan.semantic_query),
+      ],
+    },
+    {
+      title: "结构化约束",
+      rows: [
+        parserRow("degree", constraints.degree),
+        parserRow("min_degree", constraints.min_degree),
+        parserRow("cities", constraints.cities, { type: "list" }),
+        parserRow("skills", constraints.skills, { type: "list" }),
+        parserRow("min_years", constraints.min_years),
+      ],
+    },
+    {
+      title: "术语与执行参数",
+      rows: [
+        parserRow("must_terms", plan.must_terms, { type: "list" }),
+        parserRow("should_terms", plan.should_terms, { type: "list" }),
+        parserRow("rank_window_size", plan.rank_window_size),
+        parserRow("filter_count", plan.filter_count),
+      ],
+    },
+  ];
+
+  const extraRows = Object.entries(plan)
+    .filter(([key]) => !parserConsumedPlanFields.has(key))
+    .map(([key, value]) => parserRow(key, value));
+  if (extraRows.length) {
+    sections.push({ title: "其他字段", rows: extraRows, wide: true });
+  }
+
+  const detailHtml = `<div class="parser-detail">${sections.map(renderParserSection).join("")}</div>`;
 
   return {
     title,
@@ -164,6 +222,9 @@ function formatParserSummary(payload) {
           ${denseEnabled
             ? '<span class="parser-chip parser-chip-dense">向量召回</span>'
             : ""}
+          ${rerankEnabled
+            ? '<span class="parser-chip parser-chip-rerank">精排重排</span>'
+            : ""}
         </summary>
         <div class="parser-panel">
           ${detailHtml}
@@ -173,9 +234,79 @@ function formatParserSummary(payload) {
   };
 }
 
+function parserRow(key, value, options = {}) {
+  return {
+    key,
+    label: parserFieldLabels[key] || key,
+    value,
+    type: options.type || inferParserValueType(value),
+  };
+}
+
+function inferParserValueType(value) {
+  if (typeof value === "boolean") return "boolean";
+  if (Array.isArray(value)) return "list";
+  if (value && typeof value === "object") return "object";
+  return "text";
+}
+
+function renderParserSection(section) {
+  const rows = section.rows
+    .map(renderParserRow)
+    .join("");
+  return `
+    <section class="parser-section${section.wide ? " parser-section-wide" : ""}">
+      <div class="parser-section-title">${escapeHtml(section.title)}</div>
+      <div class="parser-section-body">${rows}</div>
+    </section>
+  `;
+}
+
+function renderParserRow(row) {
+  return `
+    <div class="parser-row">
+      <span class="parser-key">${escapeHtml(row.label)}</span>
+      <span class="parser-value">${formatParserValue(row.value, row.type)}</span>
+    </div>
+  `;
+}
+
+function formatParserValue(value, type = inferParserValueType(value)) {
+  if (value === null || value === undefined || value === "") {
+    return '<span class="parser-empty">未抽取</span>';
+  }
+  if (type === "boolean") {
+    return `<span class="parser-status ${value ? "is-on" : "is-off"}">${value ? "已启用" : "未启用"}</span>`;
+  }
+  if (type === "list") {
+    if (!Array.isArray(value) || !value.length) {
+      return '<span class="parser-empty">未抽取</span>';
+    }
+    return `<span class="parser-token-list">${value.map((item) => `<span class="parser-token">${escapeHtml(item)}</span>`).join("")}</span>`;
+  }
+  if (type === "object" && value && typeof value === "object") {
+    const entries = Object.entries(value);
+    if (!entries.length) {
+      return '<span class="parser-empty">未抽取</span>';
+    }
+    return `
+      <span class="parser-nested">
+        ${entries.map(([key, nestedValue]) => `
+          <span class="parser-nested-row">
+            <span class="parser-nested-key">${escapeHtml(parserFieldLabels[key] || key)}</span>
+            <span class="parser-nested-value">${formatParserValue(nestedValue)}</span>
+          </span>
+        `).join("")}
+      </span>
+    `;
+  }
+  return escapeHtml(value);
+}
+
 function formatParserFilters(constraints) {
   const parts = [];
   if (constraints.degree) parts.push(constraints.degree);
+  if (constraints.min_degree) parts.push(`${constraints.min_degree}及以上`);
   if (Array.isArray(constraints.cities) && constraints.cities.length) {
     parts.push(`城市:${constraints.cities.join("、")}`);
   }

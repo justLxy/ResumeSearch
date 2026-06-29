@@ -24,6 +24,7 @@ class EvalCase:
     relevant_ids: set[str]
     forbidden_ids: set[str]
     expect_empty: bool
+    expected_plan: dict[str, Any] = field(default_factory=dict)
     api_params: dict[str, Any] = field(default_factory=dict)
 
 
@@ -46,6 +47,8 @@ class EvalCaseSet:
 class QueryResult:
     case: EvalCase
     returned_ids: list[str]
+    query_plan: dict[str, Any]
+    planner_eval: dict[str, Any]
     precision_at_5: float
     precision_at_10: float
     recall_at_5: float
@@ -90,6 +93,7 @@ def main() -> None:
 
     print_summary_table(report["overall"])
     print_type_summary(report)
+    print_planner_summary(report)
     if case_set.skipped:
         print_skipped_cases(case_set.skipped)
     if args.details:
@@ -148,10 +152,18 @@ def load_cases(path: Path) -> EvalCaseSet:
                 relevant_ids=relevant_ids,
                 forbidden_ids=forbidden_ids,
                 expect_empty=bool(raw.get("expect_empty", False)),
+                expected_plan=_load_expected_plan(raw),
                 api_params=_load_api_params(raw),
             )
         )
     return EvalCaseSet(cases=cases, skipped=skipped)
+
+
+def _load_expected_plan(raw: dict[str, Any]) -> dict[str, Any]:
+    expected_plan = raw.get("expected_plan") or {}
+    if not isinstance(expected_plan, dict):
+        raise ValueError(f"{raw.get('id', '<unknown>')} expected_plan must be an object")
+    return expected_plan
 
 
 def _load_api_params(raw: dict[str, Any]) -> dict[str, Any]:
@@ -180,10 +192,14 @@ def evaluate_case(client: TestClient, case: EvalCase, limit: int) -> QueryResult
     response.raise_for_status()
     payload = response.json()
     returned_ids = [item["id"] for item in payload.get("results", [])]
+    query_plan = payload.get("query_plan") if isinstance(payload.get("query_plan"), dict) else {}
+    planner_eval = evaluate_query_plan(query_plan, case.expected_plan)
 
     return QueryResult(
         case=case,
         returned_ids=returned_ids,
+        query_plan=query_plan,
+        planner_eval=planner_eval,
         precision_at_5=precision_at(returned_ids, case.relevant_ids, 5),
         precision_at_10=precision_at(returned_ids, case.relevant_ids, 10),
         recall_at_5=recall_at(returned_ids, case.relevant_ids, 5),
@@ -260,6 +276,65 @@ def _hits_at(returned_ids: list[str], relevant_ids: set[str], k: int) -> int:
     return sum(1 for doc_id in returned_ids[:k] if doc_id in relevant_ids)
 
 
+PLANNER_EVAL_FIELDS = (
+    "intent",
+    "lexical_query",
+    "semantic_query",
+    "enable_dense",
+    "enable_rerank",
+)
+PLANNER_BOOL_FIELDS = {"enable_dense", "enable_rerank"}
+
+
+def evaluate_query_plan(actual: dict[str, Any], expected: dict[str, Any]) -> dict[str, Any]:
+    expected_fields = [field for field in PLANNER_EVAL_FIELDS if field in expected]
+    if not expected_fields:
+        return {
+            "available": False,
+            "fields": 0,
+            "matched": 0,
+            "exact_match": None,
+            "field_matches": {},
+            "mismatched_fields": [],
+            "expected": {},
+            "actual": {},
+        }
+
+    expected_values = {
+        field: _normalize_planner_value(field, expected.get(field))
+        for field in expected_fields
+    }
+    actual_values = {
+        field: _normalize_planner_value(field, actual.get(field))
+        for field in expected_fields
+    }
+    field_matches = {
+        field: actual_values[field] == expected_values[field]
+        for field in expected_fields
+    }
+    mismatched_fields = [
+        field for field, matched in field_matches.items() if not matched
+    ]
+    return {
+        "available": True,
+        "fields": len(expected_fields),
+        "matched": len(expected_fields) - len(mismatched_fields),
+        "exact_match": not mismatched_fields,
+        "field_matches": field_matches,
+        "mismatched_fields": mismatched_fields,
+        "expected": expected_values,
+        "actual": actual_values,
+    }
+
+
+def _normalize_planner_value(field: str, value: Any) -> Any:
+    if field in PLANNER_BOOL_FIELDS:
+        return None if value is None else bool(value)
+    if value is None:
+        return ""
+    return " ".join(str(value).strip().split())
+
+
 def build_report(
     results: list[QueryResult],
     *,
@@ -279,6 +354,8 @@ def build_report(
         },
         "overall": summarize(results),
         "by_type": summarize_by_type(results),
+        "planner": summarize_planner(results),
+        "planner_by_type": summarize_planner_by_type(results),
         "details": [result_to_detail(result) for result in results],
         "skipped": [skipped_case_to_detail(case) for case in skipped_cases],
     }
@@ -318,12 +395,66 @@ def summarize_by_type(results: list[QueryResult]) -> dict[str, dict[str, Any]]:
     }
 
 
+def summarize_planner(results: list[QueryResult]) -> dict[str, Any]:
+    evaluated = [result for result in results if result.planner_eval.get("available")]
+    field_totals: dict[str, int] = {field: 0 for field in PLANNER_EVAL_FIELDS}
+    field_hits: dict[str, int] = {field: 0 for field in PLANNER_EVAL_FIELDS}
+    mismatches: list[dict[str, Any]] = []
+
+    for result in evaluated:
+        field_matches = result.planner_eval.get("field_matches") or {}
+        for field, matched in field_matches.items():
+            field_totals[field] = field_totals.get(field, 0) + 1
+            if matched:
+                field_hits[field] = field_hits.get(field, 0) + 1
+        if not result.planner_eval.get("exact_match"):
+            mismatches.append(
+                {
+                    "id": result.case.case_id,
+                    "type": result.case.case_type,
+                    "query": result.case.query,
+                    "mismatched_fields": result.planner_eval.get("mismatched_fields") or [],
+                    "expected": result.planner_eval.get("expected") or {},
+                    "actual": result.planner_eval.get("actual") or {},
+                }
+            )
+
+    field_accuracy = {
+        field: (field_hits.get(field, 0) / total if total else None)
+        for field, total in field_totals.items()
+    }
+    return {
+        "evaluated": len(evaluated),
+        "exact_match_accuracy": (
+            mean(1.0 if result.planner_eval.get("exact_match") else 0.0 for result in evaluated)
+            if evaluated
+            else None
+        ),
+        "field_accuracy": field_accuracy,
+        "mismatch_count": len(mismatches),
+        "mismatches": mismatches,
+    }
+
+
+def summarize_planner_by_type(results: list[QueryResult]) -> dict[str, dict[str, Any]]:
+    grouped: dict[str, list[QueryResult]] = {}
+    for result in results:
+        grouped.setdefault(result.case.case_type, []).append(result)
+    return {
+        case_type: summarize_planner(rows)
+        for case_type, rows in sorted(grouped.items())
+    }
+
+
 def result_to_detail(result: QueryResult) -> dict[str, Any]:
     return {
         "id": result.case.case_id,
         "type": result.case.case_type,
         "query": result.case.query,
         "api_params": result.case.api_params,
+        "expected_plan": result.case.expected_plan,
+        "query_plan": result.query_plan,
+        "planner_eval": result.planner_eval,
         "returned_ids": result.returned_ids,
         "relevant_hits_at_10": [
             doc_id for doc_id in result.returned_ids[:10] if doc_id in result.case.relevant_ids
@@ -400,6 +531,9 @@ def compare_reports(current: dict[str, Any], previous: dict[str, Any]) -> dict[s
     current_by_type = current.get("by_type") or {}
     previous_by_type = previous.get("by_type") or {}
     case_types = sorted(set(current_by_type) | set(previous_by_type))
+    current_planner_by_type = current.get("planner_by_type") or {}
+    previous_planner_by_type = previous.get("planner_by_type") or {}
+    planner_case_types = sorted(set(current_planner_by_type) | set(previous_planner_by_type))
     return {
         "overall": compare_summary(current.get("overall") or {}, previous.get("overall") or {}),
         "by_type": {
@@ -408,6 +542,14 @@ def compare_reports(current: dict[str, Any], previous: dict[str, Any]) -> dict[s
                 previous_by_type.get(case_type) or {},
             )
             for case_type in case_types
+        },
+        "planner": compare_planner_summary(current.get("planner") or {}, previous.get("planner") or {}),
+        "planner_by_type": {
+            case_type: compare_planner_summary(
+                current_planner_by_type.get(case_type) or {},
+                previous_planner_by_type.get(case_type) or {},
+            )
+            for case_type in planner_case_types
         },
     }
 
@@ -435,6 +577,45 @@ def _metric_delta(current_value: Any, previous_value: Any) -> float | None:
     if current_value is None or previous_value is None:
         return None
     return float(current_value) - float(previous_value)
+
+
+def compare_planner_summary(current: dict[str, Any], previous: dict[str, Any]) -> dict[str, Any]:
+    current_field_accuracy = current.get("field_accuracy") or {}
+    previous_field_accuracy = previous.get("field_accuracy") or {}
+    return {
+        "evaluated": {
+            "previous": previous.get("evaluated", 0),
+            "current": current.get("evaluated", 0),
+            "delta": (current.get("evaluated", 0) or 0) - (previous.get("evaluated", 0) or 0),
+        },
+        "exact_match_accuracy": {
+            "previous": previous.get("exact_match_accuracy"),
+            "current": current.get("exact_match_accuracy"),
+            "delta": _metric_delta(
+                current.get("exact_match_accuracy"),
+                previous.get("exact_match_accuracy"),
+            ),
+        },
+        "mismatch_count": {
+            "previous": previous.get("mismatch_count"),
+            "current": current.get("mismatch_count"),
+            "delta": _metric_delta(
+                current.get("mismatch_count"),
+                previous.get("mismatch_count"),
+            ),
+        },
+        "field_accuracy": {
+            field: {
+                "previous": previous_field_accuracy.get(field),
+                "current": current_field_accuracy.get(field),
+                "delta": _metric_delta(
+                    current_field_accuracy.get(field),
+                    previous_field_accuracy.get(field),
+                ),
+            }
+            for field in PLANNER_EVAL_FIELDS
+        },
+    }
 
 
 def print_summary_table(row: dict[str, Any]) -> None:
@@ -479,6 +660,30 @@ def print_type_summary(report: dict[str, Any]) -> None:
         )
 
 
+def print_planner_summary(report: dict[str, Any]) -> None:
+    planner = report.get("planner") or {}
+    if not planner.get("evaluated"):
+        return
+    field_accuracy = planner.get("field_accuracy") or {}
+    exact = planner.get("exact_match_accuracy")
+    print("\nQuery planner summary")
+    print("evaluated exact  intent dense  rerank lexical semantic mismatches")
+    print(
+        f"{planner['evaluated']:>9} "
+        f"{'-' if exact is None else f'{exact:.3f}':>5} "
+        f"{_format_optional_accuracy(field_accuracy.get('intent')):>7} "
+        f"{_format_optional_accuracy(field_accuracy.get('enable_dense')):>6} "
+        f"{_format_optional_accuracy(field_accuracy.get('enable_rerank')):>7} "
+        f"{_format_optional_accuracy(field_accuracy.get('lexical_query')):>7} "
+        f"{_format_optional_accuracy(field_accuracy.get('semantic_query')):>8} "
+        f"{planner.get('mismatch_count', 0):>10}"
+    )
+
+
+def _format_optional_accuracy(value: Any) -> str:
+    return "-" if value is None else f"{float(value):.3f}"
+
+
 def print_skipped_cases(skipped: list[SkippedCase]) -> None:
     print(f"\nSkipped {len(skipped)} eval cases")
     grouped: dict[str, int] = {}
@@ -494,6 +699,8 @@ def print_comparison_report(comparison: dict[str, Any], previous_path: Path) -> 
     print_comparison_row("overall", comparison["overall"])
     for case_type, row in (comparison.get("by_type") or {}).items():
         print_comparison_row(case_type, row)
+    if (comparison.get("planner") or {}).get("evaluated", {}).get("current"):
+        print_planner_comparison_report(comparison)
 
 
 def print_comparison_row(label: str, row: dict[str, Any]) -> None:
@@ -518,6 +725,29 @@ def _format_delta(value: float | int | None, *, digits: int = 3) -> str:
     return f"{float(value):+.{digits}f}"
 
 
+def print_planner_comparison_report(comparison: dict[str, Any]) -> None:
+    print("\nQuery planner comparison")
+    print("scope                   evalΔ exactΔ intentΔ denseΔ rerankΔ lexicalΔ semanticΔ mismatchΔ")
+    print_planner_comparison_row("overall", comparison["planner"])
+    for case_type, row in (comparison.get("planner_by_type") or {}).items():
+        print_planner_comparison_row(case_type, row)
+
+
+def print_planner_comparison_row(label: str, row: dict[str, Any]) -> None:
+    field_accuracy = row.get("field_accuracy") or {}
+    print(
+        f"{label:<23} "
+        f"{_format_delta(row['evaluated']['delta'], digits=0):>5} "
+        f"{_format_delta(row['exact_match_accuracy']['delta']):>6} "
+        f"{_format_delta((field_accuracy.get('intent') or {}).get('delta')):>7} "
+        f"{_format_delta((field_accuracy.get('enable_dense') or {}).get('delta')):>6} "
+        f"{_format_delta((field_accuracy.get('enable_rerank') or {}).get('delta')):>7} "
+        f"{_format_delta((field_accuracy.get('lexical_query') or {}).get('delta')):>8} "
+        f"{_format_delta((field_accuracy.get('semantic_query') or {}).get('delta')):>9} "
+        f"{_format_delta(row['mismatch_count']['delta'], digits=0):>9}"
+    )
+
+
 def print_details(results: list[QueryResult]) -> None:
     print("\nDetails")
     for result in results:
@@ -529,6 +759,7 @@ def print_details(results: list[QueryResult]) -> None:
             f"- {result.case.case_id} [{result.case.case_type}] "
             f"NDCG@5={result.ndcg_at_5:.3f} NDCG@10={result.ndcg_at_10:.3f} R@10={result.recall_at_10:.3f} "
             f"R@100={result.recall_at_100:.3f} "
+            f"planner_mismatch={result.planner_eval.get('mismatched_fields') or []} "
             f"hits={relevant_hits} forbidden={forbidden_hits} returned={result.returned_ids[:10]}"
         )
 
