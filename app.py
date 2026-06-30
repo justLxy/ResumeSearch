@@ -201,7 +201,7 @@ def search(
     cities: list[str] = Query(default=[]),
     skills: list[str] = Query(default=[]),
     min_years: float = 0,
-    school_tier: str = "",
+    school_tiers: list[str] = Query(default=[]),
     limit: int = 0,
     offset: int = 0,
 ) -> dict[str, Any]:
@@ -212,7 +212,7 @@ def search(
     facets = _load_facets()
     skill_vocab = _load_filter_vocab()["skills"] if skills else None
     explicit_filters = _build_filters(
-        degree, cities, skills, min_years, skill_vocab=skill_vocab, school_tier=school_tier
+        degree, cities, skills, min_years, skill_vocab=skill_vocab, school_tiers=school_tiers
     )
     plan = _plan_query(raw_query_text, explicit_filters, size=result_window_size, facets=facets)
     query_text = plan.lexical_query
@@ -350,7 +350,7 @@ def _build_filters(
     skills: list[str],
     min_years: float,
     skill_vocab: set[str] | None = None,
-    school_tier: str = "",
+    school_tiers: Any = None,
 ) -> list[dict[str, Any]]:
     filters: list[dict[str, Any]] = []
     if degree:
@@ -363,7 +363,7 @@ def _build_filters(
             filters.append(_skill_filter(skill, skill_vocab))
     if min_years > 0:
         filters.append(_min_years_filter(min_years))
-    school_filter = _school_tier_filter(school_tier)
+    school_filter = _school_tier_filter(school_tiers)
     if school_filter:
         filters.append(school_filter)
     return filters
@@ -441,29 +441,72 @@ def _normalize_school_tier(tier: str) -> str:
     return cleaned if cleaned in SCHOOL_TIER_LABELS else ""
 
 
-def _school_tier_filter(tier: str) -> dict[str, Any] | None:
-    """档位 → 一行 ES 过滤。封闭档用 terms 名单；"其他"用 must_not 补集。
+def _normalize_school_tier_list(value: Any) -> list[str]:
+    """规范化"可接受院校档位集合"：去重、过滤非法值、保持稳定顺序。
 
-    查 candidate.all_schools.keyword（候选人全部就读学校）→ 任一学历命中即算。
+    支持多选（OR）：用户在前端勾选多个档位，或 LLM 抽出 "985 或 留学生"
+    这类并列需求时，后端按并集过滤。
     """
-    normalized = _normalize_school_tier(tier)
-    if not normalized:
-        return None
+    if value is None:
+        return []
+    raw = value if isinstance(value, list) else [value]
+    order = list(SCHOOL_TIER_LABELS.keys()) + [SCHOOL_TIER_OTHER]
+    seen: set[str] = set()
+    result: list[str] = []
+    for item in raw:
+        normalized = _normalize_school_tier(str(item).strip())
+        if normalized and normalized not in seen:
+            seen.add(normalized)
+            result.append(normalized)
+    return sorted(result, key=lambda t: order.index(t) if t in order else len(order))
+
+
+def _school_tier_clause(tier: str) -> dict[str, Any] | None:
+    """单个档位 → 一个 ES 查询子句。封闭档用 terms；"其他"用 must_not 补集。"""
     tiers, known = _load_school_tiers()
-    if normalized == SCHOOL_TIER_OTHER:
+    if tier == SCHOOL_TIER_OTHER:
         if not known:
             return None  # 名单为空时不过滤，安全降级
-        return {
-            "bool": {
-                "must_not": {
-                    "terms": {"candidate.all_schools.keyword": sorted(known)}
-                }
-            }
-        }
-    names = tiers.get(normalized)
+        return {"bool": {"must_not": {"terms": {"candidate.all_schools.keyword": sorted(known)}}}}
+    names = tiers.get(tier)
     if not names:
         return None
     return {"terms": {"candidate.all_schools.keyword": names}}
+
+
+def _school_tier_filter(tiers: Any) -> dict[str, Any] | None:
+    """档位（单个或多个）→ 一行 ES 过滤。多档位取并集（OR）。
+
+    查 candidate.all_schools.keyword（候选人全部就读学校）→ 任一学历命中即算。
+    封闭档（985/211/双一流/C9/海外QS50）合并成一条 terms；含"其他"时用
+    bool.should（minimum_should_match=1）把补集与封闭档并起来。
+    """
+    normalized = _normalize_school_tier_list(tiers)
+    if not normalized:
+        return None
+    tier_names, known = _load_school_tiers()
+    closed_names: list[str] = []
+    include_other = False
+    for tier in normalized:
+        if tier == SCHOOL_TIER_OTHER:
+            include_other = True
+        else:
+            closed_names.extend(tier_names.get(tier, []))
+    closed_names = sorted(set(closed_names))
+
+    # 只有封闭档：一条 terms 即可。
+    if not include_other:
+        return {"terms": {"candidate.all_schools.keyword": closed_names}} if closed_names else None
+
+    other_clause = _school_tier_clause(SCHOOL_TIER_OTHER)
+    # 只有"其他"：直接返回补集。
+    if not closed_names:
+        return other_clause
+    # 封闭档 OR 其他：should 取并集。
+    shoulds = [{"terms": {"candidate.all_schools.keyword": closed_names}}]
+    if other_clause:
+        shoulds.append(other_clause)
+    return {"bool": {"should": shoulds, "minimum_should_match": 1}}
 
 
 def _dedupe(values: list[str]) -> list[str]:
@@ -751,7 +794,7 @@ def _query_parser_system_prompt() -> str:
         '  "intent": "browse|lookup|keyword|semantic",\n'
         '  "lexical_query": "给 BM25/精确检索的文本；纯筛选时为空",\n'
         '  "semantic_query": "给 embedding/rerank 的语义需求文本；不启用语义时为空",\n'
-        '  "constraints": {"degrees": ["本科","硕士"], "cities": ["北京"], "skills": ["Python"], "min_years": null|0.5, "school_tier": ""|"985"|"211"|"双一流"|"c9"|"qs50_overseas"|"其他"},\n'
+        '  "constraints": {"degrees": ["本科","硕士"], "cities": ["北京"], "skills": ["Python"], "min_years": null|0.5, "school_tiers": ["985"]},\n'
         '  "enable_dense": true|false\n'
         "}\n\n"
         "intent 判定（学历/城市/年限只是 filter，不决定 intent；抽掉它们后看剩余需求）:\n"
@@ -760,24 +803,26 @@ def _query_parser_system_prompt() -> str:
         "- semantic: 能力描述、多技能组合、长 JD 等需要语义理解的需求，dense=true。\n\n"
         "字段规则:\n"
         "- degrees: 仅当 query 里**字面出现**学历词（本科/学士/硕士/研究生/博士/及以上等）时才填，由 LLM 展开——\"硕士\"→[硕士]；\"本科或硕士\"→[本科,硕士]；\"本科及以上\"→[本科,硕士,博士]；\"硕士及以上\"→[硕士,博士]。query 没提学历就必须是 []——绝不能因为学校/专业/岗位\"看起来高端\"就臆测学历，那会把合格候选人误过滤掉。\n"
-        "- school_tier: 仅当 query 里**字面出现**院校档位词时才填，取值之一：985 / 211 / 双一流 / c9（C9联盟）/ qs50_overseas（海外名校、留学、QS前50、海归等）/ 其他（普通院校、双非）。\"985\"→\"985\"；\"海归\"或\"海外名校\"→\"qs50_overseas\"；\"双非\"→\"其他\"。query 没提院校档位就必须是空串\"\"——绝不能因为岗位/专业\"看起来高端\"就臆测院校档位。具体某所学校名（如\"北京大学\"\"东南大学\"）不是档位词，仍走 lexical_query，school_tier 留空。\n"
+        "- school_tiers: 院校档位列表（可多选，并列/或的关系取并集）。仅当 query 里**字面出现**院校档位词时才填，每项取值之一：985 / 211 / 双一流 / c9（C9联盟）/ qs50_overseas（海外名校、留学、留学生、海归、QS前50等）/ 其他（普通院校、双非）。\"985\"→[\"985\"]；\"海归\"或\"留学生\"→[\"qs50_overseas\"]；\"留学生或985\"→[\"qs50_overseas\",\"985\"]；\"双非\"→[\"其他\"]。query 没提院校档位就必须是 []——绝不能因为岗位/专业\"看起来高端\"就臆测院校档位。具体某所学校名（如\"北京大学\"\"东南大学\"）不是档位词，仍走 lexical_query，school_tiers 留 []。\n"
         "- lexical_query: 只放实体核心名/技能/高价值检索词，去掉已抽到 constraints 的学历/城市/年限，也去掉\"实习\"\"岗位\"\"职责\"\"要求\"\"熟悉\"等修饰/低信息词。长 JD 必须压缩成关键词串，不要复读原句。\n"
         "- semantic_query: 保留完整语义需求与上下文（长 JD 放原文）；负向约束（如\"不要纯推荐\"）也留在这里，不要变成硬过滤。\n"
         "- skills: 用户明确点名的技能，仍要保留在 lexical/semantic_query 里（是召回线索）；泛化能力不要硬塞。\n"
         "- 纯筛选（只有学历/城市/年限、无检索词）时 lexical_query 和 semantic_query 都为空。\n"
         "\n示例:\n"
         "输入: zhangwei_mock@example.com\n"
-        '输出: {"intent":"lookup","lexical_query":"zhangwei_mock@example.com","semantic_query":"zhangwei_mock@example.com","constraints":{"degrees":[],"cities":[],"skills":[],"min_years":null,"school_tier":""},"enable_dense":false}\n'
+        '输出: {"intent":"lookup","lexical_query":"zhangwei_mock@example.com","semantic_query":"zhangwei_mock@example.com","constraints":{"degrees":[],"cities":[],"skills":[],"min_years":null,"school_tiers":[]},"enable_dense":false}\n'
         "输入: 东南大学本科或者硕士\n"
-        '输出: {"intent":"keyword","lexical_query":"东南大学","semantic_query":"","constraints":{"degrees":["本科","硕士"],"cities":[],"skills":[],"min_years":null,"school_tier":""},"enable_dense":false}\n'
+        '输出: {"intent":"keyword","lexical_query":"东南大学","semantic_query":"","constraints":{"degrees":["本科","硕士"],"cities":[],"skills":[],"min_years":null,"school_tiers":[]},"enable_dense":false}\n'
         "输入: 南京大学\n"
-        '输出: {"intent":"keyword","lexical_query":"南京大学","semantic_query":"","constraints":{"degrees":[],"cities":[],"skills":[],"min_years":null,"school_tier":""},"enable_dense":false}\n'
+        '输出: {"intent":"keyword","lexical_query":"南京大学","semantic_query":"","constraints":{"degrees":[],"cities":[],"skills":[],"min_years":null,"school_tiers":[]},"enable_dense":false}\n'
         "输入: 985硕士 做过推荐系统\n"
-        '输出: {"intent":"semantic","lexical_query":"推荐系统","semantic_query":"做过推荐系统","constraints":{"degrees":["硕士"],"cities":[],"skills":[],"min_years":null,"school_tier":"985"},"enable_dense":true}\n'
+        '输出: {"intent":"semantic","lexical_query":"推荐系统","semantic_query":"做过推荐系统","constraints":{"degrees":["硕士"],"cities":[],"skills":[],"min_years":null,"school_tiers":["985"]},"enable_dense":true}\n'
+        "输入: 留学生 或者 985\n"
+        '输出: {"intent":"keyword","lexical_query":"","semantic_query":"","constraints":{"degrees":[],"cities":[],"skills":[],"min_years":null,"school_tiers":["qs50_overseas","985"]},"enable_dense":false}\n'
         "输入: 海归 计算机视觉\n"
-        '输出: {"intent":"semantic","lexical_query":"计算机视觉","semantic_query":"计算机视觉","constraints":{"degrees":[],"cities":[],"skills":[],"min_years":null,"school_tier":"qs50_overseas"},"enable_dense":true}\n'
+        '输出: {"intent":"semantic","lexical_query":"计算机视觉","semantic_query":"计算机视觉","constraints":{"degrees":[],"cities":[],"skills":[],"min_years":null,"school_tiers":["qs50_overseas"]},"enable_dense":true}\n'
         "输入: 北京 硕士及以上 4年以上 RAG LangChain\n"
-        '输出: {"intent":"semantic","lexical_query":"RAG LangChain","semantic_query":"RAG LangChain","constraints":{"degrees":["硕士","博士"],"cities":["北京"],"skills":["RAG","LangChain"],"min_years":4,"school_tier":""},"enable_dense":true}\n'
+        '输出: {"intent":"semantic","lexical_query":"RAG LangChain","semantic_query":"RAG LangChain","constraints":{"degrees":["硕士","博士"],"cities":["北京"],"skills":["RAG","LangChain"],"min_years":4,"school_tiers":[]},"enable_dense":true}\n'
         "输入: 岗位：LLM/RAG 应用工程师。职责：负责企业知识库问答、文档解析、向量检索、召回排序、Prompt 设计和模型微调，能用 Python、PyTorch、LangChain 或 LlamaIndex 做工程落地。要求：熟悉 RAG 评测、长文本处理和业务系统集成，有 ToB 知识库项目经验优先。\n"
         '输出: {"intent":"semantic","lexical_query":"LLM RAG 企业知识库问答 文档解析 向量检索 召回排序 Prompt 模型微调 Python PyTorch LangChain LlamaIndex RAG评测 长文本处理 ToB知识库","semantic_query":"岗位：LLM/RAG 应用工程师。职责：负责企业知识库问答、文档解析、向量检索、召回排序、Prompt 设计和模型微调，能用 Python、PyTorch、LangChain 或 LlamaIndex 做工程落地。要求：熟悉 RAG 评测、长文本处理和业务系统集成，有 ToB 知识库项目经验优先。","constraints":{"degrees":[],"cities":[],"skills":["LLM","RAG","Prompt","Python","PyTorch","LangChain","LlamaIndex"],"min_years":null},"enable_dense":true}\n'
     )
@@ -842,9 +887,11 @@ def _sanitize_llm_query_plan(payload: dict[str, Any], raw_query: str) -> dict[st
     min_years = _clean_float(constraints.get("min_years"))
     if min_years is not None and min_years > 0:
         cleaned_constraints["min_years"] = min_years
-    school_tier = _normalize_school_tier(constraints.get("school_tier"))
-    if school_tier:
-        cleaned_constraints["school_tier"] = school_tier
+    school_tiers = _normalize_school_tier_list(
+        constraints.get("school_tiers") or constraints.get("school_tier")
+    )
+    if school_tiers:
+        cleaned_constraints["school_tiers"] = school_tiers
 
     lexical_query = str(payload.get("lexical_query") or "").strip()
     semantic_query = str(payload.get("semantic_query") or "").strip()
@@ -911,7 +958,9 @@ def _filters_from_llm_constraints(constraints: dict[str, Any]) -> list[dict[str,
     min_years = _clean_float(constraints.get("min_years"))
     if min_years is not None and min_years > 0:
         filters.append(_min_years_filter(min_years))
-    school_filter = _school_tier_filter(constraints.get("school_tier") or "")
+    school_filter = _school_tier_filter(
+        constraints.get("school_tiers") or constraints.get("school_tier")
+    )
     if school_filter:
         filters.append(school_filter)
     return filters

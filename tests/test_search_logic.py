@@ -32,6 +32,7 @@ from app import (
     _run_hybrid_search,
     _school_tier_filter,
     _normalize_school_tier,
+    _normalize_school_tier_list,
     _filters_from_llm_constraints,
 )
 from import_to_es import (
@@ -1650,7 +1651,7 @@ class SchoolTierFilterTests(unittest.TestCase):
         self.assertEqual(_normalize_school_tier("不存在"), "")
 
     def test_build_filters_appends_school_tier_alongside_degree(self) -> None:
-        filters = _build_filters("硕士", [], [], 0, school_tier="985")
+        filters = _build_filters("硕士", [], [], 0, school_tiers=["985"])
         self.assertIn({"term": {"candidate.highest_degree": "硕士"}}, filters)
         self.assertTrue(
             any("terms" in f and "candidate.all_schools.keyword" in f.get("terms", {}) for f in filters)
@@ -1662,7 +1663,36 @@ class SchoolTierFilterTests(unittest.TestCase):
             any("all_schools.keyword" in str(f) for f in filters)
         )
 
-    def test_llm_constraints_school_tier_becomes_filter(self) -> None:
+    def test_multiple_closed_tiers_union_into_single_terms(self) -> None:
+        # "留学生 或 985" → 两个封闭档并集成一条 terms（OR）。
+        f = _school_tier_filter(["qs50_overseas", "985"])
+        names = set(f["terms"]["candidate.all_schools.keyword"])
+        self.assertIn("Stanford University", names)
+        self.assertIn("清华大学", names)
+
+    def test_other_combined_with_closed_uses_should(self) -> None:
+        # "985 或 其他" → 封闭 terms 与补集 must_not 用 should 取并。
+        f = _school_tier_filter(["985", "其他"])
+        shoulds = f["bool"]["should"]
+        self.assertEqual(f["bool"]["minimum_should_match"], 1)
+        self.assertTrue(any("terms" in c for c in shoulds))
+        self.assertTrue(any("bool" in c and "must_not" in c["bool"] for c in shoulds))
+
+    def test_normalize_tier_list_dedupes_and_drops_invalid(self) -> None:
+        self.assertEqual(
+            _normalize_school_tier_list(["c9", "985", "野鸡", "c9"]),
+            ["985", "c9"],  # 按 SCHOOL_TIER_LABELS 顺序：985 在 c9 前
+        )
+        self.assertEqual(_normalize_school_tier_list([]), [])
+        self.assertEqual(_normalize_school_tier_list(None), [])
+
+    def test_llm_constraints_school_tiers_list_becomes_filter(self) -> None:
+        filters = _filters_from_llm_constraints({"school_tiers": ["qs50_overseas", "985"]})
+        self.assertTrue(
+            any("candidate.all_schools.keyword" in f.get("terms", {}) for f in filters)
+        )
+
+    def test_llm_constraints_legacy_singular_school_tier_still_works(self) -> None:
         filters = _filters_from_llm_constraints({"school_tier": "211"})
         self.assertTrue(
             any("candidate.all_schools.keyword" in f.get("terms", {}) for f in filters)

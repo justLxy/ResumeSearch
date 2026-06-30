@@ -3,7 +3,7 @@ const PAGE_SIZE = 100;
 const state = {
   query: "",
   degree: "",
-  schoolTier: "",
+  schoolTiers: new Set(),
   cities: new Set(),
   skills: new Set(),
   minYears: 0,
@@ -49,7 +49,7 @@ function params(offset = 0) {
   const query = new URLSearchParams();
   if (state.query) query.set("q", state.query);
   if (state.degree) query.set("degree", state.degree);
-  if (state.schoolTier) query.set("school_tier", state.schoolTier);
+  state.schoolTiers.forEach((tier) => query.append("school_tiers", tier));
   if (state.minYears) query.set("min_years", state.minYears);
   state.cities.forEach((city) => query.append("cities", city));
   state.skills.forEach((skill) => query.append("skills", skill));
@@ -162,7 +162,7 @@ const parserFieldLabels = {
   semantic_query: "语义检索",
   constraints: "结构化约束",
   degrees: "学历",
-  school_tier: "院校",
+  school_tiers: "院校",
   cities: "城市",
   skills: "技能",
   min_years: "最低年限",
@@ -184,6 +184,13 @@ const schoolTierLabels = {
 function schoolTierLabel(tier) {
   if (!tier) return "";
   return schoolTierLabels[tier] || tier;
+}
+
+function schoolTierLabelList(tiers) {
+  if (!Array.isArray(tiers)) {
+    return tiers ? [schoolTierLabel(tiers)] : [];
+  }
+  return tiers.map(schoolTierLabel).filter(Boolean);
 }
 
 const parserConsumedPlanFields = new Set([
@@ -237,7 +244,7 @@ function formatParserSummary(payload) {
       title: "结构化约束",
       rows: [
         parserRow("degrees", constraints.degrees, { type: "list" }),
-        parserRow("school_tier", schoolTierLabel(constraints.school_tier)),
+        parserRow("school_tiers", schoolTierLabelList(constraints.school_tiers ?? constraints.school_tier), { type: "list" }),
         parserRow("cities", constraints.cities, { type: "list" }),
         parserRow("skills", constraints.skills, { type: "list" }),
         parserRow("min_years", constraints.min_years),
@@ -361,9 +368,9 @@ function formatParserFilters(constraints) {
   if (Array.isArray(constraints.degrees) && constraints.degrees.length) {
     parts.push(`学历:${constraints.degrees.join("/")}`);
   }
-  const tier = schoolTierLabel(constraints.school_tier);
-  if (tier) {
-    parts.push(`院校:${tier}`);
+  const tiers = schoolTierLabelList(constraints.school_tiers ?? constraints.school_tier);
+  if (tiers.length) {
+    parts.push(`院校:${tiers.join("/")}`);
   }
   if (Array.isArray(constraints.cities) && constraints.cities.length) {
     parts.push(`城市:${constraints.cities.join("、")}`);
@@ -392,7 +399,7 @@ function updateLoadMore() {
 }
 
 function hasActiveFilters() {
-  return Boolean(state.degree || state.schoolTier || state.minYears || state.cities.size || state.skills.size);
+  return Boolean(state.degree || state.schoolTiers.size || state.minYears || state.cities.size || state.skills.size);
 }
 
 function formatYearsLabel(value) {
@@ -1072,7 +1079,11 @@ document.querySelectorAll('input[name="degree"]').forEach((input) => {
 });
 document.querySelectorAll('input[name="schoolTier"]').forEach((input) => {
   input.addEventListener("change", () => {
-    state.schoolTier = input.value;
+    if (input.checked) {
+      state.schoolTiers.add(input.value);
+    } else {
+      state.schoolTiers.delete(input.value);
+    }
     runSearch();
   });
 });
