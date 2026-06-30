@@ -60,6 +60,7 @@ class QueryResult:
     ndcg_at_5: float
     ndcg_at_10: float
     forbidden_at_10: int
+    success_at_1: float
     empty_success: bool | None
 
 
@@ -211,6 +212,9 @@ def evaluate_case(client: TestClient, case: EvalCase, limit: int) -> QueryResult
         ndcg_at_5=ndcg_at(returned_ids, case.relevance, 5),
         ndcg_at_10=ndcg_at(returned_ids, case.relevance, 10),
         forbidden_at_10=sum(1 for doc_id in returned_ids[:10] if doc_id in case.forbidden_ids),
+        success_at_1=(
+            1.0 if (returned_ids and returned_ids[0] in case.relevant_ids) else 0.0
+        ),
         empty_success=(len(returned_ids) == 0) if case.expect_empty else None,
     )
 
@@ -267,9 +271,9 @@ def ndcg_at(returned_ids: list[str], relevance: dict[str, float], k: int) -> flo
     for rank, doc_id in enumerate(returned_ids[:k], start=1):
         gain = relevance.get(doc_id, 0.0)
         if gain > 0:
-            dcg += gain / math.log2(rank + 1)
+            dcg += (2.0 ** gain - 1.0) / math.log2(rank + 1)
     ideal_gains = sorted((grade for grade in relevance.values() if grade > 0), reverse=True)[:k]
-    idcg = sum(gain / math.log2(rank + 1) for rank, gain in enumerate(ideal_gains, start=1))
+    idcg = sum((2.0 ** gain - 1.0) / math.log2(rank + 1) for rank, gain in enumerate(ideal_gains, start=1))
     return dcg / idcg if idcg else 0.0
 
 
@@ -396,9 +400,16 @@ def build_report(
 def summarize(results: list[QueryResult]) -> dict[str, Any]:
     judged = [result for result in results if result.case.relevant_ids]
     empty_cases = [result for result in results if result.empty_success is not None]
+    # 单目标口径：判定集里每条 query 恰好 1 个相关文档时，P@K 的上限是 1/K（数学假象），
+    # 这类组改报 success@1（首位是否命中唯一目标）。
+    single_target = bool(judged) and all(
+        len(result.case.relevant_ids) == 1 for result in judged
+    )
     return {
         "queries": len(results),
         "judged": len(judged),
+        "single_target": single_target,
+        "success_at_1": _mean_metric(judged, "success_at_1"),
         "p5": _mean_metric(judged, "precision_at_5"),
         "p10": _mean_metric(judged, "precision_at_10"),
         "r5": _mean_metric(judged, "recall_at_5"),
@@ -509,6 +520,7 @@ def result_to_detail(result: QueryResult) -> dict[str, Any]:
         "ndcg5": result.ndcg_at_5,
         "ndcg10": result.ndcg_at_10,
         "forbidden10": result.forbidden_at_10,
+        "success_at_1": result.success_at_1,
         "empty_success": result.empty_success,
     }
 
@@ -675,14 +687,20 @@ def print_summary_table(row: dict[str, Any]) -> None:
 
 def print_type_summary(report: dict[str, Any]) -> None:
     print("\nType summary")
-    print("type                    queries judged P@5   R@10  R@100 NDCG@5 NDCG@10 empty_acc forbidden@10")
+    print("type                    queries judged P@5*  R@10  R@100 NDCG@5 NDCG@10 empty_acc forbidden@10")
+    print("(* 单目标类型 P@5 列改报 success@1，标记 †)")
     for case_type, row in (report.get("by_type") or {}).items():
         empty = row.get("empty_accuracy")
+        if row.get("single_target"):
+            headline = row.get("success_at_1") or 0.0
+            headline_str = f"{headline:.3f}†"
+        else:
+            headline_str = f"{row['p5']:.3f} "
         print(
             f"{case_type:<23} "
             f"{row['queries']:>7} "
             f"{row['judged']:>6} "
-            f"{row['p5']:.3f} "
+            f"{headline_str:>5} "
             f"{row['r10']:.3f} "
             f"{row['r100']:.3f} "
             f"{row['ndcg5']:.3f} "

@@ -142,7 +142,7 @@
 | `web/index.html`        | 前端页面骨架：搜索框、筛选面板、结果区域、详情抽屉               |
 | `web/app.js`            | 前端交互逻辑：搜索触发、facet 渲染、结果卡片、Debug 面板        |
 | `web/styles.css`        | 前端样式                                                         |
-| `evaluate_search.py`    | 检索质量评估脚本，基于 eval_queries.jsonl 计算 P@K / R@K / MRR / 分级 NDCG |
+| `evaluate_search.py`    | 检索质量评估脚本，基于 eval_queries.jsonl 计算 P@K / R@K / MRR / 分级 NDCG（2^rel-1 指数增益）/ success@1（单目标类型）|
 | `generate_mock_resumes.py` | 确定性生成贴合真实字段结构的模拟简历（mock-realistic-v1，含 hard negative） |
 | `build_eval_queries.py` | 基于生成数据的 ground-truth 确定性派生 eval_queries.jsonl 的 qrels |
 | `tests/test_search_logic.py` | 单元测试，覆盖查询解析、RRF 融合、过滤器构建等核心逻辑     |

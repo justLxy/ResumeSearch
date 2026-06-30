@@ -5,9 +5,64 @@ from evaluate_search import (
     compare_reports,
     evaluate_query_plan,
     load_report,
+    ndcg_at,
     _search_params,
     write_report,
 )
+
+
+def test_ndcg_uses_exponential_gain_to_separate_grades() -> None:
+    # 标准 NDCG（2^rel - 1）：把 grade-3 核心命中排在 grade-2 相邻命中之上，
+    # 应当严格优于反序——线性增益下二者 NDCG 相等，无法区分。
+    relevance = {"core": 3.0, "adj": 2.0}
+    good = ndcg_at(["core", "adj"], relevance, 10)
+    bad = ndcg_at(["adj", "core"], relevance, 10)
+    assert good == 1.0
+    assert bad < good
+    # 单个 grade-3 命中的增益(2^3-1=7)应高于单个 grade-2(2^2-1=3)，
+    # 体现在只取首位时的 DCG 占比。
+    ideal = {"a": 3.0}
+    assert ndcg_at(["a"], ideal, 10) == 1.0
+
+
+def test_single_target_type_reports_success_at_1() -> None:
+    results = [
+        _result(
+            case_id="exact_1",
+            case_type="exact_lookup",
+            query="M20260005",
+            relevant_ids={"resume-1"},
+            returned_ids=["resume-1", "resume-2"],
+            success_at_1=1.0,
+        ),
+        _result(
+            case_id="exact_2",
+            case_type="exact_lookup",
+            query="M20260007",
+            relevant_ids={"resume-3"},
+            returned_ids=["resume-9", "resume-3"],
+            success_at_1=0.0,
+        ),
+    ]
+    report = build_report(results, qrels_path="x", limit=100, skipped_cases=[])
+    row = report["by_type"]["exact_lookup"]
+    assert row["single_target"] is True
+    assert row["success_at_1"] == 0.5
+
+
+def test_multi_target_type_is_not_flagged_single_target() -> None:
+    results = [
+        _result(
+            case_id="sem_1",
+            case_type="semantic_capability",
+            query="找做 RAG 的人",
+            relevant_ids={"resume-1", "resume-2"},
+            returned_ids=["resume-1", "resume-2"],
+            success_at_1=1.0,
+        ),
+    ]
+    report = build_report(results, qrels_path="x", limit=100, skipped_cases=[])
+    assert report["by_type"]["semantic_capability"]["single_target"] is False
 
 
 def test_build_report_groups_metrics_by_query_type() -> None:
@@ -223,6 +278,7 @@ def _result(
     ndcg_at_5: float = 0.0,
     ndcg_at_10: float = 0.0,
     forbidden_at_10: int = 0,
+    success_at_1: float = 0.0,
     empty_success: bool | None = None,
     expected_plan: dict | None = None,
     query_plan: dict | None = None,
@@ -253,5 +309,6 @@ def _result(
         ndcg_at_5=ndcg_at_5,
         ndcg_at_10=ndcg_at_10,
         forbidden_at_10=forbidden_at_10,
+        success_at_1=success_at_1,
         empty_success=empty_success,
     )

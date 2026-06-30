@@ -8,7 +8,8 @@
 
 分级口径：
 - grade 3（核心相关）：与 query 主题同族的简历。
-- grade 2（明显相关）：技能/语义高度重叠的相邻族。
+- grade 2（明显相关）：技能/语义高度重叠的相邻族，由 _FAMILY_ADJACENCY 按实测
+  技能重叠 + 岗位常识派生（topical 类 query 自动展开；实体/专业/精确类不适用）。
 - forbidden：与 query 主题"沾边但不对"的 hard-negative 族（不该进前排）。
 - 库外负例（negative_semantic）：库里压根没有的主题 → expect_empty=true。
 
@@ -55,42 +56,42 @@ SEMANTIC_SPECS: list[dict[str, Any]] = [
     {
         "id": "sem_enterprise_rag", "query": "找做过企业知识库 RAG、向量检索和大模型问答落地的人",
         "expected_lexical": "RAG 向量检索",
-        "core": ["ml_llm"], "related": [], "forbidden_families": ["hn_search_ops"],
+        "core": ["ml_llm"], "forbidden_families": ["hn_search_ops"],
     },
     {
         "id": "sem_blue_team_hunting", "query": "需要蓝队应急响应，能做日志取证、威胁狩猎和 ATT&CK 分析",
         "expected_lexical": "应急响应 威胁狩猎",
-        "core": ["blue_team"], "related": [], "forbidden_families": ["hn_it_ops"],
+        "core": ["blue_team"], "forbidden_families": ["hn_it_ops"],
     },
     {
         "id": "sem_kernel_fuzzing", "query": "安全研究要会内核漏洞挖掘、Fuzzing、符号执行和 0day Exploit",
         "expected_lexical": "漏洞挖掘 Fuzzing 符号执行",
-        "core": ["security_research"], "related": [], "forbidden_families": [],
+        "core": ["security_research"], "forbidden_families": [],
     },
     {
         "id": "sem_java_arch_finance", "query": "找能做金融级 Java 高并发架构、分库分表、分布式事务和 JVM 调优的人",
         "expected_lexical": "Java 分库分表 分布式事务",
-        "core": ["backend_java"], "related": [], "forbidden_families": [],
+        "core": ["backend_java"], "forbidden_families": [],
     },
     {
         "id": "sem_go_cloud_native", "query": "需要 Go 云原生底层能力，做过 Kubernetes Operator、服务网格和高并发网关",
         "expected_lexical": "Go Kubernetes 服务网格",
-        "core": ["backend_go"], "related": [], "forbidden_families": [],
+        "core": ["backend_go"], "forbidden_families": [],
     },
     {
         "id": "sem_frontend_3d", "query": "前端候选要能做 3D 可视化、WebGL 地图引擎、大屏交互和 shader 效果",
         "expected_lexical": "WebGL shader",
-        "core": ["frontend"], "related": [], "forbidden_families": [],
+        "core": ["frontend"], "forbidden_families": [],
     },
     {
         "id": "sem_low_latency_cpp", "query": "C++ 候选要有超低延迟、高频交易、RDMA、内核旁路和无锁编程经验",
         "expected_lexical": "C++ RDMA 无锁编程",
-        "core": ["backend_cpp"], "related": [], "forbidden_families": ["hn_cpp_biz"],
+        "core": ["backend_cpp"], "forbidden_families": ["hn_cpp_biz"],
     },
     {
         "id": "sem_growth_data", "query": "数据分析希望做过 A/B 实验、指标体系、归因分析、留存提升和电商增长",
         "expected_lexical": "指标体系 归因分析 留存提升",
-        "core": ["data_analysis"], "related": [], "forbidden_families": ["hn_bi_report"],
+        "core": ["data_analysis"], "forbidden_families": ["hn_bi_report"],
     },
 ]
 
@@ -180,13 +181,47 @@ def _semantic_plan(query: str, lexical: str | None = None) -> dict[str, Any]:
             "enable_dense": True, "enable_rerank": True}
 
 
+# 族邻接表：与 core 主题"技能/语义高度重叠但不是同一岗位"的相邻族 → grade 2。
+# 依据 generate_mock_resumes 各族技能集的实测重叠（Jaccard）+ 岗位常识，取对称闭包。
+# 这反映真实招聘里"不是首选但明显沾边、排进结果合理"的弱相关，让 NDCG 用上分级口径。
+# 注意：邻接族都是真实岗位族，与 forbidden 用的 hn_* hard-negative 族不相交，
+# 不会让同一文档既相关又被禁。
+_FAMILY_ADJACENCY: dict[str, set[str]] = {
+    "ml_llm": {"data_analysis"},
+    "data_analysis": {"ml_llm"},
+    "backend_go": {"backend_java", "devsecops"},
+    "backend_java": {"backend_go"},
+    "devsecops": {"backend_go"},
+    "backend_cpp": {"security_research"},
+    "security_research": {"backend_cpp", "red_team"},
+    "red_team": {"security_research", "blue_team"},
+    "blue_team": {"red_team"},
+}
+
+
+def _related_families(core: list[str], forbidden_families: list[str]) -> list[str]:
+    """从邻接表派生 core 的相邻族，排除 core 自身和 forbidden 族。"""
+    core_set = set(core)
+    forbidden_set = set(forbidden_families)
+    related: set[str] = set()
+    for f in core:
+        related |= _FAMILY_ADJACENCY.get(f, set())
+    return sorted(related - core_set - forbidden_set)
+
+
 def _grade_map(spec: dict, fam: dict[str, list[str]]) -> tuple[dict[str, int], list[str]]:
-    """把 core/related 族展开成 relevance dict，forbidden 族展开成 forbidden_ids。"""
+    """把 core/related 族展开成 relevance dict，forbidden 族展开成 forbidden_ids。
+
+    related 未显式给出时，按 _FAMILY_ADJACENCY 自动派生（grade 2）。
+    """
     relevance: dict[str, int] = {}
     for f in spec.get("core", []):
         for rid in fam.get(f, []):
             relevance[rid] = 3
-    for f in spec.get("related", []):
+    related = spec.get("related")
+    if related is None:
+        related = _related_families(spec.get("core", []), spec.get("forbidden_families", []))
+    for f in related:
         for rid in fam.get(f, []):
             relevance.setdefault(rid, 2)
     forbidden: list[str] = []
