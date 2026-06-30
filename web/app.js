@@ -838,6 +838,7 @@ function renderResults() {
           <div class="result-main">
             <div class="candidate-line">
               <div class="candidate-name">${escapeHtml(candidate.name || "未命名候选人")}</div>
+              ${item.low_relevance ? `<span class="low-relevance-tag" title="该候选人与当前查询的匹配度较低，仅供参考">匹配度较低</span>` : ''}
             </div>
             <div class="result-subtitle">${escapeHtml(application.position_name || "岗位未标注")} · ${escapeHtml(application.position_code || "")}</div>
             <div class="meta-line">${buildMetaLineHTML(item)}</div>

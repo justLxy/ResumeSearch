@@ -835,6 +835,22 @@ input:focus-visible {
   text-decoration: none;
 }
 
+.low-relevance-tag {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 7px;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.5;
+  white-space: nowrap;
+  cursor: help;
+}
+
 .result-subtitle {
   margin-top: 6px;
   color: var(--primary);

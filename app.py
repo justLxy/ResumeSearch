@@ -256,7 +256,8 @@ def search(
         if plan.enable_rerank:
             results, rerank_warnings = _rerank_results(plan.semantic_query, results)
             retrieval_warnings.extend(rerank_warnings)
-            # 重排弃权（无真正相关候选）时，让上报的计数与空结果集保持一致。
+            # 结果为空时（重排不再弃权，但 RRF 本身可能无命中），让上报的计数
+            # 与空结果集保持一致。
             if not results:
                 matched_total = 0
                 candidate_total = 0
@@ -1757,6 +1758,7 @@ def _rerank_results(
     *,
     top_n: int = RERANK_TOP_N,
 ) -> tuple[list[dict[str, Any]], list[str]]:
+    warnings: list[str] = []
     if not ENABLE_RERANK or not query_text.strip() or len(results) < 2 or top_n <= 0:
         return results, []
 
@@ -1774,14 +1776,17 @@ def _rerank_results(
             f"reranker returned {len(scores)} scores for {len(window)} candidates"
         ]
 
-    # 绝对相关性弃权：若连最相关的候选都低于相关性地板，说明库中没有真正匹配
-    # 此 query 的人。返回空，而不是把 RRF 那页噪声端上来。
+    # 低相关度提示（不弃权）：即便最相关的候选分数也很低，通常意味着库中没有
+    # 与此 query 精确匹配的人。我们【不】清空结果——HR 只看排名靠前的，把判断权
+    # 交还给他，由 UI 据此 warning 给出"低相关度，库中可能无精确匹配"的提示，
+    # 而不是由系统替他做"全有或全无"的决定。曾经的硬地板会把分数仅 0.489 的真·
+    # 相关 query 误判成空，弊大于利。
     top_rerank_score = max(float(score) for score in scores)
     if top_rerank_score < RERANK_RELEVANCE_FLOOR:
-        return [], [
-            f"reranker abstained: top relevance {top_rerank_score:.3f} "
-            f"below floor {RERANK_RELEVANCE_FLOOR}"
-        ]
+        warnings.append(
+            f"low relevance: top relevance {top_rerank_score:.3f} "
+            f"below floor {RERANK_RELEVANCE_FLOOR}; results may not precisely match"
+        )
 
     scored: list[tuple[float, int, dict[str, Any]]] = []
     for pre_rank, (result, score) in enumerate(zip(window, scores), start=1):
@@ -1800,6 +1805,9 @@ def _rerank_results(
         )
         item["retrieval_debug"] = debug
         item["score"] = round(rerank_score, 4)
+        # 逐候选人低相关度标记：rerank 分数低于门槛 → 前端在姓名旁打 tag，
+        # 提示"该候选人与查询的相关度较低"。判断权交给 HR，不再清空。
+        item["low_relevance"] = rerank_score < RERANK_RELEVANCE_FLOOR
         scored.append((rerank_score, pre_rank, item))
 
     scored.sort(key=lambda row: (-row[0], row[1]))
@@ -1825,7 +1833,7 @@ def _rerank_results(
         )
         item["retrieval_debug"] = debug
         tail.append(item)
-    return [*reranked_window, *tail], []
+    return [*reranked_window, *tail], warnings
 
 
 def _score_rerank_documents(query_text: str, documents: list[str]) -> list[float]:

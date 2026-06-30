@@ -1205,22 +1205,26 @@ class SearchLogicTests(unittest.TestCase):
         self.assertEqual(reranked[2]["retrieval_debug"]["pre_rerank_rank"], 3)
         self.assertNotIn("rerank_rank", reranked[2]["retrieval_debug"])
 
-    def test_rerank_results_abstains_when_top_score_below_floor(self) -> None:
+    def test_rerank_results_flags_low_relevance_without_dropping(self) -> None:
         results = [
             _formatted_result("a", "弱相关一", "Oracle DBA 数据库巡检", 0.9),
             _formatted_result("b", "弱相关二", "SAP 财务实施", 0.8),
         ]
 
-        # Both candidates score below the relevance floor -> abstain (empty).
+        # Both candidates score below the relevance floor. We no longer abstain
+        # (HR only looks at the top anyway and keeps the judgement call); we keep
+        # the results, reorder them by rerank score, and surface a low-relevance
+        # warning instead of an empty page.
         with patch(
             "app._score_rerank_documents",
             return_value=[0.28, 0.31],
         ):
             reranked, warnings = _rerank_results("量子计算芯片设计经验", results, top_n=2)
 
-        self.assertEqual(reranked, [])
+        # Not dropped: both candidates survive, reordered best-first (b=0.31 > a=0.28).
+        self.assertEqual([item["id"] for item in reranked], ["b", "a"])
         self.assertEqual(len(warnings), 1)
-        self.assertIn("abstained", warnings[0])
+        self.assertIn("low relevance", warnings[0])
 
     def test_rerank_results_keeps_window_when_one_candidate_clears_floor(self) -> None:
         results = [
