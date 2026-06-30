@@ -514,7 +514,7 @@ encode_batch(texts: list[str]) -> list[list[float]]  # 批量编码
 LLM 解析输出示例：
 
 ```
-输入: "0.5年以上 北京 本科 Python 自然语言处理"
+输入: "0.5年以上 北京 本科及以上 Python 自然语言处理"
       ↓ Qwen3.5 Flash
 输出:
 {
@@ -523,7 +523,7 @@ LLM 解析输出示例：
   "semantic_query": "Python 自然语言处理",
   "constraints": {
     "min_years": 0.5,
-    "degree": "本科",
+    "degrees": ["本科", "硕士", "博士"],
     "cities": ["北京"],
     "skills": ["Python", "自然语言处理"]
   },
@@ -532,6 +532,8 @@ LLM 解析输出示例：
 ```
 
 > 注意：学历/城市/年限只是结构化 filter，不决定 intent。抽掉这些 filter 后，剩余需求是技能组合/能力描述（如上例的 `Python 自然语言处理`），intent 即为 `semantic`、`enable_dense=true`；若剩余需求只是学校/公司/姓名等实体，intent 才是 `keyword`。
+>
+> **学历用单一 `degrees` 列表表达**：LLM 把任何学历说法统一展开成"可接受学历集合"——精确"本科"→`["本科"]`、枚举"本科或硕士"→`["本科","硕士"]`、下限"本科及以上"→`["本科","硕士","博士"]`（如上例）。后端只做一条 `terms` 过滤，不再区分精确/下限/枚举三种情况，也不需要正则兜底。
 
 QueryPlan 的字段分工：
 

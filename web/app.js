@@ -159,8 +159,7 @@ const parserFieldLabels = {
   lexical_query: "词面检索",
   semantic_query: "语义检索",
   constraints: "结构化约束",
-  degree: "学历精确",
-  min_degree: "学历下限",
+  degrees: "学历",
   cities: "城市",
   skills: "技能",
   min_years: "最低年限",
@@ -220,8 +219,7 @@ function formatParserSummary(payload) {
     {
       title: "结构化约束",
       rows: [
-        parserRow("degree", constraints.degree),
-        parserRow("min_degree", constraints.min_degree),
+        parserRow("degrees", constraints.degrees, { type: "list" }),
         parserRow("cities", constraints.cities, { type: "list" }),
         parserRow("skills", constraints.skills, { type: "list" }),
         parserRow("min_years", constraints.min_years),
@@ -342,8 +340,9 @@ function formatParserValue(value, type = inferParserValueType(value)) {
 
 function formatParserFilters(constraints) {
   const parts = [];
-  if (constraints.degree) parts.push(constraints.degree);
-  if (constraints.min_degree) parts.push(`${constraints.min_degree}及以上`);
+  if (Array.isArray(constraints.degrees) && constraints.degrees.length) {
+    parts.push(`学历:${constraints.degrees.join("/")}`);
+  }
   if (Array.isArray(constraints.cities) && constraints.cities.length) {
     parts.push(`城市:${constraints.cities.join("、")}`);
   }
