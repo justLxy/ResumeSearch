@@ -138,7 +138,7 @@
 | `resume_parser.py`      | 规则化解析 HTML 格式 `.doc` 简历文件，提取结构化字段（候选人、教育、实习、项目、技能等），不调用 LLM |
 | `import_to_es.py`       | 加载解析结果 → 构建证据切片 → 调用 embedding 服务向量化 → 批量写入 ES 双索引 |
 | `embedding_service.py`  | 统一封装 Qwen、豆包 API、本地 Yuan embedding 后端，提供 `encode_single` / `encode_batch` |
-| `app.py`                | FastAPI 后端：DeepSeek LLM Query Planner → 并行混合检索 → RRF 融合 → Qwen3 rerank → 结果格式化 |
+| `app.py`                | FastAPI 后端：Qwen3.5 Flash LLM Query Planner → 并行混合检索 → RRF 融合 → Qwen3 rerank → 结果格式化 |
 | `web/index.html`        | 前端页面骨架：搜索框、筛选面板、结果区域、详情抽屉               |
 | `web/app.js`            | 前端交互逻辑：搜索触发、facet 渲染、结果卡片、Debug 面板        |
 | `web/styles.css`        | 前端样式                                                         |
@@ -156,10 +156,10 @@
 | 后端框架       | FastAPI + Uvicorn                                 | 异步 Web 框架，提供 REST API                   |
 | 搜索引擎       | Elasticsearch 9.x                                 | 承载 BM25 全文检索 + kNN 向量检索 + 结构化过滤 |
 | 中文分词       | IK Analysis Plugin                                | `ik_max_word`（索引时细粒度分词）/ `ik_smart`（搜索时智能分词） |
-| Query Planner  | `deepseek-v4-flash` API                            | 仅在用户搜索时调用，将自由文本 query 解析为 intent、结构化约束、lexical/semantic query |
+| Query Planner  | `qwen3.5-flash` API（阿里云百炼）                   | 仅在用户搜索时调用，将自由文本 query 解析为 intent、结构化约束、lexical/semantic query |
 | Embedding 模型 | Qwen `text-embedding-v4` / 豆包 API / 本地 Yuan     | 当前默认 Qwen 2048 维；豆包 2048 维；本地 Yuan 1792 维 |
 | Reranker 模型  | `qwen3-rerank` API                                | 通过 `rerank_service.py` 调用文本重排 API      |
-| 模型框架       | sentence-transformers + PyTorch / requests        | 本地 embedding 推理、DeepSeek Query Planner、Qwen/豆包 embedding API、Qwen3 rerank API |
+| 模型框架       | sentence-transformers + PyTorch / requests        | 本地 embedding 推理、Qwen3.5 Flash Query Planner、Qwen/豆包 embedding API、Qwen3 rerank API |
 | 模型下载       | ModelScope + HuggingFace Hub                      | 本地 embedding 通过 ModelScope 下载             |
 | HTML 解析      | BeautifulSoup4                                    | 离线规则解析 HTML 格式的 .doc 简历文件，不调用 LLM |
 | 前端           | 原生 HTML + CSS + JavaScript                      | 无框架依赖的轻量前端                           |
@@ -186,7 +186,7 @@ huggingface-hub>=0.20
 
 ### 4.1 离线简历解析 (`resume_parser.py`，非 LLM)
 
-这里的“简历解析”是离线数据处理阶段的 HTML 结构化抽取，不是 `app.py` 中的 LLM Query Planner。当前运行链路中，简历解析不调用 DeepSeek 或其他 LLM；只有用户输入搜索 query 时，后端才会调用 LLM 做意图分类和约束抽取。
+这里的"简历解析"是离线数据处理阶段的 HTML 结构化抽取，不是 `app.py` 中的 LLM Query Planner。当前运行链路中，简历解析不调用任何 LLM；只有用户输入搜索 query 时，后端才会调用 Query Planner（Qwen3.5 Flash）做意图分类和约束抽取。
 
 #### 输入格式
 
@@ -507,15 +507,15 @@ encode_batch(texts: list[str]) -> list[list[float]]  # 批量编码
 
 1. **正则 fast-path**：邮箱、手机号、候选人编号、岗位编号这类**单 token 唯一标识符**可被正则 100% 判定，直接判为 `lookup` 并短路 LLM，无需为最廉价的查询付一次网络往返。
 2. **解析缓存命中**：解析结果按规范化后的 query 文本（去多余空白、casefold）做带 TTL 的 LRU 缓存（默认 5 分钟、512 条）。命中则跳过 LLM——对前端 300ms 防抖自动搜索和重复 query 能显著降低延迟与 API 成本（解析失败的 fallback 不入缓存，避免短暂故障污染整个 TTL）。
-3. **LLM 解析**：以上都未命中时，调用 DeepSeek `deepseek-v4-flash`，请求体显式设置 `thinking: {"type": "disabled"}` 优先低延迟，把用户输入解析为结构化 QueryPlan。
+3. **LLM 解析**：以上都未命中时，调用 Qwen3.5 Flash（阿里云百炼），请求体显式关闭思考链（qwen 用顶层 `enable_thinking: False`，同时兼容带 `thinking: {"type": "disabled"}` 的 provider）优先低延迟，把用户输入解析为结构化 QueryPlan。
 
-> **结构化输出说明**：代码保留了 `response_format: json_schema` 严格模式的完整链路（schema 把所有字段设为 required、关闭 additionalProperties，能从源头消除"偶发不返回 lexical_query"这类整字段缺失）。但实测 `deepseek-v4-flash` 拒绝 json_schema（返回 HTTP 400），因此当前默认使用广泛支持的 `response_format: json_object`，靠 `_sanitize_llm_query_plan` 做字段兜底。若将来切换到支持 schema 的模型，把 `_structured_output_supported` 初值改回 `True` 即可自动启用严格模式（并保留遇 400 自动回退 json_object 的能力）。
+> **结构化输出说明**：代码保留了 `response_format: json_schema` 严格模式的完整链路（schema 把所有字段设为 required、关闭 additionalProperties，能从源头消除"偶发不返回 lexical_query"这类整字段缺失）。但当前默认使用广泛支持的 `response_format: json_object`，靠 `_sanitize_llm_query_plan` 做字段兜底（`_structured_output_supported` 初值为 `False`）。若将来切换到支持 schema 的模型，把该开关改回 `True` 即可自动启用严格模式（并保留遇 400 自动回退 json_object 的能力）。
 
 LLM 解析输出示例：
 
 ```
 输入: "0.5年以上 北京 本科 Python 自然语言处理"
-      ↓ DeepSeek V4 Flash
+      ↓ Qwen3.5 Flash
 输出:
 {
   "intent": "semantic",
@@ -543,7 +543,7 @@ QueryPlan 的字段分工：
 
 `enable_rerank` 不是 LLM Query Planner 的职责。系统根据 `intent` 自动判定：只有 `intent == semantic`（且 `ENABLE_RERANK=True`、lexical/semantic query 均非空）时，才对 RRF 后的 top-N 候选启用 Qwen3 reranker。`lookup`（编号/手机/邮箱精确定位）、`keyword`（实体精确匹配）、`browse`（空 query / 纯筛选）都不做 rerank——这些场景词面/精确匹配本身就是最强信号，cross-encoder 重排只会增加延迟并可能扰乱已经正确的头部排序。
 
-如果 DeepSeek 调用失败，系统会退化为保守的词面检索：保留原始 query 作为 `lexical_query`，intent 兜底为 `semantic`，不启用 dense；此时仍满足 `intent == semantic` 的 rerank 条件，因此会在 BM25/RRF 候选上执行系统级 rerank，避免解析失败导致搜索接口不可用。
+如果 Query Planner 调用失败，系统会退化为保守的词面检索：保留原始 query 作为 `lexical_query`，intent 兜底为 `semantic`，不启用 dense；此时仍满足 `intent == semantic` 的 rerank 条件，因此会在 BM25/RRF 候选上执行系统级 rerank，避免解析失败导致搜索接口不可用。
 
 #### 5.1.1 LLM Query Planner 的意图分类与检索策略路由
 
@@ -935,7 +935,7 @@ RRF 是**纯排名融合**，本质上永远会把结果页填满——它没有
 
 #### 容错
 
-如果 DeepSeek query parser 调用失败，intent 兜底为 `semantic`，仍会触发 rerank（此时 lexical/semantic query 退化为原始 query），保证解析失败不影响搜索可用性。reranker API 本身失败时，`_rerank_results` 返回未重排的 RRF 结果并附 warning，不阻断请求。
+如果 Query Planner 调用失败，intent 兜底为 `semantic`，仍会触发 rerank（此时 lexical/semantic query 退化为原始 query），保证解析失败不影响搜索可用性。reranker API 本身失败时，`_rerank_results` 返回未重排的 RRF 结果并附 warning，不阻断请求。
 
 ---
 
@@ -1184,14 +1184,14 @@ python evaluate_search.py --details --output reports/current.json
 | `RERANK_RELEVANCE_FLOOR`     | 0.5    | 重排窗口最高分低于此地板则判定"库中无相关候选"，弃权返回空（见 5.5） |
 | `MIN_YEARS_TOLERANCE_RATIO`  | 0.10   | `min_years` 软容差比例（见 5.1 Step 1）      |
 | `MIN_YEARS_TOLERANCE_FLOOR`  | 0.5    | `min_years` 软容差的最小绝对值（年）          |
-| `QUERY_PARSER_PROVIDER`      | `deepseek` | 自由文本 query 的 LLM 解析 provider      |
-| `QUERY_PARSER_MODEL_ID`      | `deepseek-v4-flash` | Query Planner 模型名              |
-| `QUERY_PARSER_API_URL`       | `https://api.deepseek.com/chat/completions` | DeepSeek OpenAI-compatible Chat Completions 接口 |
-| `QUERY_PARSER_API_KEY`       | 已硬编码 | DeepSeek API key，开发阶段直接写在代码中      |
+| `QUERY_PARSER_PROVIDER`      | `qwen` | 自由文本 query 的 LLM 解析 provider      |
+| `QUERY_PARSER_MODEL_ID`      | `qwen3.5-flash` | Query Planner 模型名              |
+| `QUERY_PARSER_API_URL`       | 阿里云百炼 OpenAI-compatible Chat Completions 接口 | `.../compatible-mode/v1/chat/completions` |
+| `QUERY_PARSER_API_KEY`       | 已硬编码 | 阿里云百炼（DashScope）API key，与 embedding 共用 |
 | `QUERY_PARSER_TIMEOUT_SECONDS` | 30   | Query Planner 请求超时时间                    |
 | `QUERY_PLAN_CACHE_TTL_SECONDS` | 300  | Query Planner 解析结果缓存时间（规范化 query 为 key） |
 | `QUERY_PLAN_CACHE_MAX_ENTRIES` | 512  | Query Planner 解析结果 LRU 缓存最大条数        |
-| `DeepSeek thinking`          | `disabled` | Query Planner 请求体设置 `thinking: {"type": "disabled"}`，优先低延迟 |
+| Query Planner thinking       | `disabled` | 请求体关闭思考链：qwen 用顶层 `enable_thinking: False`，同时兼容 `thinking: {"type": "disabled"}` 的 provider，优先低延迟 |
 | `EVIDENCE_POOL_EXTRA_WEIGHTS`| `(0.30, 0.15)` | 同候选人第 2、3 个证据在本路内部排序中的衰减权重 |
 | `QUERY_TERM_COVERAGE_BOOST`  | 0.001  | Term Coverage 的 constant_score boost        |
 | `MAX_BROWSE_RESULT_SIZE`     | 1,000  | 搜索和浏览最多可查看的候选人窗口             |
@@ -1259,7 +1259,7 @@ python evaluate_search.py --details --output reports/current.json
 ### 10.2 Query Planner 工程实现
 
 - **三层短路解析**：正则 fast-path → 解析缓存 → LLM（详见 5.1）。
-- **结构化输出**：默认 `json_object`（实测 `deepseek-v4-flash` 拒绝 `json_schema`），代码保留严格 schema 链路与自动回退，换模型即可启用。
+- **结构化输出**：默认 `json_object`，代码保留 `json_schema` 严格 schema 链路与自动回退，换支持 schema 的模型即可启用。
 - **多层容错降级**：LLM 失败 → 保守词面检索；JSON 损坏 → fallback；空 query → 不调 LLM。解析失败不影响搜索可用性。
 
 ### 10.3 当前指标基线
