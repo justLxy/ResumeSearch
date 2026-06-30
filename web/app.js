@@ -162,6 +162,7 @@ const parserFieldLabels = {
   semantic_query: "语义检索",
   constraints: "结构化约束",
   degrees: "学历",
+  school_tier: "院校",
   cities: "城市",
   skills: "技能",
   min_years: "最低年限",
@@ -170,6 +171,20 @@ const parserFieldLabels = {
   rank_window_size: "召回窗口",
   filter_count: "过滤器数量",
 };
+
+const schoolTierLabels = {
+  "985": "985",
+  "211": "211",
+  "双一流": "双一流",
+  "c9": "C9",
+  "qs50_overseas": "海外QS50",
+  "其他": "其他",
+};
+
+function schoolTierLabel(tier) {
+  if (!tier) return "";
+  return schoolTierLabels[tier] || tier;
+}
 
 const parserConsumedPlanFields = new Set([
   "raw_query",
@@ -222,6 +237,7 @@ function formatParserSummary(payload) {
       title: "结构化约束",
       rows: [
         parserRow("degrees", constraints.degrees, { type: "list" }),
+        parserRow("school_tier", schoolTierLabel(constraints.school_tier)),
         parserRow("cities", constraints.cities, { type: "list" }),
         parserRow("skills", constraints.skills, { type: "list" }),
         parserRow("min_years", constraints.min_years),
@@ -344,6 +360,10 @@ function formatParserFilters(constraints) {
   const parts = [];
   if (Array.isArray(constraints.degrees) && constraints.degrees.length) {
     parts.push(`学历:${constraints.degrees.join("/")}`);
+  }
+  const tier = schoolTierLabel(constraints.school_tier);
+  if (tier) {
+    parts.push(`院校:${tier}`);
   }
   if (Array.isArray(constraints.cities) && constraints.cities.length) {
     parts.push(`城市:${constraints.cities.join("、")}`);
