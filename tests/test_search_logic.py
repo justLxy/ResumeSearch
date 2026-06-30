@@ -971,7 +971,18 @@ class SearchLogicTests(unittest.TestCase):
         self.assertNotIn({"term": {"skills": "推荐系统"}}, plan.filters)
         self.assertIn({"terms": {"candidate.highest_degree": ["本科"]}}, plan.filters)
         self.assertIn({"terms": {"application.expected_work_cities": ["北京"]}}, plan.filters)
-        self.assertIn({"range": {"candidate.years_experience": {"gte": 0.0}}}, plan.filters)
+        self.assertIn(
+            {
+                "bool": {
+                    "should": [
+                        {"range": {"candidate.years_experience": {"gte": 0.0}}},
+                        {"bool": {"must_not": {"exists": {"field": "candidate.years_experience"}}}},
+                    ],
+                    "minimum_should_match": 1,
+                }
+            },
+            plan.filters,
+        )
         debug_plan = plan.to_debug_dict()
         self.assertEqual(debug_plan["raw_query"], "0.5年以上 北京 本科 推荐系统")
         self.assertEqual(debug_plan["lexical_query"], "推荐系统")
@@ -1587,26 +1598,48 @@ class QueryPlanFastPathAndCacheTests(unittest.TestCase):
         self.assertIn("parser_warning", second["constraints"])
 
 
+def _min_years_filter_gte(clause: dict) -> float:
+    """Pull the range gte out of the min_years filter's bool/should shape."""
+    for branch in clause["bool"]["should"]:
+        rng = branch.get("range")
+        if rng:
+            return rng["candidate.years_experience"]["gte"]
+    raise AssertionError("no range branch in min_years filter")
+
+
 class MinYearsToleranceTests(unittest.TestCase):
     def test_min_years_filter_applies_soft_tolerance(self) -> None:
         # "4 年以上" should still admit a 3.9y candidate. tolerance =
         # max(4*0.1, 0.5) = 0.5, so gte=3.5.
-        gte = _min_years_filter(4)["range"]["candidate.years_experience"]["gte"]
+        gte = _min_years_filter_gte(_min_years_filter(4))
         self.assertAlmostEqual(gte, 3.5, places=3)
         self.assertLess(gte, 3.9)
 
+    def test_min_years_filter_admits_unknown_experience(self) -> None:
+        # Candidates whose years_experience field is absent must NOT be
+        # excluded: unknown != disqualified. The filter ORs a "field missing"
+        # branch alongside the range so a single "N 年以上" line cannot collapse
+        # recall to only the resumes that happen to carry a parsed value.
+        clause = _min_years_filter(4)
+        shoulds = clause["bool"]["should"]
+        self.assertEqual(clause["bool"]["minimum_should_match"], 1)
+        self.assertIn(
+            {"bool": {"must_not": {"exists": {"field": "candidate.years_experience"}}}},
+            shoulds,
+        )
+
     def test_large_min_years_uses_ratio_band(self) -> None:
         # For large thresholds the 10% ratio dominates the 0.5y floor.
-        gte = _min_years_filter(8)["range"]["candidate.years_experience"]["gte"]
+        gte = _min_years_filter_gte(_min_years_filter(8))
         self.assertAlmostEqual(gte, 7.2, places=3)
 
     def test_small_min_years_uses_flat_floor(self) -> None:
         # For small thresholds the 0.5y floor dominates the 10% ratio.
-        gte = _min_years_filter(2)["range"]["candidate.years_experience"]["gte"]
+        gte = _min_years_filter_gte(_min_years_filter(2))
         self.assertAlmostEqual(gte, 1.5, places=3)
 
     def test_min_years_filter_never_goes_negative(self) -> None:
-        gte = _min_years_filter(0.3)["range"]["candidate.years_experience"]["gte"]
+        gte = _min_years_filter_gte(_min_years_filter(0.3))
         self.assertEqual(gte, 0.0)
 
 

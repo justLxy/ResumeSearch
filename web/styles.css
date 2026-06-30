@@ -645,6 +645,9 @@ input:focus-visible {
 
 .parser-section-wide {
   grid-column: 1 / -1;
+}
+
+.parser-detail > .parser-section-wide {
   border-right: none;
 }
 

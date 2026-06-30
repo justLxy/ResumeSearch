@@ -52,12 +52,14 @@ DENSE_RANK_WINDOW_SIZE = 300
 ENABLE_RERANK = True
 RERANK_TOP_N = 20
 # Cross-encoder 重排分带有绝对的 query-doc 相关性语义（不像余弦相似度，余弦只
-# 在同一 query 的批次内可比）。在评测集上实测：真实语义 query 的最高分都 >=0.84，
-# 而库中无相关候选的离域 query 最高分 <=0.33，中间是一条很宽的空白带。若重排窗口
-# 中最相关的候选都低于此地板，说明 reranker 在告诉我们这里没有真正相关的人，于是
-# 弃权返回空，而不是让 RRF 用噪声填满整页。这是基于模型自身输出的绝对相关性判定，
-# 不是挂在 query 文本模式上的规则——它从不检查 query 内容。
-RERANK_RELEVANCE_FLOOR = 0.5
+# 在同一 query 的批次内可比）。实测分布：库中无相关候选的离域 query（如量子计算、
+# SAP、iOS 内核——本库没有这类简历）最高分都 <=0.27，而真正在域内的需求（含偏门
+# 但确实存在的方向，如某些 CV/ML 岗）最低也到 ~0.49，中间是一条 0.27~0.49 的空白带。
+# 若重排窗口中最相关的候选都低于此地板，说明 reranker 在告诉我们这里没有真正相关的人，
+# 于是弃权返回空，而不是让 RRF 用噪声填满整页。地板取在空白带内（偏离域一侧留足余量），
+# 既挡住离域噪声，又不会把在域内的边界 JD 误杀成"零召回"。这是基于模型自身输出的绝对
+# 相关性判定，不是挂在 query 文本模式上的规则——它从不检查 query 内容。
+RERANK_RELEVANCE_FLOOR = 0.35
 EVIDENCE_POOL_EXTRA_WEIGHTS = (0.30, 0.15)
 QUERY_TERM_COVERAGE_BOOST = 0.001
 MAX_QUERY_COVERAGE_TERMS = 8
@@ -376,10 +378,25 @@ def _min_years_filter(min_years: float) -> dict[str, Any]:
     larger of a ratio (10%) or a flat floor (0.5y) so near-misses like a 3.9y
     candidate still surface for a "4 年以上" query; true seniority is preserved
     by ranking, not by clipping the candidate set.
+
+    Candidates whose years_experience is *unknown* (field absent) are NOT
+    excluded: a plain range filter silently drops docs missing the field, and
+    in this corpus a large share of resumes have no parsed experience value.
+    Unknown != disqualified, so we OR in a "field missing" branch and let
+    ranking sort out the rest. Otherwise a single "N 年以上" line in a JD
+    collapses recall to the handful of resumes that happen to have the field.
     """
     tolerance = max(min_years * MIN_YEARS_TOLERANCE_RATIO, MIN_YEARS_TOLERANCE_FLOOR)
     effective_floor = max(0.0, round(min_years - tolerance, 3))
-    return {"range": {"candidate.years_experience": {"gte": effective_floor}}}
+    return {
+        "bool": {
+            "should": [
+                {"range": {"candidate.years_experience": {"gte": effective_floor}}},
+                {"bool": {"must_not": {"exists": {"field": "candidate.years_experience"}}}},
+            ],
+            "minimum_should_match": 1,
+        }
+    }
 
 
 def _normalize_highest_degree(degree: str) -> str:

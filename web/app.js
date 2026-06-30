@@ -232,6 +232,13 @@ function formatParserSummary(payload) {
       ],
     },
     {
+      title: "执行参数",
+      rows: [
+        parserRow("rank_window_size", plan.rank_window_size),
+        parserRow("filter_count", plan.filter_count),
+      ],
+    },
+    {
       title: "查询文本",
       wide: true,
       rows: [
@@ -242,19 +249,13 @@ function formatParserSummary(payload) {
     },
     {
       title: "结构化约束",
+      wide: true,
       rows: [
         parserRow("degrees", constraints.degrees, { type: "list" }),
         parserRow("school_tiers", schoolTierLabelList(constraints.school_tiers ?? constraints.school_tier), { type: "list" }),
         parserRow("cities", constraints.cities, { type: "list" }),
         parserRow("skills", constraints.skills, { type: "list" }),
         parserRow("min_years", constraints.min_years),
-      ],
-    },
-    {
-      title: "执行参数",
-      rows: [
-        parserRow("rank_window_size", plan.rank_window_size),
-        parserRow("filter_count", plan.filter_count),
       ],
     },
   ];
