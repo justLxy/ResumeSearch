@@ -339,6 +339,13 @@ input:focus-visible {
   white-space: nowrap;
 }
 
+.tier-count {
+  margin-left: 4px;
+  font-size: 0.82em;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
 .option-list,
 .chip-list {
   display: flex;

@@ -159,6 +159,19 @@ INDEX_BODY: dict[str, Any] = {
                             },
                         },
                     },
+                    "all_schools": {
+                        "type": "text",
+                        "analyzer": "resume_text",
+                        "search_analyzer": "resume_search",
+                        "fields": {
+                            "keyword": {"type": "keyword"},
+                            "phrase": {
+                                "type": "text",
+                                "analyzer": "resume_search",
+                                "search_analyzer": "resume_search",
+                            },
+                        },
+                    },
                     "major": {
                         "type": "text",
                         "analyzer": "resume_text",
@@ -716,6 +729,26 @@ def _load_json_docs(path: Path) -> list[dict[str, Any]]:
     raise ValueError(f"{path} must contain a JSON object or a list of JSON objects")
 
 
+def _collect_all_schools(doc: dict[str, Any]) -> list[str]:
+    """候选人就读过的全部学校（最高学历校 + 各段教育的学校），去重保序。
+
+    供院校档位筛选用：在 candidate.all_schools 上做 terms 过滤即可实现
+    "任一学历命中即算"。
+    """
+    candidate = doc.get("candidate") or {}
+    all_schools: list[str] = []
+    if candidate.get("school"):
+        name = str(candidate.get("school")).strip()
+        if name:
+            all_schools.append(name)
+    for edu in doc.get("education") or []:
+        if isinstance(edu, dict) and edu.get("school"):
+            name = str(edu.get("school")).strip()
+            if name and name not in all_schools:
+                all_schools.append(name)
+    return all_schools
+
+
 def _enrich_doc(doc: dict[str, Any]) -> dict[str, Any]:
     for field in OBSOLETE_VECTOR_FIELDS:
         doc.pop(field, None)
@@ -729,6 +762,7 @@ def _enrich_doc(doc: dict[str, Any]) -> dict[str, Any]:
         candidate.pop("years_experience", None)
     else:
         candidate["years_experience"] = years_experience
+    candidate["all_schools"] = _collect_all_schools(doc)
     doc["skills_text"] = " ".join(doc.get("skills") or [])
     # 清理无效的奖项记录（has_award 为否或无名称的）
     if "awards" in doc:
@@ -908,16 +942,9 @@ def _evidence_doc(
     resume_id = str(doc.get("resume_id") or "").strip()
     candidate = doc.get("candidate") or {}
     application = doc.get("application") or {}
-    
-    # 从教育经历中提取所有学校
-    all_schools = []
-    if candidate.get("school"):
-        all_schools.append(str(candidate.get("school")).strip())
-    for edu in doc.get("education") or []:
-        if isinstance(edu, dict) and edu.get("school"):
-            school_name = str(edu.get("school")).strip()
-            if school_name and school_name not in all_schools:
-                all_schools.append(school_name)
+
+    # 从教育经历中提取所有学校（与主索引 candidate.all_schools 保持一致）
+    all_schools = _collect_all_schools(doc)
                 
     evidence = {
         "evidence_id": f"{resume_id}:{section_type}:{ordinal}",

@@ -3,6 +3,7 @@ const PAGE_SIZE = 100;
 const state = {
   query: "",
   degree: "",
+  schoolTier: "",
   cities: new Set(),
   skills: new Set(),
   minYears: 0,
@@ -48,6 +49,7 @@ function params(offset = 0) {
   const query = new URLSearchParams();
   if (state.query) query.set("q", state.query);
   if (state.degree) query.set("degree", state.degree);
+  if (state.schoolTier) query.set("school_tier", state.schoolTier);
   if (state.minYears) query.set("min_years", state.minYears);
   state.cities.forEach((city) => query.append("cities", city));
   state.skills.forEach((skill) => query.append("skills", skill));
@@ -370,7 +372,7 @@ function updateLoadMore() {
 }
 
 function hasActiveFilters() {
-  return Boolean(state.degree || state.minYears || state.cities.size || state.skills.size);
+  return Boolean(state.degree || state.schoolTier || state.minYears || state.cities.size || state.skills.size);
 }
 
 function formatYearsLabel(value) {
@@ -405,6 +407,15 @@ function renderFacets(facets) {
       els.yearsRange.max = maxYears;
     }
   }
+  renderSchoolTierCounts(facets.school_tiers || []);
+}
+
+function renderSchoolTierCounts(tiers) {
+  const byKey = new Map(tiers.map((t) => [t.key, t.count]));
+  document.querySelectorAll(".tier-count").forEach((span) => {
+    const count = byKey.get(span.dataset.tier);
+    span.textContent = count != null ? ` ${count}` : "";
+  });
 }
 
 function renderChipGroup(root, items, selectedSet, onChange) {
@@ -1036,6 +1047,12 @@ els.yearsRange.addEventListener("change", runSearch);
 document.querySelectorAll('input[name="degree"]').forEach((input) => {
   input.addEventListener("change", () => {
     state.degree = input.value;
+    runSearch();
+  });
+});
+document.querySelectorAll('input[name="schoolTier"]').forEach((input) => {
+  input.addEventListener("change", () => {
+    state.schoolTier = input.value;
     runSearch();
   });
 });

@@ -30,6 +30,9 @@ from app import (
     _rerank_results,
     _rrf_merge,
     _run_hybrid_search,
+    _school_tier_filter,
+    _normalize_school_tier,
+    _filters_from_llm_constraints,
 )
 from import_to_es import (
     EMBEDDING_NORMALIZED,
@@ -39,6 +42,7 @@ from import_to_es import (
     VECTOR_DIMS,
     INDEX_BODY,
     _enrich_doc,
+    _collect_all_schools,
     _resume_evidence_docs,
     _estimate_years_experience,
 )
@@ -1603,6 +1607,92 @@ class MinYearsToleranceTests(unittest.TestCase):
     def test_min_years_filter_never_goes_negative(self) -> None:
         gte = _min_years_filter(0.3)["range"]["candidate.years_experience"]["gte"]
         self.assertEqual(gte, 0.0)
+
+
+class SchoolTierFilterTests(unittest.TestCase):
+    def test_closed_tier_builds_terms_on_all_schools(self) -> None:
+        f = _school_tier_filter("985")
+        self.assertIn("terms", f)
+        names = f["terms"]["candidate.all_schools.keyword"]
+        self.assertIn("清华大学", names)
+        # 任一学历命中即算：过滤的是含全部就读学校的 all_schools.keyword 字段。
+        self.assertEqual(list(f["terms"].keys()), ["candidate.all_schools.keyword"])
+
+    def test_c9_is_subset_of_985(self) -> None:
+        c9 = set(_school_tier_filter("c9")["terms"]["candidate.all_schools.keyword"])
+        names_985 = set(_school_tier_filter("985")["terms"]["candidate.all_schools.keyword"])
+        self.assertTrue(c9.issubset(names_985))
+        self.assertEqual(len(c9), 9)
+
+    def test_overseas_tier_includes_chinese_and_english_names(self) -> None:
+        names = _school_tier_filter("qs50_overseas")["terms"]["candidate.all_schools.keyword"]
+        self.assertIn("斯坦福大学", names)
+        self.assertIn("Stanford University", names)
+
+    def test_other_tier_uses_must_not_complement(self) -> None:
+        f = _school_tier_filter("其他")
+        must_not = f["bool"]["must_not"]
+        known = must_not["terms"]["candidate.all_schools.keyword"]
+        # "其他" 是所有已知名单的补集。
+        self.assertIn("清华大学", known)
+        self.assertIn("Stanford University", known)
+
+    def test_unknown_and_empty_tier_returns_none(self) -> None:
+        self.assertIsNone(_school_tier_filter(""))
+        self.assertIsNone(_school_tier_filter("野鸡大学档"))
+        self.assertIsNone(_school_tier_filter(None or ""))
+
+    def test_normalize_accepts_display_aliases(self) -> None:
+        self.assertEqual(_normalize_school_tier("C9"), "c9")
+        self.assertEqual(_normalize_school_tier("海外QS50"), "qs50_overseas")
+        self.assertEqual(_normalize_school_tier("海外"), "qs50_overseas")
+        self.assertEqual(_normalize_school_tier("985"), "985")
+        self.assertEqual(_normalize_school_tier("不存在"), "")
+
+    def test_build_filters_appends_school_tier_alongside_degree(self) -> None:
+        filters = _build_filters("硕士", [], [], 0, school_tier="985")
+        self.assertIn({"term": {"candidate.highest_degree": "硕士"}}, filters)
+        self.assertTrue(
+            any("terms" in f and "candidate.all_schools.keyword" in f.get("terms", {}) for f in filters)
+        )
+
+    def test_build_filters_without_tier_adds_no_school_filter(self) -> None:
+        filters = _build_filters("硕士", [], [], 0)
+        self.assertFalse(
+            any("all_schools.keyword" in str(f) for f in filters)
+        )
+
+    def test_llm_constraints_school_tier_becomes_filter(self) -> None:
+        filters = _filters_from_llm_constraints({"school_tier": "211"})
+        self.assertTrue(
+            any("candidate.all_schools.keyword" in f.get("terms", {}) for f in filters)
+        )
+
+
+class CollectAllSchoolsTests(unittest.TestCase):
+    def test_collects_highest_and_education_schools_deduped_in_order(self) -> None:
+        doc = {
+            "candidate": {"school": "上海交通大学"},
+            "education": [
+                {"school": "北京理工大学"},
+                {"school": "上海交通大学"},
+                {"school": "  "},
+            ],
+        }
+        self.assertEqual(_collect_all_schools(doc), ["上海交通大学", "北京理工大学"])
+
+    def test_handles_missing_fields(self) -> None:
+        self.assertEqual(_collect_all_schools({}), [])
+        self.assertEqual(_collect_all_schools({"candidate": {}, "education": []}), [])
+
+    def test_enrich_doc_populates_candidate_all_schools(self) -> None:
+        doc = {
+            "parse_status": "ok",
+            "candidate": {"school": "清华大学", "years_experience": 2},
+            "education": [{"school": "南开大学"}],
+        }
+        enriched = _enrich_doc(doc)
+        self.assertEqual(enriched["candidate"]["all_schools"], ["清华大学", "南开大学"])
 
 
 if __name__ == "__main__":
