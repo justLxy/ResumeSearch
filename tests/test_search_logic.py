@@ -900,14 +900,31 @@ class SearchLogicTests(unittest.TestCase):
         self.assertNotIn("partial_terms", query_json)
         self.assertNotIn("multi_match", query_json)
 
-    def test_entity_field_match_requires_query_coverage(self) -> None:
-        query_json = json.dumps(
-            _evidence_lexical_query("Columbia University 哥伦比亚大学"),
+    def test_entity_field_match_uses_phrase_not_partial_or(self) -> None:
+        # 实体字段用 match_phrase（按序连续）而非 70% OR-token，避免"哥伦比亚大学"
+        # 被切成 [哥伦比亚, 大学] 后仅凭泛词"大学"匹配全库学校。
+        clause = _find_clause_with_name_prefix(
+            _evidence_lexical_query("哥伦比亚大学"), "evidence_match:candidate_school"
+        )
+        self.assertIsNotNone(clause, "应存在实体学校匹配子句")
+        # 子句类型应为 match_phrase，而不是带 minimum_should_match 的 match
+        self.assertIn("match_phrase", clause)
+        self.assertNotIn("match", {k for k in clause if k != "match_phrase"})
+
+    def test_keyword_intent_drops_partial_terms_route(self) -> None:
+        # keyword 实体查询不应启用 partial_terms（70% OR-token）——否则泛词直通全库。
+        keyword_json = json.dumps(
+            _evidence_lexical_query("哥伦比亚大学", query_intent=INTENT_KEYWORD),
             ensure_ascii=False,
         )
+        self.assertNotIn("partial_terms", keyword_json)
 
-        self.assertIn('"minimum_should_match": "70%"', query_json)
-        self.assertIn("evidence_match:candidate_school", query_json)
+        # 非 keyword（如多技能 semantic）仍保留 partial_terms 做部分覆盖召回。
+        semantic_json = json.dumps(
+            _evidence_lexical_query("Python NLP SQL", query_intent=INTENT_SEMANTIC),
+            ensure_ascii=False,
+        )
+        self.assertIn("partial_terms", semantic_json)
 
     def test_query_plan_uses_llm_keyword_constraints_without_rerank(self) -> None:
         with patch(
@@ -1316,6 +1333,31 @@ def _find_multi_match_by_name(node: object, name: str) -> dict:
             except AssertionError:
                 continue
     raise AssertionError(f"multi_match query not found: {name}")
+
+
+def _find_clause_with_name_prefix(node: object, name_prefix: str):
+    """返回内层 `_name` 以 name_prefix 开头的查询包装子句（如 {"match_phrase": {...}}）。"""
+    if isinstance(node, dict):
+        for clause_type, params in node.items():
+            if isinstance(params, dict):
+                nm = params.get("_name")
+                if isinstance(nm, str) and nm.startswith(name_prefix):
+                    return {clause_type: params}
+                for field_params in params.values():
+                    if isinstance(field_params, dict):
+                        fnm = field_params.get("_name")
+                        if isinstance(fnm, str) and fnm.startswith(name_prefix):
+                            return {clause_type: params}
+        for value in node.values():
+            found = _find_clause_with_name_prefix(value, name_prefix)
+            if found is not None:
+                return found
+    elif isinstance(node, list):
+        for value in node:
+            found = _find_clause_with_name_prefix(value, name_prefix)
+            if found is not None:
+                return found
+    return None
 
 
 def _response(

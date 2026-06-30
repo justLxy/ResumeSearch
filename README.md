@@ -584,18 +584,20 @@ LLM API 整体挂掉 → 兜底关（_llm_parser_fallback）
 | Filter 处理 | 从 query 中移除后单独 filter | 抽取 constraints 但**保留原词在 query 中**（避免 BM25 召回损失） |
 | 容错 | LLM 失败 = 搜索失败 | LLM 失败 → 降级为保守词面检索 |
 
-##### 证据分块 BM25 查询的三层匹配
+##### 证据分块 BM25 查询的实体匹配
 
-在`_evidence_lexical_query` 中，实体字段（公司/学校/专业/岗位名）同时使用 `term`（精确 token 匹配）和 `match`（分词后 OR 匹配）：
+在 `_evidence_lexical_query` 中，实体字段（公司/学校/专业/岗位名）同时使用 `term`（精确 token 匹配）和 `match_phrase`（按序连续的短语匹配）：
 
 ```
 dis_max(
-    term("application.company", query),     // 完整匹配 "阿里巴巴" → boost 30
-    match("application.company", query)     // 分词匹配 ["阿里巴巴","实习"] → boost 16.5
+    term("candidate.all_schools.keyword", query),  // 完整 token 精确命中 → boost 36
+    match_phrase("candidate.all_schools", query)    // 分词后按序连续命中 → boost 19.8
 )
 ```
 
-这解决了"搜'阿里巴巴'能命中，搜'阿里巴巴实习'反而命中不了"的问题——`match` 让 IK 分词器自动拆出 "阿里巴巴" 去匹配，无需手工分词规则。
+**为什么是 `match_phrase` 而不是 `match`（OR-token）**：早先这里用 `match` + `minimum_should_match=70%`，对短实体查询形同虚设——"哥伦比亚大学"被 IK 切成 `[哥伦比亚, 大学]` 两个 token，70% 取整后只需命中 1 个，而"大学"是全库每份简历都含的泛词，于是库里**根本不存在**哥伦比亚大学，却把整库 200 个候选人全召回并高亮"大学"。`match_phrase` 要求 token **按序连续**出现，从结构上挡住了泛词直通：不存在的学校归零，真实学校（如"北京邮电大学"）精准召回该校候选人。这是内容无关的结构约束，不需要维护停用词表。
+
+> 实体带修饰词的场景（如"北京邮电大学硕士"）由 LLM Query Planner 在解析阶段把"硕士"抽成 `constraints`、`lexical_query` 只留实体核心来解决，不依赖这条 BM25 路做模糊兜底。
 
 ### 5.2 两路并行检索
 
@@ -645,8 +647,10 @@ dis_max (tie_breaker=0.0)
 │
 └── 分词匹配层 (Term)
     ├── multi_match(operator=and, boost=4)   ← 所有词都命中
-    └── multi_match(operator=or, min_match=70%, boost=1) ← 部分词命中
+    └── multi_match(operator=or, min_match=70%, boost=1) ← 部分词命中（仅非 keyword 意图）
 ```
+
+> **partial_terms 按意图门控**：上面那条 70% OR-token 的"部分命中"召回只在**非 keyword 意图**下启用。它对多技能语义查询有用（"Python NLP SQL" 命中 2/3 也算相关），但对 keyword 实体查询有害——和实体 `match` 同样的泛词直通问题（"哥伦比亚大学"靠"大学"命中全库）。keyword 意图下实体已由 term + 短语路精确处理，故跳过这条路。
 
 **为什么用 `dis_max` 而不是 `bool/should`？**
 

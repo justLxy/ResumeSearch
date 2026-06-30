@@ -62,7 +62,6 @@ EVIDENCE_POOL_EXTRA_WEIGHTS = (0.30, 0.15)
 QUERY_TERM_COVERAGE_BOOST = 0.001
 MAX_QUERY_COVERAGE_TERMS = 8
 PARTIAL_TERMS_MINIMUM_SHOULD_MATCH = "70%"
-ENTITY_MATCH_MINIMUM_SHOULD_MATCH = "70%"
 COVERAGE_QUERY_PREFIX = "query_term:"
 EVIDENCE_EXACT_QUERY_PREFIX = "evidence_exact:"
 EVIDENCE_PHRASE_QUERY_PREFIX = "evidence_phrase:"
@@ -1095,8 +1094,14 @@ def _evidence_lexical_query(
                 "boost": 4,
             }
         },
-        _partial_terms_query(query_text),
     ]
+    # partial_terms 是 70% OR-token 的"部分命中"召回，对多技能语义查询有用
+    # （"Python NLP SQL" 命中 2/3 也算相关）；但对 keyword 实体查询有害——
+    # "哥伦比亚大学" 被切成 [哥伦比亚, 大学]，泛词"大学"命中全库每份简历，
+    # 70% 门槛形同直通车。keyword 意图下实体已由 term + 短语路精确处理，
+    # 不需要也不应走 partial_terms，故仅在非 keyword 意图下启用。
+    if query_intent != INTENT_KEYWORD:
+        queries.append(_partial_terms_query(query_text))
     scoring_query = {
         "dis_max": {
             "tie_breaker": 0.0,
@@ -1165,11 +1170,15 @@ def _entity_field_query(
     term_name: str,
     match_name: str,
 ) -> dict[str, Any]:
-    """对实体字段组合 term + match，兼顾精确匹配和分词召回。
+    """对实体字段组合 term + 短语匹配，兼顾精确匹配和受控分词召回。
 
     term 查询：当 query 本身就是一个完整 token 时精准命中（如 "阿里巴巴"）。
-    match 查询：当 query 含修饰词时（如 "阿里巴巴实习"），经分词后在 text 字段
-    上做受控 OR 匹配，降低 boost 避免排在精准匹配前面。
+    match_phrase 查询：当 query 含修饰词或被 IK 切成多 token 时（如 "北京邮电大学"
+    → [北京邮电大学, 北京邮电, 大学]），要求这些 token 在字段里**按序连续**出现才算
+    命中。这从根本上挡住了"哥伦比亚大学"被切成 [哥伦比亚, 大学] 后、仅凭泛词"大学"
+    把整库学校全召回的问题——早先用 `match` + `minimum_should_match=70%` 时，2 个
+    token 只需命中 1 个，泛词"大学/学院"形同直通车。短语匹配是内容无关的结构约束，
+    不需要维护停用词表。boost 略低于精确 term，避免排在精准匹配前面。
     """
     return {
         "dis_max": {
@@ -1177,11 +1186,10 @@ def _entity_field_query(
             "queries": [
                 {"term": {keyword_field: {"value": query_text, "boost": boost, "_name": f"{term_name}:W{boost}"}}},
                 {
-                    "match": {
+                    "match_phrase": {
                         text_field: {
                             "query": query_text,
-                            "operator": "or",
-                            "minimum_should_match": ENTITY_MATCH_MINIMUM_SHOULD_MATCH,
+                            "slop": 1,
                             "boost": boost * 0.55,
                             "_name": f"{match_name}:W{boost * 0.55}",
                         }
