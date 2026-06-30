@@ -670,7 +670,7 @@ def _query_parser_system_prompt() -> str:
         "- keyword: 学校/公司/专业/姓名/岗位名等实体查询，dense=false。\n"
         "- semantic: 能力描述、多技能组合、长 JD 等需要语义理解的需求，dense=true。\n\n"
         "字段规则:\n"
-        "- degrees: 用户能接受的全部学历集合，由 LLM 展开——\"硕士\"→[硕士]；\"本科或硕士\"→[本科,硕士]；\"本科及以上\"→[本科,硕士,博士]；\"硕士及以上\"→[硕士,博士]。无学历约束则为 []。\n"
+        "- degrees: 仅当 query 里**字面出现**学历词（本科/学士/硕士/研究生/博士/及以上等）时才填，由 LLM 展开——\"硕士\"→[硕士]；\"本科或硕士\"→[本科,硕士]；\"本科及以上\"→[本科,硕士,博士]；\"硕士及以上\"→[硕士,博士]。query 没提学历就必须是 []——绝不能因为学校/专业/岗位\"看起来高端\"就臆测学历，那会把合格候选人误过滤掉。\n"
         "- lexical_query: 只放实体核心名/技能/高价值检索词，去掉已抽到 constraints 的学历/城市/年限，也去掉\"实习\"\"岗位\"\"职责\"\"要求\"\"熟悉\"等修饰/低信息词。长 JD 必须压缩成关键词串，不要复读原句。\n"
         "- semantic_query: 保留完整语义需求与上下文（长 JD 放原文）；负向约束（如\"不要纯推荐\"）也留在这里，不要变成硬过滤。\n"
         "- skills: 用户明确点名的技能，仍要保留在 lexical/semantic_query 里（是召回线索）；泛化能力不要硬塞。\n"
@@ -680,6 +680,8 @@ def _query_parser_system_prompt() -> str:
         '输出: {"intent":"lookup","lexical_query":"zhangwei_mock@example.com","semantic_query":"zhangwei_mock@example.com","constraints":{"degrees":[],"cities":[],"skills":[],"min_years":null},"enable_dense":false}\n'
         "输入: 东南大学本科或者硕士\n"
         '输出: {"intent":"keyword","lexical_query":"东南大学","semantic_query":"","constraints":{"degrees":["本科","硕士"],"cities":[],"skills":[],"min_years":null},"enable_dense":false}\n'
+        "输入: 南京大学\n"
+        '输出: {"intent":"keyword","lexical_query":"南京大学","semantic_query":"","constraints":{"degrees":[],"cities":[],"skills":[],"min_years":null},"enable_dense":false}\n'
         "输入: 北京 硕士及以上 4年以上 RAG LangChain\n"
         '输出: {"intent":"semantic","lexical_query":"RAG LangChain","semantic_query":"RAG LangChain","constraints":{"degrees":["硕士","博士"],"cities":["北京"],"skills":["RAG","LangChain"],"min_years":4},"enable_dense":true}\n'
         "输入: 岗位：LLM/RAG 应用工程师。职责：负责企业知识库问答、文档解析、向量检索、召回排序、Prompt 设计和模型微调，能用 Python、PyTorch、LangChain 或 LlamaIndex 做工程落地。要求：熟悉 RAG 评测、长文本处理和业务系统集成，有 ToB 知识库项目经验优先。\n"
