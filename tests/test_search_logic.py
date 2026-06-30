@@ -9,8 +9,9 @@ from app import (
     INTENT_KEYWORD,
     INTENT_LOOKUP,
     INTENT_SEMANTIC,
+    QUERY_PARSER_MODEL_ID,
     _build_filters,
-    _call_deepseek_query_parser,
+    _call_query_parser_llm,
     _default_snippet,
     _evidence_lexical_query,
     _format_hit,
@@ -44,7 +45,7 @@ from evaluate_search import evaluate_query_plan
 
 
 class SearchLogicTests(unittest.TestCase):
-    def test_deepseek_query_parser_disables_thinking(self) -> None:
+    def test_query_parser_disables_thinking(self) -> None:
         calls: list[dict] = []
 
         class FakeResponse:
@@ -76,7 +77,7 @@ class SearchLogicTests(unittest.TestCase):
             return FakeResponse()
 
         with patch("app.requests.post", side_effect=fake_post):
-            plan = _call_deepseek_query_parser(
+            plan = _call_query_parser_llm(
                 "找做过 RAG 和向量检索的人",
                 facets={
                     "degrees": [{"key": "本科"}],
@@ -86,7 +87,9 @@ class SearchLogicTests(unittest.TestCase):
             )
 
         self.assertEqual(plan["intent"], "semantic")
-        self.assertEqual(calls[0]["json"]["model"], "deepseek-v4-flash")
+        self.assertEqual(calls[0]["json"]["model"], QUERY_PARSER_MODEL_ID)
+        # 两种关闭思考的参数都发：qwen 用 enable_thinking，deepseek/豆包用 thinking。
+        self.assertFalse(calls[0]["json"]["enable_thinking"])
         self.assertEqual(calls[0]["json"]["thinking"], {"type": "disabled"})
         self.assertFalse(calls[0]["json"]["stream"])
 
@@ -908,7 +911,7 @@ class SearchLogicTests(unittest.TestCase):
 
     def test_query_plan_uses_llm_keyword_constraints_without_rerank(self) -> None:
         with patch(
-            "app._call_deepseek_query_parser",
+            "app._call_query_parser_llm",
             return_value={
                 "intent": "keyword",
                 "lexical_query": "推荐系统",
@@ -951,7 +954,7 @@ class SearchLogicTests(unittest.TestCase):
 
     def test_query_plan_treats_degree_floor_as_range_filter(self) -> None:
         with patch(
-            "app._call_deepseek_query_parser",
+            "app._call_query_parser_llm",
             return_value={
                 "intent": "semantic",
                 "lexical_query": "大模型 RAG Agent",
@@ -981,7 +984,7 @@ class SearchLogicTests(unittest.TestCase):
 
     def test_query_plan_keeps_llm_skill_constraints_soft(self) -> None:
         with patch(
-            "app._call_deepseek_query_parser",
+            "app._call_query_parser_llm",
             return_value={
                 "intent": "keyword",
                 "lexical_query": "java",
@@ -1008,7 +1011,7 @@ class SearchLogicTests(unittest.TestCase):
 
     def test_query_plan_disables_rerank_for_lookup_queries(self) -> None:
         with patch(
-            "app._call_deepseek_query_parser",
+            "app._call_query_parser_llm",
             return_value={
                 "intent": "lookup",
                 "lexical_query": "M20260013",
@@ -1031,7 +1034,7 @@ class SearchLogicTests(unittest.TestCase):
 
     def test_query_plan_routes_semantic_as_hybrid_query(self) -> None:
         with patch(
-            "app._call_deepseek_query_parser",
+            "app._call_query_parser_llm",
             return_value={
                 "intent": "semantic",
                 "lexical_query": "推荐系统 NLP SQL",
@@ -1059,7 +1062,7 @@ class SearchLogicTests(unittest.TestCase):
 
     def test_query_plan_disables_dense_for_keyword_queries(self) -> None:
         with patch(
-            "app._call_deepseek_query_parser",
+            "app._call_query_parser_llm",
             return_value={
                 "intent": "keyword",
                 "lexical_query": "北京大学",
@@ -1086,7 +1089,7 @@ class SearchLogicTests(unittest.TestCase):
 
     def test_query_plan_routes_natural_language_to_semantic(self) -> None:
         with patch(
-            "app._call_deepseek_query_parser",
+            "app._call_query_parser_llm",
             return_value={
                 "intent": "semantic",
                 "lexical_query": "推荐系统召回 NLP 模型落地",
@@ -1437,7 +1440,7 @@ class QueryPlanFastPathAndCacheTests(unittest.TestCase):
         app._query_plan_cache.clear()
 
     def test_email_lookup_short_circuits_llm(self) -> None:
-        with patch("app._call_deepseek_query_parser") as mock_llm:
+        with patch("app._call_query_parser_llm") as mock_llm:
             parsed = _parse_query_with_llm("zhangwei_mock@example.com")
 
         mock_llm.assert_not_called()
@@ -1464,7 +1467,7 @@ class QueryPlanFastPathAndCacheTests(unittest.TestCase):
             "enable_dense": True,
         }
         with patch(
-            "app._call_deepseek_query_parser", return_value=payload
+            "app._call_query_parser_llm", return_value=payload
         ) as mock_llm:
             first = _parse_query_with_llm("找做过 RAG 的人")
             second = _parse_query_with_llm("找做过 RAG 的人")
@@ -1485,7 +1488,7 @@ class QueryPlanFastPathAndCacheTests(unittest.TestCase):
             "enable_dense": False,
         }
         with patch(
-            "app._call_deepseek_query_parser", return_value=payload
+            "app._call_query_parser_llm", return_value=payload
         ) as mock_llm:
             _parse_query_with_llm("北京大学")
             _parse_query_with_llm("  北京大学  ")
@@ -1494,7 +1497,7 @@ class QueryPlanFastPathAndCacheTests(unittest.TestCase):
 
     def test_failed_parse_is_not_cached(self) -> None:
         with patch(
-            "app._call_deepseek_query_parser", side_effect=RuntimeError("boom")
+            "app._call_query_parser_llm", side_effect=RuntimeError("boom")
         ) as mock_llm:
             first = _parse_query_with_llm("做过推荐系统的人")
             second = _parse_query_with_llm("做过推荐系统的人")

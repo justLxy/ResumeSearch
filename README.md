@@ -2,7 +2,7 @@
 
 一个面向招聘场景的 **混合检索原型系统**，围绕"**证据切片**"（Evidence Chunks）这一核心设计——将每份简历按结构化段落拆分为可独立检索的语义片段，在证据粒度上同时进行 BM25 词面检索和 kNN 向量检索，再按候选人维度聚合后通过 RRF 融合排序。
 
-系统以 **Elasticsearch 9.x** 为检索引擎，以 **DeepSeek V4 Flash** 作为在线 **LLM Query Planner** 实现用户 query 的意图分类（精确查找/关键词检索/语义检索）与结构化约束抽取，以 **Qwen text-embedding-v4**（可选豆包 API 或本地 Yuan 1.5B）提供 2048 维证据向量化，以 **Qwen3 Reranker** 对 RRF 融合后的 top-N 结果做精排。前端为无框架纯 HTML/CSS/JS 单页应用，包含动态筛选面板、Debug 排名可解释性面板和完整的检索质量评估框架（77 条评测用例，覆盖 9 种查询类型，支持 P@K / R@K / MRR / NDCG 等指标）。
+系统以 **Elasticsearch 9.x** 为检索引擎，以 **Qwen3.5 Flash** 作为在线 **LLM Query Planner** 实现用户 query 的意图分类（精确查找/关键词检索/语义检索）与结构化约束抽取，以 **Qwen text-embedding-v4**（可选豆包 API 或本地 Yuan 1.5B）提供 2048 维证据向量化，以 **Qwen3 Reranker** 对 RRF 融合后的 top-N 结果做精排。前端为无框架纯 HTML/CSS/JS 单页应用，包含动态筛选面板、Debug 排名可解释性面板和完整的检索质量评估框架（77 条评测用例，覆盖 9 种查询类型，支持 P@K / R@K / MRR / NDCG 等指标）。
 
 > **Parser 概念边界**：本项目当前只有用户输入 query 会调用 LLM。离线简历解析不依赖 LLM，`resume_parser.py` 是针对 HTML `.doc` 简历的规则化解析器；`app.py` 中的 LLM Query Planner 只负责在线检索时解析用户 query。数据文件里的 `parser_version`（如 `html-doc-v1` 或实验数据中的 `llm-diverse-v2`）描述的是简历数据来源/生成版本，不代表检索服务运行时会用 LLM 解析简历。
 
@@ -91,7 +91,7 @@
 │  ┌──────────────┐  ┌──────────────┐  ┌─────────────────┐       │
 │  │ LLM Query    │→│ 并行检索调度  │→│ RRF 融合 + 排序 │       │
 │  │ Planner      │  │ ThreadPool   │  │ _rrf_merge()    │       │
-│  │ DeepSeek V4  │  │ Executor     │  │ Qwen3 rerank    │       │
+│  │ Qwen3.5 Flash│  │ Executor     │  │ Qwen3 rerank    │       │
 │  └──────────────┘  └──────────────┘  └─────────────────┘       │
 │         │                │                                      │
 │         │    ┌───────────┼───────────┐                          │

@@ -72,10 +72,13 @@ INTENT_LOOKUP = "lookup"
 INTENT_KEYWORD = "keyword"
 INTENT_SEMANTIC = "semantic"
 EVIDENCE_VECTOR_FIELD = "evidence_vector"
-QUERY_PARSER_PROVIDER = "deepseek"
-QUERY_PARSER_MODEL_ID = "deepseek-v4-flash"
-QUERY_PARSER_API_URL = "https://api.deepseek.com/chat/completions"
-QUERY_PARSER_API_KEY = "sk-1eed8c88508842c2a023399a7ed6b5c0"
+QUERY_PARSER_PROVIDER = "qwen"
+QUERY_PARSER_MODEL_ID = "qwen3.5-flash"
+QUERY_PARSER_API_URL = "https://ws-nl8tvztfpss60i8t.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/chat/completions"
+QUERY_PARSER_API_KEY = (
+    "sk-ws-H.RYPXDXP.DATz.MEUCIEFJ1Yu1_HxHnYU6_8E_OY1f_hJaKbH9VUpaqtL1uenPAiEAyYrG7vGeOt"
+    "0RqCCBXlpzh-GwOCOxTWBcWiR3Y8YsVbk"
+)
 QUERY_PARSER_TIMEOUT_SECONDS = 30
 QUERY_PARSER_MAX_VOCAB_ITEMS = 120
 QUERY_PLAN_CACHE_TTL_SECONDS = 300
@@ -549,7 +552,7 @@ def _parse_query_with_llm(
         return cached
 
     try:
-        payload = _call_deepseek_query_parser(query, facets=facets)
+        payload = _call_query_parser_llm(query, facets=facets)
     except Exception as exc:
         logger.exception("LLM query parser failed")
         fallback = _llm_parser_fallback(query)
@@ -630,7 +633,7 @@ def _deep_copy_plan(plan: dict[str, Any]) -> dict[str, Any]:
     return json.loads(json.dumps(plan, ensure_ascii=False))
 
 
-def _call_deepseek_query_parser(
+def _call_query_parser_llm(
     raw_query: str,
     facets: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -648,6 +651,10 @@ def _call_deepseek_query_parser(
             },
         ],
         "response_format": _query_parser_response_format(),
+        # 关闭思考链：planner 是结构化抽取任务，思考只增延迟无收益。不同 provider
+        # 的关闭参数名不同——qwen 用 enable_thinking=False（顶层），deepseek/豆包用
+        # thinking={"type":"disabled"}。两者都发，各 provider 忽略自己不认的键。
+        "enable_thinking": False,
         "thinking": {"type": "disabled"},
         "temperature": 0,
         "max_tokens": 900,

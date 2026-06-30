@@ -65,14 +65,14 @@
       "forbidden10": 0,
       "judged": 8,
       "mrr10": 1.0,
-      "ndcg10": 0.9883653646321187,
-      "ndcg5": 0.9817414562696617,
-      "p10": 0.8875,
-      "p5": 0.975,
+      "ndcg10": 0.9671116121265995,
+      "ndcg5": 0.9367346294475074,
+      "p10": 0.875,
+      "p5": 0.925,
       "queries": 8,
-      "r10": 0.6860079470618035,
+      "r10": 0.6800555661094225,
       "r100": 1.0,
-      "r5": 0.4020317513086795,
+      "r5": 0.38715079892772714,
       "r50": 0.9298952792553191
     },
     "negative_semantic": {
@@ -2144,20 +2144,20 @@
       "forbidden_hits_at_10": [],
       "id": "major_信息安全",
       "mrr10": 1.0,
-      "ndcg10": 1.0,
-      "ndcg5": 1.0,
-      "p10": 1.0,
-      "p5": 1.0,
+      "ndcg10": 0.9052116356304493,
+      "ndcg5": 0.8539316501572937,
+      "p10": 0.9,
+      "p5": 0.8,
       "planner_eval": {
         "actual": {
-          "enable_dense": false,
-          "enable_rerank": false,
-          "intent": "keyword",
+          "enable_dense": true,
+          "enable_rerank": true,
+          "intent": "semantic",
           "lexical_query": "信息安全",
           "semantic_query": "信息安全"
         },
         "available": true,
-        "exact_match": true,
+        "exact_match": false,
         "expected": {
           "enable_dense": false,
           "enable_rerank": false,
@@ -2166,157 +2166,163 @@
           "semantic_query": ""
         },
         "field_matches": {
-          "enable_dense": true,
-          "enable_rerank": true,
-          "intent": true,
+          "enable_dense": false,
+          "enable_rerank": false,
+          "intent": false,
           "lexical_query": true,
           "semantic_query": true
         },
         "fields": 5,
-        "matched": 5,
-        "mismatched_fields": []
+        "matched": 2,
+        "mismatched_fields": [
+          "intent",
+          "enable_dense",
+          "enable_rerank"
+        ]
       },
       "query": "信息安全",
       "query_plan": {
-        "constraints": {},
-        "enable_dense": false,
-        "enable_rerank": false,
+        "constraints": {
+          "skills": [
+            "信息安全"
+          ]
+        },
+        "enable_dense": true,
+        "enable_rerank": true,
         "filter_count": 0,
-        "intent": "keyword",
+        "intent": "semantic",
         "lexical_query": "信息安全",
         "rank_window_size": 1000,
         "raw_query": "信息安全",
         "semantic_query": "信息安全"
       },
-      "r10": 0.47619047619047616,
+      "r10": 0.42857142857142855,
       "r100": 1.0,
-      "r5": 0.23809523809523808,
+      "r5": 0.19047619047619047,
       "r50": 1.0,
       "relevant_grades_at_10": {
         "M20260003": 1.0,
-        "M20260017": 1.0,
-        "M20260019": 1.0,
-        "M20260024": 1.0,
-        "M20260041": 1.0,
+        "M20260030": 1.0,
         "M20260043": 1.0,
-        "M20260057": 1.0,
+        "M20260095": 1.0,
+        "M20260100": 1.0,
         "M20260107": 1.0,
         "M20260150": 1.0,
-        "M20260161": 1.0
+        "M20260161": 1.0,
+        "M20260197": 1.0
       },
       "relevant_hits_at_10": [
-        "M20260019",
-        "M20260003",
-        "M20260107",
-        "M20260057",
-        "M20260043",
-        "M20260024",
-        "M20260041",
         "M20260150",
-        "M20260161",
-        "M20260017"
-      ],
-      "returned_ids": [
-        "M20260019",
-        "M20260003",
         "M20260107",
-        "M20260057",
-        "M20260043",
-        "M20260024",
-        "M20260041",
-        "M20260150",
-        "M20260161",
-        "M20260017",
-        "M20260016",
-        "M20260103",
-        "M20260028",
-        "M20260030",
         "M20260100",
-        "M20260129",
-        "M20260144",
-        "M20260034",
+        "M20260003",
+        "M20260030",
+        "M20260161",
         "M20260095",
         "M20260197",
+        "M20260043"
+      ],
+      "returned_ids": [
+        "M20260150",
+        "M20260107",
+        "M20260100",
+        "M20260001",
+        "M20260003",
+        "M20260030",
+        "M20260161",
+        "M20260095",
+        "M20260197",
+        "M20260043",
+        "M20260024",
+        "M20260017",
+        "M20260057",
+        "M20260019",
+        "M20260144",
         "M20260175",
-        "M20260156",
+        "M20260041",
+        "M20260103",
+        "M20260111",
+        "M20260059",
+        "M20260129",
+        "M20260038",
+        "M20260192",
+        "M20260028",
+        "M20260016",
+        "M20260106",
+        "M20260053",
+        "M20260112",
+        "M20260079",
+        "M20260055",
+        "M20260004",
+        "M20260136",
+        "M20260141",
+        "M20260142",
+        "M20260190",
+        "M20260193",
         "M20260159",
         "M20260154",
-        "M20260004",
-        "M20260001",
-        "M20260130",
-        "M20260146",
-        "M20260055",
-        "M20260074",
-        "M20260136",
         "M20260157",
-        "M20260173",
-        "M20260059",
-        "M20260134",
-        "M20260099",
-        "M20260035",
+        "M20260034",
         "M20260021",
-        "M20260011",
-        "M20260098",
-        "M20260147",
-        "M20260110",
-        "M20260009",
-        "M20260111",
-        "M20260141",
-        "M20260106",
-        "M20260112",
-        "M20260192",
-        "M20260165",
-        "M20260188",
-        "M20260109",
-        "M20260193",
-        "M20260026",
-        "M20260067",
-        "M20260046",
-        "M20260038",
-        "M20260163",
-        "M20260176",
-        "M20260053",
-        "M20260079",
+        "M20260156",
+        "M20260074",
+        "M20260138",
+        "M20260105",
+        "M20260173",
+        "M20260199",
+        "M20260037",
+        "M20260099",
         "M20260115",
         "M20260101",
+        "M20260130",
+        "M20260146",
+        "M20260023",
+        "M20260176",
         "M20260118",
+        "M20260163",
+        "M20260046",
+        "M20260035",
         "M20260042",
-        "M20260138",
-        "M20260094",
-        "M20260190",
-        "M20260121",
-        "M20260058",
-        "M20260164",
-        "M20260133",
-        "M20260086",
-        "M20260052",
-        "M20260048",
-        "M20260015",
-        "M20260071",
-        "M20260142",
-        "M20260084",
-        "M20260171",
-        "M20260050",
-        "M20260085",
-        "M20260078",
-        "M20260186",
-        "M20260081",
-        "M20260037",
-        "M20260104",
-        "M20260199",
-        "M20260007",
-        "M20260062",
-        "M20260031",
-        "M20260168",
+        "M20260134",
+        "M20260026",
+        "M20260147",
+        "M20260067",
+        "M20260123",
+        "M20260109",
+        "M20260066",
         "M20260128",
+        "M20260086",
+        "M20260073",
+        "M20260009",
+        "M20260084",
+        "M20260121",
+        "M20260119",
         "M20260113",
-        "M20260200",
-        "M20260025",
-        "M20260117",
-        "M20260170",
+        "M20260002",
+        "M20260186",
+        "M20260110",
+        "M20260081",
+        "M20260102",
+        "M20260011",
+        "M20260133",
+        "M20260104",
+        "M20260031",
         "M20260010",
+        "M20260127",
+        "M20260063",
+        "M20260094",
         "M20260153",
-        "M20260155"
+        "M20260168",
+        "M20260165",
+        "M20260044",
+        "M20260188",
+        "M20260062",
+        "M20260164",
+        "M20260178",
+        "M20260058",
+        "M20260155",
+        "M20260052",
+        "M20260087"
       ],
       "type": "major_query"
     },
@@ -2334,20 +2340,20 @@
       "forbidden_hits_at_10": [],
       "id": "major_网络空间安全",
       "mrr10": 1.0,
-      "ndcg10": 0.9363792118010483,
-      "ndcg5": 1.0,
+      "ndcg10": 0.8611375561264454,
+      "ndcg5": 0.7860137352654724,
       "p10": 0.9,
-      "p5": 1.0,
+      "p5": 0.8,
       "planner_eval": {
         "actual": {
-          "enable_dense": false,
-          "enable_rerank": false,
-          "intent": "keyword",
+          "enable_dense": true,
+          "enable_rerank": true,
+          "intent": "semantic",
           "lexical_query": "网络空间安全",
           "semantic_query": "网络空间安全"
         },
         "available": true,
-        "exact_match": true,
+        "exact_match": false,
         "expected": {
           "enable_dense": false,
           "enable_rerank": false,
@@ -2356,23 +2362,31 @@
           "semantic_query": ""
         },
         "field_matches": {
-          "enable_dense": true,
-          "enable_rerank": true,
-          "intent": true,
+          "enable_dense": false,
+          "enable_rerank": false,
+          "intent": false,
           "lexical_query": true,
           "semantic_query": true
         },
         "fields": 5,
-        "matched": 5,
-        "mismatched_fields": []
+        "matched": 2,
+        "mismatched_fields": [
+          "intent",
+          "enable_dense",
+          "enable_rerank"
+        ]
       },
       "query": "网络空间安全",
       "query_plan": {
-        "constraints": {},
-        "enable_dense": false,
-        "enable_rerank": false,
+        "constraints": {
+          "skills": [
+            "网络空间安全"
+          ]
+        },
+        "enable_dense": true,
+        "enable_rerank": true,
         "filter_count": 0,
-        "intent": "keyword",
+        "intent": "semantic",
         "lexical_query": "网络空间安全",
         "rank_window_size": 1000,
         "raw_query": "网络空间安全",
@@ -2380,131 +2394,131 @@
       },
       "r10": 0.6428571428571429,
       "r100": 1.0,
-      "r5": 0.35714285714285715,
+      "r5": 0.2857142857142857,
       "r50": 1.0,
       "relevant_grades_at_10": {
-        "M20260026": 1.0,
+        "M20260004": 1.0,
         "M20260046": 1.0,
         "M20260067": 1.0,
         "M20260106": 1.0,
         "M20260111": 1.0,
-        "M20260118": 1.0,
+        "M20260112": 1.0,
         "M20260141": 1.0,
-        "M20260192": 1.0,
+        "M20260159": 1.0,
         "M20260193": 1.0
       },
       "relevant_hits_at_10": [
+        "M20260004",
+        "M20260111",
         "M20260141",
-        "M20260106",
-        "M20260067",
-        "M20260026",
-        "M20260192",
-        "M20260118",
         "M20260193",
         "M20260046",
-        "M20260111"
+        "M20260159",
+        "M20260112",
+        "M20260106",
+        "M20260067"
       ],
       "returned_ids": [
+        "M20260004",
+        "M20260042",
+        "M20260111",
         "M20260141",
-        "M20260106",
-        "M20260067",
-        "M20260026",
-        "M20260192",
-        "M20260118",
         "M20260193",
         "M20260046",
-        "M20260111",
-        "M20260017",
-        "M20260004",
-        "M20260115",
-        "M20260074",
-        "M20260112",
-        "M20260146",
         "M20260159",
-        "M20260042",
+        "M20260112",
+        "M20260106",
+        "M20260067",
+        "M20260118",
+        "M20260026",
+        "M20260074",
+        "M20260038",
+        "M20260150",
+        "M20260017",
+        "M20260028",
+        "M20260041",
+        "M20260161",
+        "M20260154",
+        "M20260192",
+        "M20260115",
+        "M20260019",
+        "M20260107",
+        "M20260043",
+        "M20260146",
+        "M20260134",
+        "M20260035",
+        "M20260128",
+        "M20260003",
+        "M20260059",
+        "M20260144",
+        "M20260175",
+        "M20260079",
         "M20260021",
         "M20260101",
-        "M20260028",
-        "M20260053",
         "M20260030",
-        "M20260144",
-        "M20260150",
-        "M20260019",
-        "M20260134",
-        "M20260095",
-        "M20260107",
-        "M20260129",
-        "M20260161",
-        "M20260035",
-        "M20260038",
-        "M20260100",
-        "M20260099",
-        "M20260034",
         "M20260176",
-        "M20260041",
+        "M20260099",
+        "M20260113",
+        "M20260129",
+        "M20260095",
+        "M20260053",
+        "M20260190",
         "M20260173",
+        "M20260142",
+        "M20260034",
         "M20260055",
-        "M20260154",
+        "M20260100",
+        "M20260199",
+        "M20260001",
+        "M20260163",
+        "M20260147",
+        "M20260105",
+        "M20260109",
+        "M20260057",
+        "M20260016",
+        "M20260024",
+        "M20260103",
+        "M20260037",
+        "M20260086",
+        "M20260066",
+        "M20260162",
+        "M20260084",
+        "M20260197",
+        "M20260023",
+        "M20260157",
+        "M20260186",
+        "M20260136",
+        "M20260156",
+        "M20260085",
+        "M20260102",
+        "M20260011",
+        "M20260010",
+        "M20260180",
+        "M20260094",
+        "M20260050",
+        "M20260130",
+        "M20260138",
+        "M20260185",
+        "M20260097",
+        "M20260029",
+        "M20260171",
+        "M20260076",
+        "M20260121",
+        "M20260158",
+        "M20260172",
+        "M20260133",
+        "M20260093",
+        "M20260098",
+        "M20260164",
+        "M20260009",
         "M20260006",
         "M20260122",
-        "M20260162",
-        "M20260003",
-        "M20260011",
+        "M20260123",
+        "M20260073",
         "M20260091",
-        "M20260057",
-        "M20260023",
-        "M20260024",
-        "M20260043",
-        "M20260103",
-        "M20260124",
-        "M20260066",
-        "M20260175",
-        "M20260097",
-        "M20260185",
-        "M20260197",
-        "M20260016",
-        "M20260104",
-        "M20260156",
-        "M20260113",
-        "M20260059",
-        "M20260200",
-        "M20260051",
-        "M20260058",
-        "M20260079",
-        "M20260060",
-        "M20260109",
-        "M20260062",
-        "M20260147",
-        "M20260168",
-        "M20260138",
-        "M20260171",
-        "M20260172",
-        "M20260050",
-        "M20260163",
-        "M20260076",
-        "M20260085",
-        "M20260096",
-        "M20260190",
-        "M20260157",
-        "M20260098",
-        "M20260102",
-        "M20260133",
-        "M20260158",
-        "M20260164",
-        "M20260180",
-        "M20260029",
-        "M20260093",
-        "M20260142",
-        "M20260110",
-        "M20260121",
-        "M20260169",
-        "M20260094",
-        "M20260084",
-        "M20260086",
-        "M20260001",
-        "M20260009",
-        "M20260186",
-        "M20260199"
+        "M20260002",
+        "M20260119",
+        "M20260189"
       ],
       "type": "major_query"
     },
@@ -3550,8 +3564,7 @@
           "skills": [
             "SQL",
             "Python",
-            "A/B测试",
-            "数据可视化"
+            "A/B测试"
           ]
         },
         "enable_dense": true,
@@ -3745,7 +3758,6 @@
       "query_plan": {
         "constraints": {
           "skills": [
-            "DevSecOps",
             "SAST",
             "IAST",
             "Docker"
@@ -4337,9 +4349,7 @@
         "constraints": {
           "skills": [
             "内网渗透",
-            "Cobalt Strike",
-            "横向移动",
-            "提权"
+            "Cobalt Strike"
           ]
         },
         "enable_dense": true,
@@ -4738,7 +4748,7 @@
           "cities": [
             "广州"
           ],
-          "degree": "博士",
+          "min_degree": "博士",
           "skills": [
             "C++",
             "RDMA"
@@ -4836,7 +4846,6 @@
           ],
           "min_degree": "硕士",
           "skills": [
-            "蓝队",
             "应急响应",
             "威胁狩猎"
           ]
@@ -4944,7 +4953,7 @@
           "cities": [
             "上海"
           ],
-          "degree": "博士",
+          "min_degree": "博士",
           "skills": [
             "Java"
           ]
@@ -5151,7 +5160,6 @@
           ],
           "min_degree": "硕士",
           "skills": [
-            "数据分析",
             "A/B测试"
           ]
         },
@@ -5250,7 +5258,8 @@
           ],
           "min_degree": "硕士",
           "skills": [
-            "WebGL"
+            "WebGL",
+            "前端"
           ]
         },
         "enable_dense": true,
@@ -5335,7 +5344,7 @@
           "enable_dense": true,
           "enable_rerank": true,
           "intent": "semantic",
-          "lexical_query": "企业知识库 RAG 向量检索 大模型问答",
+          "lexical_query": "企业知识库 RAG 向量检索 大模型问答落地",
           "semantic_query": "找做过企业知识库 RAG、向量检索和大模型问答落地的人"
         },
         "available": true,
@@ -5370,7 +5379,7 @@
         "enable_rerank": true,
         "filter_count": 0,
         "intent": "semantic",
-        "lexical_query": "企业知识库 RAG 向量检索 大模型问答",
+        "lexical_query": "企业知识库 RAG 向量检索 大模型问答落地",
         "rank_window_size": 1000,
         "raw_query": "找做过企业知识库 RAG、向量检索和大模型问答落地的人",
         "semantic_query": "找做过企业知识库 RAG、向量检索和大模型问答落地的人"
@@ -5555,7 +5564,11 @@
       },
       "query": "需要蓝队应急响应，能做日志取证、威胁狩猎和 ATT&CK 分析",
       "query_plan": {
-        "constraints": {},
+        "constraints": {
+          "skills": [
+            "ATT&CK"
+          ]
+        },
         "enable_dense": true,
         "enable_rerank": true,
         "filter_count": 0,
@@ -5917,7 +5930,7 @@
           "enable_dense": true,
           "enable_rerank": true,
           "intent": "semantic",
-          "lexical_query": "金融级 Java 高并发架构 分库分表 分布式事务 JVM调优",
+          "lexical_query": "金融级 Java 高并发架构 分库分表 分布式事务 JVM 调优",
           "semantic_query": "找能做金融级 Java 高并发架构、分库分表、分布式事务和 JVM 调优的人"
         },
         "available": true,
@@ -5952,7 +5965,7 @@
         "enable_rerank": true,
         "filter_count": 0,
         "intent": "semantic",
-        "lexical_query": "金融级 Java 高并发架构 分库分表 分布式事务 JVM调优",
+        "lexical_query": "金融级 Java 高并发架构 分库分表 分布式事务 JVM 调优",
         "rank_window_size": 1000,
         "raw_query": "找能做金融级 Java 高并发架构、分库分表、分布式事务和 JVM 调优的人",
         "semantic_query": "找能做金融级 Java 高并发架构、分库分表、分布式事务和 JVM 调优的人"
@@ -6112,7 +6125,7 @@
           "enable_dense": true,
           "enable_rerank": true,
           "intent": "semantic",
-          "lexical_query": "Go 云原生 Kubernetes Operator 服务网格 高并发网关",
+          "lexical_query": "Go Kubernetes Operator 服务网格 高并发网关",
           "semantic_query": "需要 Go 云原生底层能力，做过 Kubernetes Operator、服务网格和高并发网关"
         },
         "available": true,
@@ -6147,7 +6160,7 @@
         "enable_rerank": true,
         "filter_count": 0,
         "intent": "semantic",
-        "lexical_query": "Go 云原生 Kubernetes Operator 服务网格 高并发网关",
+        "lexical_query": "Go Kubernetes Operator 服务网格 高并发网关",
         "rank_window_size": 1000,
         "raw_query": "需要 Go 云原生底层能力，做过 Kubernetes Operator、服务网格和高并发网关",
         "semantic_query": "需要 Go 云原生底层能力，做过 Kubernetes Operator、服务网格和高并发网关"
@@ -6307,7 +6320,7 @@
           "enable_dense": true,
           "enable_rerank": true,
           "intent": "semantic",
-          "lexical_query": "3D可视化 WebGL 地图引擎 大屏交互 shader",
+          "lexical_query": "3D 可视化 WebGL 地图引擎 大屏交互 shader",
           "semantic_query": "前端候选要能做 3D 可视化、WebGL 地图引擎、大屏交互和 shader 效果"
         },
         "available": true,
@@ -6334,18 +6347,14 @@
       "query_plan": {
         "constraints": {
           "skills": [
-            "3D可视化",
-            "WebGL",
-            "地图引擎",
-            "大屏交互",
-            "shader"
+            "WebGL"
           ]
         },
         "enable_dense": true,
         "enable_rerank": true,
         "filter_count": 0,
         "intent": "semantic",
-        "lexical_query": "3D可视化 WebGL 地图引擎 大屏交互 shader",
+        "lexical_query": "3D 可视化 WebGL 地图引擎 大屏交互 shader",
         "rank_window_size": 1000,
         "raw_query": "前端候选要能做 3D 可视化、WebGL 地图引擎、大屏交互和 shader 效果",
         "semantic_query": "前端候选要能做 3D 可视化、WebGL 地图引擎、大屏交互和 shader 效果"
@@ -6700,7 +6709,7 @@
           "enable_dense": true,
           "enable_rerank": true,
           "intent": "semantic",
-          "lexical_query": "A/B实验 指标体系 归因分析 留存提升 电商增长",
+          "lexical_query": "A/B 实验 指标体系 归因分析 留存提升 电商增长 数据分析",
           "semantic_query": "数据分析希望做过 A/B 实验、指标体系、归因分析、留存提升和电商增长"
         },
         "available": true,
@@ -6734,7 +6743,7 @@
         "enable_rerank": true,
         "filter_count": 0,
         "intent": "semantic",
-        "lexical_query": "A/B实验 指标体系 归因分析 留存提升 电商增长",
+        "lexical_query": "A/B 实验 指标体系 归因分析 留存提升 电商增长 数据分析",
         "rank_window_size": 1000,
         "raw_query": "数据分析希望做过 A/B 实验、指标体系、归因分析、留存提升和电商增长",
         "semantic_query": "数据分析希望做过 A/B 实验、指标体系、归因分析、留存提升和电商增长"
@@ -7314,7 +7323,8 @@
         "constraints": {
           "skills": [
             "SIEM",
-            "ELK"
+            "ELK",
+            "ATT&CK"
           ]
         },
         "enable_dense": true,
@@ -7481,7 +7491,7 @@
           "enable_dense": true,
           "enable_rerank": true,
           "intent": "semantic",
-          "lexical_query": "Low latency C++ HFT RDMA lock-free Linux",
+          "lexical_query": "C++ HFT RDMA lock-free Linux",
           "semantic_query": "Low latency C++ HFT RDMA lock-free Linux"
         },
         "available": true,
@@ -7517,7 +7527,7 @@
         "enable_rerank": true,
         "filter_count": 0,
         "intent": "semantic",
-        "lexical_query": "Low latency C++ HFT RDMA lock-free Linux",
+        "lexical_query": "C++ HFT RDMA lock-free Linux",
         "rank_window_size": 1000,
         "raw_query": "Low latency C++ HFT RDMA lock-free Linux",
         "semantic_query": "Low latency C++ HFT RDMA lock-free Linux"
@@ -7534,9 +7544,9 @@
         "M20260139": 3.0,
         "M20260162": 3.0,
         "M20260180": 3.0,
-        "M20260182": 3.0,
         "M20260183": 3.0,
-        "M20260187": 3.0
+        "M20260187": 3.0,
+        "M20260194": 3.0
       },
       "relevant_hits_at_10": [
         "M20260064",
@@ -7547,8 +7557,8 @@
         "M20260022",
         "M20260180",
         "M20260139",
-        "M20260183",
-        "M20260182"
+        "M20260194",
+        "M20260183"
       ],
       "returned_ids": [
         "M20260064",
@@ -7559,26 +7569,26 @@
         "M20260022",
         "M20260180",
         "M20260139",
+        "M20260194",
         "M20260183",
         "M20260182",
         "M20260076",
+        "M20260116",
         "M20260039",
         "M20260088",
-        "M20260148",
         "M20260191",
         "M20260071",
-        "M20260115",
         "M20260103",
         "M20260165",
         "M20260004",
-        "M20260116",
+        "M20260148",
+        "M20260115",
         "M20260011",
         "M20260024",
         "M20260057",
         "M20260015",
         "M20260099",
         "M20260118",
-        "M20260194",
         "M20260144",
         "M20260129",
         "M20260049",
@@ -7900,12 +7910,8 @@
       "query_plan": {
         "constraints": {
           "skills": [
-            "DevSecOps",
             "SAST",
-            "IAST",
-            "SCA",
-            "CI/CD",
-            "secure SDLC"
+            "SCA"
           ]
         },
         "enable_dense": true,
@@ -8099,12 +8105,8 @@
       "query_plan": {
         "constraints": {
           "skills": [
-            "WebGL",
             "Three.js",
-            "shader",
-            "digital twin",
-            "frontend",
-            "visualization"
+            "WebGL"
           ]
         },
         "enable_dense": true,
@@ -8298,11 +8300,7 @@
       "query_plan": {
         "constraints": {
           "skills": [
-            "Red team",
-            "penetration testing",
-            "AD domain",
-            "lateral movement",
-            "C2"
+            "内网渗透"
           ]
         },
         "enable_dense": true,
@@ -8549,14 +8547,15 @@
           "skills": [
             "SAP",
             "ABAP",
-            "FICO"
+            "FICO",
+            "ERP"
           ]
         },
         "enable_dense": true,
         "enable_rerank": true,
         "filter_count": 0,
         "intent": "semantic",
-        "lexical_query": "SAP ABAP 财务模块实施顾问 FICO 企业ERP上线",
+        "lexical_query": "SAP ABAP FICO ERP实施顾问",
         "rank_window_size": 1000,
         "raw_query": "SAP ABAP 财务模块实施顾问，熟悉 FICO 和企业 ERP 上线",
         "semantic_query": "SAP ABAP 财务模块实施顾问，熟悉 FICO 和企业 ERP 上线"
@@ -8802,7 +8801,10 @@
         "constraints": {
           "skills": [
             "Unity",
-            "C#"
+            "C#",
+            "渲染",
+            "热更新",
+            "性能优化"
           ]
         },
         "enable_dense": true,
@@ -8865,9 +8867,7 @@
       "query_plan": {
         "constraints": {
           "skills": [
-            "Oracle",
-            "RAC",
-            "SQL"
+            "Oracle"
           ]
         },
         "enable_dense": true,
@@ -8930,9 +8930,7 @@
       "query_plan": {
         "constraints": {
           "skills": [
-            "RTOS",
-            "单片机",
-            "电机控制"
+            "RTOS"
           ]
         },
         "enable_dense": true,
@@ -9175,7 +9173,7 @@
           "enable_dense": true,
           "enable_rerank": true,
           "intent": "semantic",
-          "lexical_query": "DevSecOps 安全平台 SAST SCA IAST CI/CD 容器镜像安全 软件供应链安全 Java Go",
+          "lexical_query": "DevSecOps 安全平台架构师 SAST SCA IAST CI/CD 容器安全 镜像安全 软件供应链安全 Java Go",
           "semantic_query": "岗位：DevSecOps 安全平台架构师。职责：建设 SAST、SCA、IAST 检测能力，集成 CI/CD 流水线安全卡点，做容器与镜像安全。要求：熟悉软件供应链安全、容器安全，掌握 Java 或 Go。"
         },
         "available": true,
@@ -9204,7 +9202,6 @@
           "skills": [
             "SAST",
             "SCA",
-            "IAST",
             "CI/CD",
             "Java",
             "Go"
@@ -9214,7 +9211,7 @@
         "enable_rerank": true,
         "filter_count": 0,
         "intent": "semantic",
-        "lexical_query": "DevSecOps 安全平台 SAST SCA IAST CI/CD 容器镜像安全 软件供应链安全 Java Go",
+        "lexical_query": "DevSecOps 安全平台架构师 SAST SCA IAST CI/CD 容器安全 镜像安全 软件供应链安全 Java Go",
         "rank_window_size": 1000,
         "raw_query": "岗位：DevSecOps 安全平台架构师。职责：建设 SAST、SCA、IAST 检测能力，集成 CI/CD 流水线安全卡点，做容器与镜像安全。要求：熟悉软件供应链安全、容器安全，掌握 Java 或 Go。",
         "semantic_query": "岗位：DevSecOps 安全平台架构师。职责：建设 SAST、SCA、IAST 检测能力，集成 CI/CD 流水线安全卡点，做容器与镜像安全。要求：熟悉软件供应链安全、容器安全，掌握 Java 或 Go。"
@@ -9374,7 +9371,7 @@
           "enable_dense": true,
           "enable_rerank": true,
           "intent": "semantic",
-          "lexical_query": "Java 架构师 金融核心链路 高并发 高可用 分布式事务 分库分表 JVM调优 Spring Cloud 微服务 RocketMQ Kafka Redis",
+          "lexical_query": "Java 架构师 金融核心链路 高并发 高可用 分布式事务 分库分表 JVM 调优 Spring Cloud 微服务 RocketMQ Kafka Redis",
           "semantic_query": "岗位：高级 Java 架构师。职责：负责金融核心链路高并发、高可用、分布式事务、分库分表和 JVM 调优。要求：精通 Spring Cloud 微服务，熟悉 RocketMQ/Kafka 与 Redis。"
         },
         "available": true,
@@ -9405,14 +9402,15 @@
             "Spring Cloud",
             "RocketMQ",
             "Kafka",
-            "Redis"
+            "Redis",
+            "JVM"
           ]
         },
         "enable_dense": true,
         "enable_rerank": true,
         "filter_count": 0,
         "intent": "semantic",
-        "lexical_query": "Java 架构师 金融核心链路 高并发 高可用 分布式事务 分库分表 JVM调优 Spring Cloud 微服务 RocketMQ Kafka Redis",
+        "lexical_query": "Java 架构师 金融核心链路 高并发 高可用 分布式事务 分库分表 JVM 调优 Spring Cloud 微服务 RocketMQ Kafka Redis",
         "rank_window_size": 1000,
         "raw_query": "岗位：高级 Java 架构师。职责：负责金融核心链路高并发、高可用、分布式事务、分库分表和 JVM 调优。要求：精通 Spring Cloud 微服务，熟悉 RocketMQ/Kafka 与 Redis。",
         "semantic_query": "岗位：高级 Java 架构师。职责：负责金融核心链路高并发、高可用、分布式事务、分库分表和 JVM 调优。要求：精通 Spring Cloud 微服务，熟悉 RocketMQ/Kafka 与 Redis。"
@@ -9967,7 +9965,7 @@
           "enable_dense": true,
           "enable_rerank": true,
           "intent": "semantic",
-          "lexical_query": "红队攻防 AD域渗透 内网横向移动 C2通信 权限维持 Cobalt Strike 内网渗透 免杀 对抗技术",
+          "lexical_query": "红队攻防专家 红队演练 AD 域渗透 内网横向移动 C2 通信 权限维持 Cobalt Strike 免杀 对抗技术 内网渗透",
           "semantic_query": "岗位：红队攻防专家。职责：负责红队演练、AD 域渗透、内网横向移动、C2 通信和权限维持。要求：熟悉 Cobalt Strike、内网渗透，掌握免杀与对抗技术。"
         },
         "available": true,
@@ -9994,22 +9992,14 @@
       "query_plan": {
         "constraints": {
           "skills": [
-            "红队攻防",
-            "AD域渗透",
-            "内网横向移动",
-            "C2通信",
-            "权限维持",
-            "Cobalt Strike",
-            "内网渗透",
-            "免杀",
-            "对抗技术"
+            "内网渗透"
           ]
         },
         "enable_dense": true,
         "enable_rerank": true,
         "filter_count": 0,
         "intent": "semantic",
-        "lexical_query": "红队攻防 AD域渗透 内网横向移动 C2通信 权限维持 Cobalt Strike 内网渗透 免杀 对抗技术",
+        "lexical_query": "红队攻防专家 红队演练 AD 域渗透 内网横向移动 C2 通信 权限维持 Cobalt Strike 免杀 对抗技术 内网渗透",
         "rank_window_size": 1000,
         "raw_query": "岗位：红队攻防专家。职责：负责红队演练、AD 域渗透、内网横向移动、C2 通信和权限维持。要求：熟悉 Cobalt Strike、内网渗透，掌握免杀与对抗技术。",
         "semantic_query": "岗位：红队攻防专家。职责：负责红队演练、AD 域渗透、内网横向移动、C2 通信和权限维持。要求：熟悉 Cobalt Strike、内网渗透，掌握免杀与对抗技术。"
@@ -10169,7 +10159,7 @@
           "enable_dense": true,
           "enable_rerank": true,
           "intent": "semantic",
-          "lexical_query": "WebGL Three.js 大屏交互 数据可视化引擎 Vue3 React TypeScript shader 渲染性能优化",
+          "lexical_query": "高级前端可视化 WebGL Three.js 大屏交互 数据可视化引擎 Vue3 React TypeScript shader 渲染性能优化",
           "semantic_query": "岗位：高级前端可视化工程师。职责：负责 WebGL、Three.js、大屏交互和数据可视化引擎建设。要求：精通 Vue3 或 React 与 TypeScript，熟悉 shader 与渲染性能优化。"
         },
         "available": true,
@@ -10196,19 +10186,18 @@
       "query_plan": {
         "constraints": {
           "skills": [
-            "WebGL",
-            "Three.js",
-            "Vue3",
+            "Vue",
             "React",
             "TypeScript",
-            "shader"
+            "WebGL",
+            "Three.js"
           ]
         },
         "enable_dense": true,
         "enable_rerank": true,
         "filter_count": 0,
         "intent": "semantic",
-        "lexical_query": "WebGL Three.js 大屏交互 数据可视化引擎 Vue3 React TypeScript shader 渲染性能优化",
+        "lexical_query": "高级前端可视化 WebGL Three.js 大屏交互 数据可视化引擎 Vue3 React TypeScript shader 渲染性能优化",
         "rank_window_size": 1000,
         "raw_query": "岗位：高级前端可视化工程师。职责：负责 WebGL、Three.js、大屏交互和数据可视化引擎建设。要求：精通 Vue3 或 React 与 TypeScript，熟悉 shader 与渲染性能优化。",
         "semantic_query": "岗位：高级前端可视化工程师。职责：负责 WebGL、Three.js、大屏交互和数据可视化引擎建设。要求：精通 Vue3 或 React 与 TypeScript，熟悉 shader 与渲染性能优化。"
@@ -10368,7 +10357,7 @@
           "enable_dense": true,
           "enable_rerank": true,
           "intent": "semantic",
-          "lexical_query": "C++ 低延迟 高频交易 实时交易 基础设施 网络收发 无锁并发 内核旁路 RDMA DPDK 性能剖析",
+          "lexical_query": "C++ 低延迟系统 高频交易 实时交易基础设施 网络收发 无锁并发 内核旁路 RDMA DPDK 性能剖析",
           "semantic_query": "岗位：C++ 低延迟系统专家。职责：建设高频交易或实时交易基础设施，优化网络收发、无锁并发与内核旁路。要求：精通 C++，熟悉 RDMA、DPDK 与性能剖析。"
         },
         "available": true,
@@ -10404,7 +10393,7 @@
         "enable_rerank": true,
         "filter_count": 0,
         "intent": "semantic",
-        "lexical_query": "C++ 低延迟 高频交易 实时交易 基础设施 网络收发 无锁并发 内核旁路 RDMA DPDK 性能剖析",
+        "lexical_query": "C++ 低延迟系统 高频交易 实时交易基础设施 网络收发 无锁并发 内核旁路 RDMA DPDK 性能剖析",
         "rank_window_size": 1000,
         "raw_query": "岗位：C++ 低延迟系统专家。职责：建设高频交易或实时交易基础设施，优化网络收发、无锁并发与内核旁路。要求：精通 C++，熟悉 RDMA、DPDK 与性能剖析。",
         "semantic_query": "岗位：C++ 低延迟系统专家。职责：建设高频交易或实时交易基础设施，优化网络收发、无锁并发与内核旁路。要求：精通 C++，熟悉 RDMA、DPDK 与性能剖析。"
@@ -10564,11 +10553,11 @@
           "enable_dense": true,
           "enable_rerank": true,
           "intent": "semantic",
-          "lexical_query": "漏洞研究员 浏览器 内核 开源组件 漏洞挖掘 Fuzzing 利用链 C C++ 逆向 符号执行 漏洞利用",
+          "lexical_query": "漏洞研究员 浏览器 内核 开源组件 Fuzzing 利用链 C C++ 逆向 符号执行 漏洞利用",
           "semantic_query": "岗位：高级漏洞研究员。职责：负责浏览器、内核、开源组件漏洞挖掘，建设 Fuzzing 平台并分析利用链。要求：精通 C/C++ 与逆向，熟悉符号执行与漏洞利用。"
         },
         "available": true,
-        "exact_match": true,
+        "exact_match": false,
         "expected": {
           "enable_dense": true,
           "enable_rerank": true,
@@ -10580,12 +10569,14 @@
           "enable_dense": true,
           "enable_rerank": true,
           "intent": true,
-          "lexical_query": true,
+          "lexical_query": false,
           "semantic_query": true
         },
         "fields": 5,
-        "matched": 5,
-        "mismatched_fields": []
+        "matched": 4,
+        "mismatched_fields": [
+          "lexical_query"
+        ]
       },
       "query": "岗位：高级漏洞研究员。职责：负责浏览器、内核、开源组件漏洞挖掘，建设 Fuzzing 平台并分析利用链。要求：精通 C/C++ 与逆向，熟悉符号执行与漏洞利用。",
       "query_plan": {
@@ -10593,17 +10584,14 @@
           "skills": [
             "C",
             "C++",
-            "Fuzzing",
-            "逆向",
-            "符号执行",
-            "漏洞利用"
+            "NLP"
           ]
         },
         "enable_dense": true,
         "enable_rerank": true,
         "filter_count": 0,
         "intent": "semantic",
-        "lexical_query": "漏洞研究员 浏览器 内核 开源组件 漏洞挖掘 Fuzzing 利用链 C C++ 逆向 符号执行 漏洞利用",
+        "lexical_query": "漏洞研究员 浏览器 内核 开源组件 Fuzzing 利用链 C C++ 逆向 符号执行 漏洞利用",
         "rank_window_size": 1000,
         "raw_query": "岗位：高级漏洞研究员。职责：负责浏览器、内核、开源组件漏洞挖掘，建设 Fuzzing 平台并分析利用链。要求：精通 C/C++ 与逆向，熟悉符号执行与漏洞利用。",
         "semantic_query": "岗位：高级漏洞研究员。职责：负责浏览器、内核、开源组件漏洞挖掘，建设 Fuzzing 平台并分析利用链。要求：精通 C/C++ 与逆向，熟悉符号执行与漏洞利用。"
@@ -10763,7 +10751,7 @@
           "enable_dense": true,
           "enable_rerank": true,
           "intent": "semantic",
-          "lexical_query": "数据分析 增长 A/B实验 指标体系 归因分析 留存提升 SQL Python 因果推断 实验平台",
+          "lexical_query": "数据分析专家 A/B实验 指标体系 归因分析 留存提升 SQL Python 因果推断 实验平台",
           "semantic_query": "岗位：数据分析专家（增长方向）。职责：负责 A/B 实验设计、指标体系建设、归因分析和留存提升。要求：精通 SQL 与 Python，熟悉因果推断与实验平台。"
         },
         "available": true,
@@ -10799,7 +10787,7 @@
         "enable_rerank": true,
         "filter_count": 0,
         "intent": "semantic",
-        "lexical_query": "数据分析 增长 A/B实验 指标体系 归因分析 留存提升 SQL Python 因果推断 实验平台",
+        "lexical_query": "数据分析专家 A/B实验 指标体系 归因分析 留存提升 SQL Python 因果推断 实验平台",
         "rank_window_size": 1000,
         "raw_query": "岗位：数据分析专家（增长方向）。职责：负责 A/B 实验设计、指标体系建设、归因分析和留存提升。要求：精通 SQL 与 Python，熟悉因果推断与实验平台。",
         "semantic_query": "岗位：数据分析专家（增长方向）。职责：负责 A/B 实验设计、指标体系建设、归因分析和留存提升。要求：精通 SQL 与 Python，熟悉因果推断与实验平台。"
@@ -10959,7 +10947,7 @@
           "enable_dense": true,
           "enable_rerank": true,
           "intent": "semantic",
-          "lexical_query": "自动化测试平台 接口 UI 自动化 性能压测 质量度量 Python Selenium JMeter 持续集成",
+          "lexical_query": "高级测试开发 自动化测试平台 接口 UI 自动化 性能压测 质量度量 Python Selenium JMeter 持续集成",
           "semantic_query": "岗位：高级测试开发工程师。职责：建设自动化测试平台、接口与 UI 自动化、性能压测与质量度量。要求：掌握 Python，熟悉 Selenium、JMeter 与持续集成。"
         },
         "available": true,
@@ -10995,7 +10983,7 @@
         "enable_rerank": true,
         "filter_count": 0,
         "intent": "semantic",
-        "lexical_query": "自动化测试平台 接口 UI 自动化 性能压测 质量度量 Python Selenium JMeter 持续集成",
+        "lexical_query": "高级测试开发 自动化测试平台 接口 UI 自动化 性能压测 质量度量 Python Selenium JMeter 持续集成",
         "rank_window_size": 1000,
         "raw_query": "岗位：高级测试开发工程师。职责：建设自动化测试平台、接口与 UI 自动化、性能压测与质量度量。要求：掌握 Python，熟悉 Selenium、JMeter 与持续集成。",
         "semantic_query": "岗位：高级测试开发工程师。职责：建设自动化测试平台、接口与 UI 自动化、性能压测与质量度量。要求：掌握 Python，熟悉 Selenium、JMeter 与持续集成。"
@@ -11155,7 +11143,7 @@
           "enable_dense": true,
           "enable_rerank": true,
           "intent": "semantic",
-          "lexical_query": "安全产品经理 SASE ZTNA SOC 态势感知 零信任访问 产品规划 安全产品体系 需求分析 项目管理",
+          "lexical_query": "安全产品经理 SASE ZTNA SOC 态势感知 零信任 需求分析 项目管理",
           "semantic_query": "岗位：安全产品经理。职责：负责 SASE、ZTNA、SOC 态势感知、零信任访问产品规划与落地。要求：熟悉安全产品体系，具备需求分析与项目管理能力。"
         },
         "available": true,
@@ -11192,7 +11180,7 @@
         "enable_rerank": true,
         "filter_count": 0,
         "intent": "semantic",
-        "lexical_query": "安全产品经理 SASE ZTNA SOC 态势感知 零信任访问 产品规划 安全产品体系 需求分析 项目管理",
+        "lexical_query": "安全产品经理 SASE ZTNA SOC 态势感知 零信任 需求分析 项目管理",
         "rank_window_size": 1000,
         "raw_query": "岗位：安全产品经理。职责：负责 SASE、ZTNA、SOC 态势感知、零信任访问产品规划与落地。要求：熟悉安全产品体系，具备需求分析与项目管理能力。",
         "semantic_query": "岗位：安全产品经理。职责：负责 SASE、ZTNA、SOC 态势感知、零信任访问产品规划与落地。要求：熟悉安全产品体系，具备需求分析与项目管理能力。"
@@ -11350,7 +11338,7 @@
           "enable_dense": true,
           "enable_rerank": true,
           "intent": "semantic",
-          "lexical_query": "渗透测试 Web 内网渗透 资产测绘 漏洞挖掘 注入 越权 反序列化 Burp Suite Metasploit",
+          "lexical_query": "渗透测试 Web 内网渗透 资产测绘 漏洞挖掘 Burp Suite Metasploit 注入 越权 反序列化",
           "semantic_query": "岗位：渗透测试工程师。职责：负责 Web 与内网渗透、资产测绘、漏洞挖掘与渗透报告。要求：熟悉注入、越权、反序列化漏洞，掌握 Burp Suite 与 Metasploit。"
         },
         "available": true,
@@ -11377,14 +11365,7 @@
       "query_plan": {
         "constraints": {
           "skills": [
-            "渗透测试",
-            "Web",
             "内网渗透",
-            "资产测绘",
-            "漏洞挖掘",
-            "注入",
-            "越权",
-            "反序列化",
             "Burp Suite",
             "Metasploit"
           ]
@@ -11393,7 +11374,7 @@
         "enable_rerank": true,
         "filter_count": 0,
         "intent": "semantic",
-        "lexical_query": "渗透测试 Web 内网渗透 资产测绘 漏洞挖掘 注入 越权 反序列化 Burp Suite Metasploit",
+        "lexical_query": "渗透测试 Web 内网渗透 资产测绘 漏洞挖掘 Burp Suite Metasploit 注入 越权 反序列化",
         "rank_window_size": 1000,
         "raw_query": "岗位：渗透测试工程师。职责：负责 Web 与内网渗透、资产测绘、漏洞挖掘与渗透报告。要求：熟悉注入、越权、反序列化漏洞，掌握 Burp Suite 与 Metasploit。",
         "semantic_query": "岗位：渗透测试工程师。职责：负责 Web 与内网渗透、资产测绘、漏洞挖掘与渗透报告。要求：熟悉注入、越权、反序列化漏洞，掌握 Burp Suite 与 Metasploit。"
@@ -11533,7 +11514,7 @@
   ],
   "meta": {
     "evidence_index_alias": "resume_evidence_current",
-    "generated_at": "2026-06-29T14:51:50+00:00",
+    "generated_at": "2026-06-30T05:04:21+00:00",
     "index_alias": "resumes_current",
     "limit": 100,
     "qrels": "eval_queries.jsonl",
@@ -11544,28 +11525,99 @@
     "forbidden10": 0,
     "judged": 69,
     "mrr10": 0.9855072463768116,
-    "ndcg10": 0.96605379641443,
-    "ndcg5": 0.9672271250592962,
-    "p10": 0.7695652173913043,
-    "p5": 0.8289855072463768,
+    "ndcg10": 0.9635895932253843,
+    "ndcg5": 0.9620089422393363,
+    "p10": 0.7681159420289855,
+    "p5": 0.8231884057971015,
     "queries": 77,
-    "r10": 0.7399417446653802,
+    "r10": 0.7392516135404664,
     "r100": 1.0,
-    "r5": 0.4944104323700762,
+    "r5": 0.4926851045577919,
     "r50": 0.9904916541855718
   },
   "planner": {
     "evaluated": 77,
-    "exact_match_accuracy": 1.0,
+    "exact_match_accuracy": 0.961038961038961,
     "field_accuracy": {
-      "enable_dense": 1.0,
-      "enable_rerank": 1.0,
-      "intent": 1.0,
-      "lexical_query": 1.0,
+      "enable_dense": 0.974025974025974,
+      "enable_rerank": 0.974025974025974,
+      "intent": 0.974025974025974,
+      "lexical_query": 0.9855072463768116,
       "semantic_query": 1.0
     },
-    "mismatch_count": 0,
-    "mismatches": []
+    "mismatch_count": 3,
+    "mismatches": [
+      {
+        "actual": {
+          "enable_dense": true,
+          "enable_rerank": true,
+          "intent": "semantic",
+          "lexical_query": "信息安全",
+          "semantic_query": "信息安全"
+        },
+        "expected": {
+          "enable_dense": false,
+          "enable_rerank": false,
+          "intent": "keyword",
+          "lexical_query": "信息安全",
+          "semantic_query": ""
+        },
+        "id": "major_信息安全",
+        "mismatched_fields": [
+          "intent",
+          "enable_dense",
+          "enable_rerank"
+        ],
+        "query": "信息安全",
+        "type": "major_query"
+      },
+      {
+        "actual": {
+          "enable_dense": true,
+          "enable_rerank": true,
+          "intent": "semantic",
+          "lexical_query": "网络空间安全",
+          "semantic_query": "网络空间安全"
+        },
+        "expected": {
+          "enable_dense": false,
+          "enable_rerank": false,
+          "intent": "keyword",
+          "lexical_query": "网络空间安全",
+          "semantic_query": ""
+        },
+        "id": "major_网络空间安全",
+        "mismatched_fields": [
+          "intent",
+          "enable_dense",
+          "enable_rerank"
+        ],
+        "query": "网络空间安全",
+        "type": "major_query"
+      },
+      {
+        "actual": {
+          "enable_dense": true,
+          "enable_rerank": true,
+          "intent": "semantic",
+          "lexical_query": "漏洞研究员 浏览器 内核 开源组件 Fuzzing 利用链 C C++ 逆向 符号执行 漏洞利用",
+          "semantic_query": "岗位：高级漏洞研究员。职责：负责浏览器、内核、开源组件漏洞挖掘，建设 Fuzzing 平台并分析利用链。要求：精通 C/C++ 与逆向，熟悉符号执行与漏洞利用。"
+        },
+        "expected": {
+          "enable_dense": true,
+          "enable_rerank": true,
+          "intent": "semantic",
+          "lexical_query": "漏洞挖掘 Fuzzing 逆向 符号执行 C++",
+          "semantic_query": "岗位：高级漏洞研究员。职责：负责浏览器、内核、开源组件漏洞挖掘，建设 Fuzzing 平台并分析利用链。要求：精通 C/C++ 与逆向，熟悉符号执行与漏洞利用。"
+        },
+        "id": "jd_security_research",
+        "mismatched_fields": [
+          "lexical_query"
+        ],
+        "query": "岗位：高级漏洞研究员。职责：负责浏览器、内核、开源组件漏洞挖掘，建设 Fuzzing 平台并分析利用链。要求：精通 C/C++ 与逆向，熟悉符号执行与漏洞利用。",
+        "type": "jd_match"
+      }
+    ]
   },
   "planner_by_type": {
     "cross_language": {
@@ -11609,29 +11661,101 @@
     },
     "jd_match": {
       "evaluated": 13,
-      "exact_match_accuracy": 1.0,
+      "exact_match_accuracy": 0.9230769230769231,
       "field_accuracy": {
         "enable_dense": 1.0,
         "enable_rerank": 1.0,
         "intent": 1.0,
-        "lexical_query": 1.0,
+        "lexical_query": 0.9230769230769231,
         "semantic_query": 1.0
       },
-      "mismatch_count": 0,
-      "mismatches": []
+      "mismatch_count": 1,
+      "mismatches": [
+        {
+          "actual": {
+            "enable_dense": true,
+            "enable_rerank": true,
+            "intent": "semantic",
+            "lexical_query": "漏洞研究员 浏览器 内核 开源组件 Fuzzing 利用链 C C++ 逆向 符号执行 漏洞利用",
+            "semantic_query": "岗位：高级漏洞研究员。职责：负责浏览器、内核、开源组件漏洞挖掘，建设 Fuzzing 平台并分析利用链。要求：精通 C/C++ 与逆向，熟悉符号执行与漏洞利用。"
+          },
+          "expected": {
+            "enable_dense": true,
+            "enable_rerank": true,
+            "intent": "semantic",
+            "lexical_query": "漏洞挖掘 Fuzzing 逆向 符号执行 C++",
+            "semantic_query": "岗位：高级漏洞研究员。职责：负责浏览器、内核、开源组件漏洞挖掘，建设 Fuzzing 平台并分析利用链。要求：精通 C/C++ 与逆向，熟悉符号执行与漏洞利用。"
+          },
+          "id": "jd_security_research",
+          "mismatched_fields": [
+            "lexical_query"
+          ],
+          "query": "岗位：高级漏洞研究员。职责：负责浏览器、内核、开源组件漏洞挖掘，建设 Fuzzing 平台并分析利用链。要求：精通 C/C++ 与逆向，熟悉符号执行与漏洞利用。",
+          "type": "jd_match"
+        }
+      ]
     },
     "major_query": {
       "evaluated": 8,
-      "exact_match_accuracy": 1.0,
+      "exact_match_accuracy": 0.75,
       "field_accuracy": {
-        "enable_dense": 1.0,
-        "enable_rerank": 1.0,
-        "intent": 1.0,
+        "enable_dense": 0.75,
+        "enable_rerank": 0.75,
+        "intent": 0.75,
         "lexical_query": 1.0,
         "semantic_query": 1.0
       },
-      "mismatch_count": 0,
-      "mismatches": []
+      "mismatch_count": 2,
+      "mismatches": [
+        {
+          "actual": {
+            "enable_dense": true,
+            "enable_rerank": true,
+            "intent": "semantic",
+            "lexical_query": "信息安全",
+            "semantic_query": "信息安全"
+          },
+          "expected": {
+            "enable_dense": false,
+            "enable_rerank": false,
+            "intent": "keyword",
+            "lexical_query": "信息安全",
+            "semantic_query": ""
+          },
+          "id": "major_信息安全",
+          "mismatched_fields": [
+            "intent",
+            "enable_dense",
+            "enable_rerank"
+          ],
+          "query": "信息安全",
+          "type": "major_query"
+        },
+        {
+          "actual": {
+            "enable_dense": true,
+            "enable_rerank": true,
+            "intent": "semantic",
+            "lexical_query": "网络空间安全",
+            "semantic_query": "网络空间安全"
+          },
+          "expected": {
+            "enable_dense": false,
+            "enable_rerank": false,
+            "intent": "keyword",
+            "lexical_query": "网络空间安全",
+            "semantic_query": ""
+          },
+          "id": "major_网络空间安全",
+          "mismatched_fields": [
+            "intent",
+            "enable_dense",
+            "enable_rerank"
+          ],
+          "query": "网络空间安全",
+          "type": "major_query"
+        }
+      ]
     },
     "negative_semantic": {
       "evaluated": 8,
