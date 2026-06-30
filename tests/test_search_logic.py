@@ -2,6 +2,7 @@ import json
 import unittest
 from unittest.mock import patch
 
+import app
 from app import (
     DENSE_RETRIEVER,
     EVIDENCE_DENSE_RETRIEVER,
@@ -96,14 +97,16 @@ class SearchLogicTests(unittest.TestCase):
     def test_query_parser_prompt_routes_structured_skill_queries_to_semantic(self) -> None:
         prompt = _query_parser_system_prompt()
 
-        self.assertIn("学历/城市/年限只是结构化 filter，不决定 intent", prompt)
-        self.assertIn("lexical_query 不要复读原句", prompt)
-        self.assertIn("北京 硕士 4年以上 RAG LangChain", prompt)
+        # 学历/城市/年限只是 filter，不决定 intent
+        self.assertIn("不决定 intent", prompt)
+        # 长 JD 压缩、不复读原句
+        self.assertIn("不要复读原句", prompt)
+        # degrees 由 LLM 展开（精确/下限/枚举统一成集合）
+        self.assertIn("degrees", prompt)
+        self.assertIn("本科及以上", prompt)
+        # 结构化 + 技能组合示例路由到 semantic
+        self.assertIn("北京 硕士及以上 4年以上 RAG LangChain", prompt)
         self.assertIn('"intent":"semantic","lexical_query":"RAG LangChain"', prompt)
-        self.assertIn(
-            '"lexical_query":"LLM RAG 企业知识库问答 文档解析 向量检索 召回排序 Prompt 模型微调 Python PyTorch LangChain LlamaIndex RAG评测 长文本处理 ToB知识库"',
-            prompt,
-        )
 
     def test_planner_eval_reports_field_mismatches(self) -> None:
         planner_eval = evaluate_query_plan(
@@ -935,7 +938,7 @@ class SearchLogicTests(unittest.TestCase):
                 "semantic_query": "推荐系统",
                 "constraints": {
                     "min_years": 0.5,
-                    "degree": "本科",
+                    "degrees": ["本科"],
                     "cities": ["北京"],
                     "skills": ["推荐系统"],
                 },
@@ -961,7 +964,7 @@ class SearchLogicTests(unittest.TestCase):
         self.assertFalse(plan.enable_rerank)
         self.assertEqual(plan.constraints["skills"], ["推荐系统"])
         self.assertNotIn({"term": {"skills": "推荐系统"}}, plan.filters)
-        self.assertIn({"term": {"candidate.highest_degree": "本科"}}, plan.filters)
+        self.assertIn({"terms": {"candidate.highest_degree": ["本科"]}}, plan.filters)
         self.assertIn({"terms": {"application.expected_work_cities": ["北京"]}}, plan.filters)
         self.assertIn({"range": {"candidate.years_experience": {"gte": 0.0}}}, plan.filters)
         debug_plan = plan.to_debug_dict()
@@ -969,17 +972,16 @@ class SearchLogicTests(unittest.TestCase):
         self.assertEqual(debug_plan["lexical_query"], "推荐系统")
         self.assertEqual(debug_plan["constraints"]["skills"], ["推荐系统"])
 
-    def test_query_plan_treats_degree_floor_as_range_filter(self) -> None:
+    def test_query_plan_degree_floor_expands_to_terms_filter(self) -> None:
+        # 学历下限由 LLM 展开成可接受集合（本科及以上 → 本科/硕士/博士），
+        # 后端只做一条 terms 过滤，不再有 min_degree / 下限区间逻辑。
         with patch(
             "app._call_query_parser_llm",
             return_value={
                 "intent": "semantic",
                 "lexical_query": "大模型 RAG Agent",
                 "semantic_query": "大模型 RAG Agent",
-                "constraints": {
-                    "degree": "本科",
-                    "skills": ["RAG"],
-                },
+                "constraints": {"degrees": ["本科", "硕士", "博士"], "skills": ["RAG"]},
                 "enable_dense": True,
                 "enable_rerank": True,
             },
@@ -995,9 +997,40 @@ class SearchLogicTests(unittest.TestCase):
                 },
             )
 
-        self.assertEqual(plan.constraints["min_degree"], "本科")
-        self.assertNotIn({"term": {"candidate.highest_degree": "本科"}}, plan.filters)
+        self.assertEqual(plan.constraints["degrees"], ["本科", "硕士", "博士"])
         self.assertIn({"terms": {"candidate.highest_degree": ["本科", "硕士", "博士"]}}, plan.filters)
+
+    def test_query_plan_treats_degree_enumeration_as_terms_filter(self) -> None:
+        # "本科或者硕士" 是枚举（两者都要），不是下限——不能把本科排除掉。
+        with patch(
+            "app._call_query_parser_llm",
+            return_value={
+                "intent": "keyword",
+                "lexical_query": "东南大学",
+                "semantic_query": "",
+                "constraints": {"degrees": ["本科", "硕士"]},
+                "enable_dense": False,
+                "enable_rerank": False,
+            },
+        ):
+            plan = _plan_query(
+                "东南大学本科或者硕士",
+                [],
+                size=10,
+                facets={"degrees": [{"key": "本科"}, {"key": "硕士"}, {"key": "博士"}], "cities": [], "skills": []},
+            )
+
+        self.assertEqual(plan.constraints.get("degrees"), ["本科", "硕士"])
+        # 多选 terms（本科 OR 硕士），不含博士、不退化成下限
+        self.assertIn({"terms": {"candidate.highest_degree": ["本科", "硕士"]}}, plan.filters)
+        self.assertNotIn({"terms": {"candidate.highest_degree": ["硕士", "博士"]}}, plan.filters)
+
+    def test_normalize_degree_list_dedupes_and_orders(self) -> None:
+        # degrees 列表去重 + 按 本科<硕士<博士 排序；非法值丢弃。
+        self.assertEqual(app._normalize_degree_list(["硕士", "本科", "本科"]), ["本科", "硕士"])
+        self.assertEqual(app._normalize_degree_list(["博士", "本科"]), ["本科", "博士"])
+        self.assertEqual(app._normalize_degree_list(["不存在", ""]), [])
+        self.assertEqual(app._normalize_degree_list(None), [])
 
     def test_query_plan_keeps_llm_skill_constraints_soft(self) -> None:
         with patch(

@@ -86,32 +86,6 @@ QUERY_PLAN_CACHE_MAX_ENTRIES = 512
 # 几乎必然算命中。对 min_years 过滤施加软容差带，召回边界候选，真实年限仍由排序体现。
 MIN_YEARS_TOLERANCE_RATIO = 0.10
 MIN_YEARS_TOLERANCE_FLOOR = 0.5
-# DeepSeek 严格结构化输出的 json_schema。所有字段都设为 required 且关闭
-# additionalProperties，防止模型漂移输出结构；sanitizer 仍会规范化字段值，
-# 但 schema 能从源头消除整字段缺失（如偶发不返回 lexical_query）。
-QUERY_PLAN_JSON_SCHEMA = {
-    "type": "object",
-    "additionalProperties": False,
-    "required": ["intent", "lexical_query", "semantic_query", "constraints", "enable_dense"],
-    "properties": {
-        "intent": {"type": "string", "enum": ["browse", "lookup", "keyword", "semantic"]},
-        "lexical_query": {"type": "string"},
-        "semantic_query": {"type": "string"},
-        "enable_dense": {"type": "boolean"},
-        "constraints": {
-            "type": "object",
-            "additionalProperties": False,
-            "required": ["degree", "min_degree", "cities", "skills", "min_years"],
-            "properties": {
-                "degree": {"type": ["string", "null"], "enum": ["博士", "硕士", "本科", None]},
-                "min_degree": {"type": ["string", "null"], "enum": ["博士", "硕士", "本科", None]},
-                "cities": {"type": "array", "items": {"type": "string"}},
-                "skills": {"type": "array", "items": {"type": "string"}},
-                "min_years": {"type": ["number", "null"]},
-            },
-        },
-    },
-}
 SOURCE_EXCLUDES = [
     "raw_text",
     "raw_sections",
@@ -386,26 +360,21 @@ def _normalize_degree_value(degree: str) -> str:
     return normalized if normalized in DEGREE_ORDER else ""
 
 
-def _degree_floor_from_query(raw_query: str) -> str:
-    compact_query = re.sub(r"\s+", "", raw_query)
-    for label, canonical in sorted(
-        DEGREE_ALIASES.items(),
-        key=lambda item: len(item[0]),
-        reverse=True,
-    ):
-        if canonical not in DEGREE_ORDER:
-            continue
-        if re.search(rf"{re.escape(label)}(?:及以上|及其以上|或以上|以上)", compact_query):
-            return canonical
-    return ""
+def _normalize_degree_list(value: Any) -> list[str]:
+    """规范化"可接受学历集合"：去重、过滤非法值、按 本科<硕士<博士 排序。
 
-
-def _degree_floor_filter(min_degree: str) -> dict[str, Any]:
-    normalized = _normalize_degree_value(min_degree)
-    if not normalized:
-        return {"term": {"candidate.highest_degree": _normalize_highest_degree(str(min_degree))}}
-    start = DEGREE_ORDER.index(normalized)
-    return {"terms": {"candidate.highest_degree": list(DEGREE_ORDER[start:])}}
+    LLM 负责把任何学历表达（精确"硕士"、下限"本科及以上"、枚举"本科或硕士"）
+    统一展开成它能接受的具体学历列表，后端只需一条 terms 过滤，不再区分
+    精确/下限/枚举三种情况。
+    """
+    seen: set[str] = set()
+    result: list[str] = []
+    for item in value if isinstance(value, list) else []:
+        normalized = _normalize_degree_value(str(item).strip())
+        if normalized and normalized not in seen:
+            seen.add(normalized)
+            result.append(normalized)
+    return sorted(result, key=DEGREE_ORDER.index)
 
 
 def _dedupe(values: list[str]) -> list[str]:
@@ -649,7 +618,7 @@ def _call_query_parser_llm(
                 ),
             },
         ],
-        "response_format": _query_parser_response_format(),
+        "response_format": {"type": "json_object"},
         # 关闭思考链：planner 是结构化抽取任务，思考只增延迟无收益。不同 provider
         # 的关闭参数名不同——qwen 用 enable_thinking=False（顶层），deepseek/豆包用
         # thinking={"type":"disabled"}。两者都发，各 provider 忽略自己不认的键。
@@ -670,111 +639,51 @@ def _call_query_parser_llm(
     return json.loads(_strip_json_fence(content))
 
 
-# DeepSeek 较新接口支持 json_schema 严格结构化输出；但实测 deepseek-v4-flash
-# 会拒绝 json_schema（HTTP 400），因此默认用广泛支持的 json_object，并靠
-# _sanitize_llm_query_plan 做字段兜底。若将来切换到支持 schema 的模型，把
-# _structured_output_supported 初值改回 True 即可自动启用严格模式 + 自动回退。
-_structured_output_supported = False
-_structured_output_lock = threading.Lock()
-
-
-def _query_parser_response_format() -> dict[str, Any]:
-    with _structured_output_lock:
-        use_schema = _structured_output_supported
-    if not use_schema:
-        return {"type": "json_object"}
-    return {
-        "type": "json_schema",
-        "json_schema": {
-            "name": "resume_query_plan",
-            "strict": True,
-            "schema": QUERY_PLAN_JSON_SCHEMA,
-        },
-    }
-
-
 def _post_query_parser(body: dict[str, Any]) -> dict[str, Any]:
-    headers = {
-        "Authorization": f"Bearer {QUERY_PARSER_API_KEY}",
-        "Content-Type": "application/json",
-    }
     response = requests.post(
         QUERY_PARSER_API_URL,
-        headers=headers,
+        headers={
+            "Authorization": f"Bearer {QUERY_PARSER_API_KEY}",
+            "Content-Type": "application/json",
+        },
         json=body,
         timeout=QUERY_PARSER_TIMEOUT_SECONDS,
     )
-    # 若接口不支持 json_schema 响应格式，则用广泛支持的 json_object 重试一次，
-    # 并停止后续的 schema 尝试。
-    status_code = getattr(response, "status_code", None)
-    if (
-        status_code in (400, 422)
-        and body.get("response_format", {}).get("type") == "json_schema"
-    ):
-        global _structured_output_supported
-        with _structured_output_lock:
-            _structured_output_supported = False
-        logger.warning(
-            "query parser json_schema rejected (HTTP %s); falling back to json_object",
-            response.status_code,
-        )
-        retry_body = {**body, "response_format": {"type": "json_object"}}
-        response = requests.post(
-            QUERY_PARSER_API_URL,
-            headers=headers,
-            json=retry_body,
-            timeout=QUERY_PARSER_TIMEOUT_SECONDS,
-        )
     response.raise_for_status()
     return response.json()
 
 
 def _query_parser_system_prompt() -> str:
     return (
-        "你是一个招聘/简历检索系统的 query planner。"
-        "你的唯一任务是把用户自由文本解析成可执行的检索计划，必须只输出一个 JSON object，不能输出 Markdown。"
-        "不要根据候选人库是否存在来臆测结果，只解析用户意图。\n\n"
-        "输出 schema:\n"
+        "你是招聘/简历检索系统的 query planner，把用户自由文本解析成检索计划。"
+        "只输出一个 JSON object，不要 Markdown，不要臆测候选人库是否存在。\n\n"
+        "schema:\n"
         "{\n"
         '  "intent": "browse|lookup|keyword|semantic",\n'
-        '  "lexical_query": "给 BM25/短语/精确检索使用的文本；不得包含已抽取到 constraints 的学历/城市/年限纯筛选词；纯筛选时为空字符串",\n'
-        '  "semantic_query": "给 embedding/rerank 使用的语义需求文本；不得包含已抽取到 constraints 的学历/城市/年限纯筛选词；不启用语义时为空字符串",\n'
-        '  "constraints": {\n'
-        '    "degree": null|"博士"|"硕士"|"本科",\n'
-        '    "min_degree": null|"博士"|"硕士"|"本科",\n'
-        '    "cities": ["北京"],\n'
-        '    "skills": ["Python"],\n'
-        '    "min_years": null|0.5\n'
-        "  },\n"
-        '  "enable_dense": true\n'
+        '  "lexical_query": "给 BM25/精确检索的文本；纯筛选时为空",\n'
+        '  "semantic_query": "给 embedding/rerank 的语义需求文本；不启用语义时为空",\n'
+        '  "constraints": {"degrees": ["本科","硕士"], "cities": ["北京"], "skills": ["Python"], "min_years": null|0.5},\n'
+        '  "enable_dense": true|false\n'
         "}\n\n"
-        "判断准则:\n"
-        "- lookup: 候选人编号、岗位编号、手机号、邮箱等唯一标识符直接定位查询；dense=false。\n"
-        "- keyword: 关键词检索——学校、公司、专业、姓名、岗位名等实体查询；dense=false。注意：只把实体核心名称放入 lexical_query，修饰词如\"实习\"\"大学\"\"硕士\"等不要混进去。例如\"阿里巴巴实习\" → lexical_query=\"阿里巴巴\"。\n"
-        "- semantic: 语义检索——自然语言能力描述（如\"做过大规模分布式系统架构设计\"）、多技能组合（如\"Python PyTorch NLP 大模型\"）、长岗位描述或 JD 粘贴；dense=true。\n"
-        "- 学历/城市/年限只是结构化 filter，不决定 intent。抽掉这些 filter 后，如果剩余需求是技能组合、工程能力、项目经验或 JD，intent 必须是 semantic；如果剩余需求只是学校/公司/专业/姓名/岗位实体，intent 才是 keyword。\n"
-        "- 学历精确要求（如\"本科\"）放入 degree；学历下限要求（如\"本科及以上\"\"硕士及以上\"）放入 min_degree，不要放入 degree。\n"
-        "- 负向约束如\"不要纯推荐排序\"不要变成硬过滤；把核心正向需求放入 semantic_query，负向信息可留在 semantic_query 里。\n"
-        "- 即使某些技能也放入 constraints.skills，也不要从 lexical_query/semantic_query 中删除这些技能词；技能词仍然是 BM25 和语义召回的重要线索。\n"
-        "- 已放入 constraints 的学历、城市、年限不要再出现在 lexical_query 或 semantic_query 中，避免污染词面检索和 embedding。\n"
-        "- 长 JD 或长自然语言需求中，lexical_query 不要复读原句；必须压缩为核心技能、实体、系统类型、业务短语和高价值检索词，去掉\"岗位\"\"职责\"\"要求\"\"负责\"\"熟悉\"\"优先\"等低信息量叙述词。semantic_query 才保留完整原文和上下文。\n"
-        "- keyword 意图下，如果用户只输入了学历、城市、年限这类纯筛选条件（没有任何检索关键词），则 lexical_query 和 semantic_query 都返回空字符串。\n"
-        "- skills 可记录用户明确点名的技能，供解释与检索调试；泛化语义能力不要硬塞进 skills。\n"
+        "intent 判定（学历/城市/年限只是 filter，不决定 intent；抽掉它们后看剩余需求）:\n"
+        "- lookup: 编号/手机号/邮箱等唯一标识符定位，dense=false。\n"
+        "- keyword: 学校/公司/专业/姓名/岗位名等实体查询，dense=false。\n"
+        "- semantic: 能力描述、多技能组合、长 JD 等需要语义理解的需求，dense=true。\n\n"
+        "字段规则:\n"
+        "- degrees: 用户能接受的全部学历集合，由 LLM 展开——\"硕士\"→[硕士]；\"本科或硕士\"→[本科,硕士]；\"本科及以上\"→[本科,硕士,博士]；\"硕士及以上\"→[硕士,博士]。无学历约束则为 []。\n"
+        "- lexical_query: 只放实体核心名/技能/高价值检索词，去掉已抽到 constraints 的学历/城市/年限，也去掉\"实习\"\"岗位\"\"职责\"\"要求\"\"熟悉\"等修饰/低信息词。长 JD 必须压缩成关键词串，不要复读原句。\n"
+        "- semantic_query: 保留完整语义需求与上下文（长 JD 放原文）；负向约束（如\"不要纯推荐\"）也留在这里，不要变成硬过滤。\n"
+        "- skills: 用户明确点名的技能，仍要保留在 lexical/semantic_query 里（是召回线索）；泛化能力不要硬塞。\n"
+        "- 纯筛选（只有学历/城市/年限、无检索词）时 lexical_query 和 semantic_query 都为空。\n"
         "\n示例:\n"
         "输入: zhangwei_mock@example.com\n"
-        '输出: {"intent":"lookup","lexical_query":"zhangwei_mock@example.com","semantic_query":"zhangwei_mock@example.com","constraints":{"degree":null,"min_degree":null,"cities":[],"skills":[],"min_years":null},"enable_dense":false}\n'
-        "输入: Columbia University 哥伦比亚大学\n"
-        '输出: {"intent":"keyword","lexical_query":"Columbia University 哥伦比亚大学","semantic_query":"","constraints":{"degree":null,"min_degree":null,"cities":[],"skills":[],"min_years":null},"enable_dense":false}\n'
-        "输入: 北京 硕士 4年以上 RAG LangChain\n"
-        '输出: {"intent":"semantic","lexical_query":"RAG LangChain","semantic_query":"RAG LangChain","constraints":{"degree":null,"min_degree":"硕士","cities":["北京"],"skills":["RAG","LangChain"],"min_years":4},"enable_dense":true}\n'
-        "输入: 深圳 本科 5年以上 Golang Kubernetes\n"
-        '输出: {"intent":"semantic","lexical_query":"Golang Kubernetes","semantic_query":"Golang Kubernetes","constraints":{"degree":"本科","min_degree":null,"cities":["深圳"],"skills":["Golang","Kubernetes"],"min_years":5},"enable_dense":true}\n'
-        "输入: 杭州 硕士 8年以上 Java 架构\n"
-        '输出: {"intent":"semantic","lexical_query":"Java 架构","semantic_query":"Java 架构","constraints":{"degree":null,"min_degree":"硕士","cities":["杭州"],"skills":["Java"],"min_years":8},"enable_dense":true}\n'
-        "输入: 北京交通大学\n"
-        '输出: {"intent":"keyword","lexical_query":"北京交通大学","semantic_query":"","constraints":{"degree":null,"min_degree":null,"cities":[],"skills":[],"min_years":null},"enable_dense":false}\n'
+        '输出: {"intent":"lookup","lexical_query":"zhangwei_mock@example.com","semantic_query":"zhangwei_mock@example.com","constraints":{"degrees":[],"cities":[],"skills":[],"min_years":null},"enable_dense":false}\n'
+        "输入: 东南大学本科或者硕士\n"
+        '输出: {"intent":"keyword","lexical_query":"东南大学","semantic_query":"","constraints":{"degrees":["本科","硕士"],"cities":[],"skills":[],"min_years":null},"enable_dense":false}\n'
+        "输入: 北京 硕士及以上 4年以上 RAG LangChain\n"
+        '输出: {"intent":"semantic","lexical_query":"RAG LangChain","semantic_query":"RAG LangChain","constraints":{"degrees":["硕士","博士"],"cities":["北京"],"skills":["RAG","LangChain"],"min_years":4},"enable_dense":true}\n'
         "输入: 岗位：LLM/RAG 应用工程师。职责：负责企业知识库问答、文档解析、向量检索、召回排序、Prompt 设计和模型微调，能用 Python、PyTorch、LangChain 或 LlamaIndex 做工程落地。要求：熟悉 RAG 评测、长文本处理和业务系统集成，有 ToB 知识库项目经验优先。\n"
-        '输出: {"intent":"semantic","lexical_query":"LLM RAG 企业知识库问答 文档解析 向量检索 召回排序 Prompt 模型微调 Python PyTorch LangChain LlamaIndex RAG评测 长文本处理 ToB知识库","semantic_query":"岗位：LLM/RAG 应用工程师。职责：负责企业知识库问答、文档解析、向量检索、召回排序、Prompt 设计和模型微调，能用 Python、PyTorch、LangChain 或 LlamaIndex 做工程落地。要求：熟悉 RAG 评测、长文本处理和业务系统集成，有 ToB 知识库项目经验优先。","constraints":{"degree":null,"min_degree":null,"cities":[],"skills":["LLM","RAG","Prompt","Python","PyTorch","LangChain","LlamaIndex"],"min_years":null},"enable_dense":true}\n'
+        '输出: {"intent":"semantic","lexical_query":"LLM RAG 企业知识库问答 文档解析 向量检索 召回排序 Prompt 模型微调 Python PyTorch LangChain LlamaIndex RAG评测 长文本处理 ToB知识库","semantic_query":"岗位：LLM/RAG 应用工程师。职责：负责企业知识库问答、文档解析、向量检索、召回排序、Prompt 设计和模型微调，能用 Python、PyTorch、LangChain 或 LlamaIndex 做工程落地。要求：熟悉 RAG 评测、长文本处理和业务系统集成，有 ToB 知识库项目经验优先。","constraints":{"degrees":[],"cities":[],"skills":["LLM","RAG","Prompt","Python","PyTorch","LangChain","LlamaIndex"],"min_years":null},"enable_dense":true}\n'
     )
 
 
@@ -823,13 +732,11 @@ def _sanitize_llm_query_plan(payload: dict[str, Any], raw_query: str) -> dict[st
 
     constraints = payload.get("constraints") if isinstance(payload.get("constraints"), dict) else {}
     cleaned_constraints: dict[str, Any] = {}
-    min_degree = _normalize_degree_value(str(constraints.get("min_degree") or "").strip())
-    min_degree = min_degree or _degree_floor_from_query(raw_query)
-    degree = constraints.get("degree")
-    if min_degree:
-        cleaned_constraints["min_degree"] = min_degree
-    elif degree:
-        cleaned_constraints["degree"] = _normalize_highest_degree(str(degree).strip())
+    # 学历统一为"可接受学历集合"：LLM 已把精确/下限/枚举都展开成具体学历列表，
+    # 后端只做规范化，不再区分三种情况。
+    degrees = _normalize_degree_list(constraints.get("degrees"))
+    if degrees:
+        cleaned_constraints["degrees"] = degrees
     cities = _clean_string_list(constraints.get("cities"))
     if cities:
         cleaned_constraints["cities"] = cities
@@ -895,14 +802,10 @@ def _normalize_plan_intent(
 
 def _filters_from_llm_constraints(constraints: dict[str, Any]) -> list[dict[str, Any]]:
     filters: list[dict[str, Any]] = []
-    min_degree = constraints.get("min_degree")
-    if min_degree:
-        filters.append(_degree_floor_filter(str(min_degree)))
-        degree = None
-    else:
-        degree = constraints.get("degree")
-    if degree:
-        filters.append({"term": {"candidate.highest_degree": _normalize_highest_degree(str(degree))}})
+    degrees = _normalize_degree_list(constraints.get("degrees"))
+    if degrees:
+        # 可接受学历集合 → 一条 terms 过滤（本科/硕士/博士 任意子集）
+        filters.append({"terms": {"candidate.highest_degree": degrees}})
     cities = _clean_string_list(constraints.get("cities"))
     if cities:
         filters.append({"terms": {"application.expected_work_cities": _dedupe(cities)}})
