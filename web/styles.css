@@ -1280,7 +1280,7 @@ mark {
   margin-top: 16px;
   padding: 20px;
   border-top: 1px solid var(--line-soft);
-  background: #f8f9fa; /* Light grayish-white */
+  background: linear-gradient(180deg, #f9fbfe 0%, var(--surface-muted) 100%);
   border-radius: 0 0 var(--radius) var(--radius);
   font-size: 13px;
   color: var(--subtext);
@@ -1290,26 +1290,47 @@ mark {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 12px;
   margin-bottom: 16px;
   padding-bottom: 12px;
   border-bottom: 1px solid var(--line);
 }
 
 .debug-header-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
   font-weight: 750;
   color: var(--text);
   font-size: 15px;
 }
 
+.debug-header-title::before {
+  content: "";
+  width: 6px;
+  height: 16px;
+  border-radius: 3px;
+  background: var(--primary);
+}
+
 .debug-header-rank {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 12px;
+  border-radius: 999px;
+  background: var(--primary-soft);
+  border: 1px solid var(--primary-line);
   color: var(--subtext);
-  font-size: 14px;
+  font-size: 13px;
+  white-space: nowrap;
 }
 
 .highlight-number {
   color: var(--primary);
-  font-size: 18px;
-  margin-left: 4px;
+  font-size: 17px;
+  font-weight: 750;
+  margin-left: 2px;
 }
 
 .debug-content {
@@ -1334,39 +1355,56 @@ mark {
 .debug-group {
   background: var(--surface);
   border: 1px solid var(--line-soft);
-  border-radius: 8px; /* slight rounded corners */
-  padding: 16px;
-  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.04); /* lightweight shadow */
+  border-radius: 10px;
+  padding: 16px 18px;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.04);
 }
 
 .debug-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   font-weight: 700;
   color: var(--text);
-  font-size: 14px;
-  margin-bottom: 12px;
+  font-size: 13.5px;
+  margin-bottom: 14px;
+  padding-bottom: 10px;
+  border-bottom: 1px dashed var(--line-soft);
+}
+
+.debug-title::before {
+  content: "";
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--primary);
+  flex-shrink: 0;
 }
 
 .debug-list {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
 }
 
 .debug-item {
   display: flex;
   line-height: 1.5;
   align-items: flex-start;
+  gap: 8px;
 }
 
 .debug-label {
   color: var(--muted);
-  min-width: 90px;
+  min-width: 96px;
   flex-shrink: 0;
 }
 
 .debug-value {
   color: var(--text);
-  word-break: break-all;
+  flex: 1;
+  min-width: 0;
+  word-break: break-word;
 }
 
 .debug-item.warning .debug-value {
@@ -1426,23 +1464,26 @@ mark {
   background: #f8fafc;
   color: #64748b;
 }
+.dense-match-row {
+  flex-direction: column;
+  gap: 8px;
+}
+
 .dense-match-list {
   display: grid;
-  gap: 4px;
+  gap: 8px;
   width: 100%;
 }
 
 .dense-match-item {
   display: grid;
-  gap: 5px;
-  padding: 6px 0;
-  border-bottom: 1px solid var(--line-soft);
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
+  background: var(--surface-muted);
   color: var(--subtext);
   font-size: 12px;
-}
-
-.dense-match-item:last-child {
-  border-bottom: 0;
 }
 
 .dense-match-name {
@@ -1459,12 +1500,13 @@ mark {
 }
 
 .dense-match-score {
-  color: var(--subtext);
+  color: var(--primary);
+  font-weight: 600;
   white-space: nowrap;
 }
 
 .dense-match-snippet {
-  color: #64748b;
+  color: var(--muted);
   line-height: 1.55;
   word-break: break-word;
 }
@@ -1478,10 +1520,10 @@ mark {
 
 /* Formula box */
 .debug-formula-box {
-  background: #f8fafc;
+  background: linear-gradient(180deg, #fbfdff 0%, var(--surface-muted) 100%);
   border: 1px solid #e2e8f0;
-  border-radius: 6px;
-  padding: 14px;
+  border-radius: 8px;
+  padding: 16px;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
   font-size: 13px;
   color: #475569;
@@ -1540,6 +1582,10 @@ mark {
 .highlight-row {
   color: var(--primary);
   font-weight: 650;
+  padding: 6px 10px;
+  margin: 0 -10px 8px;
+  border-radius: 6px;
+  background: var(--primary-soft);
 }
 .highlight-row .formula-label {
   color: var(--primary);
@@ -1552,6 +1598,10 @@ mark {
 
 .final-row {
   color: var(--text);
+  padding: 8px 10px;
+  margin: 0 -10px;
+  border-radius: 6px;
+  background: var(--primary-soft);
 }
 .final-row .formula-label {
   font-weight: 700;
