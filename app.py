@@ -3,6 +3,7 @@ from __future__ import annotations
 import html
 import json
 import logging
+import os
 import re
 import threading
 import time
@@ -13,14 +14,17 @@ from pathlib import Path
 from typing import Any
 
 import requests
+from dotenv import load_dotenv
 from fastapi import FastAPI, Query
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from embedding_service import encode_single
 
+load_dotenv()
 
-ES_URL = "http://localhost:9200"
+
+ES_URL = os.environ.get("ES_URL", "http://localhost:9200")
 INDEX_ALIAS = "resumes_current"
 EVIDENCE_INDEX_ALIAS = "resume_evidence_current"
 BASE_DIR = Path(__file__).resolve().parent
@@ -75,11 +79,11 @@ INTENT_SEMANTIC = "semantic"
 EVIDENCE_VECTOR_FIELD = "evidence_vector"
 QUERY_PARSER_PROVIDER = "qwen"
 QUERY_PARSER_MODEL_ID = "qwen3.5-flash"
-QUERY_PARSER_API_URL = "https://ws-nl8tvztfpss60i8t.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/chat/completions"
-QUERY_PARSER_API_KEY = (
-    "sk-ws-H.RYPXDXP.DATz.MEUCIEFJ1Yu1_HxHnYU6_8E_OY1f_hJaKbH9VUpaqtL1uenPAiEAyYrG7vGeOt"
-    "0RqCCBXlpzh-GwOCOxTWBcWiR3Y8YsVbk"
+QUERY_PARSER_API_URL = os.environ.get(
+    "QUERY_PARSER_API_URL",
+    "https://ws-nl8tvztfpss60i8t.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/chat/completions",
 )
+QUERY_PARSER_API_KEY = os.environ.get("QUERY_PARSER_API_KEY", "")
 QUERY_PARSER_TIMEOUT_SECONDS = 30
 QUERY_PARSER_MAX_VOCAB_ITEMS = 120
 QUERY_PLAN_CACHE_TTL_SECONDS = 300

@@ -17,6 +17,10 @@ htmlcov/
 venv/
 env/
 
+# Local environment variables / secrets
+.env
+.env.local
+
 # Local Elasticsearch runtime
 elasticsearch-*/
 

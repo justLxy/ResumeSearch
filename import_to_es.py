@@ -2,18 +2,22 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
 
 import requests
+from dotenv import load_dotenv
 
 from embedding_service import MODEL_ID, VECTOR_DIMS, encode_batch
 from resume_parser import discover_doc_files, parse_resume_batch
 
+load_dotenv()
 
-DEFAULT_ES_URL = "http://localhost:9200"
+
+DEFAULT_ES_URL = os.environ.get("ES_URL", "http://localhost:9200")
 DEFAULT_INDEX = "resumes_v1"
 DEFAULT_ALIAS = "resumes_current"
 DEFAULT_EVIDENCE_INDEX = "resume_evidence_v1"

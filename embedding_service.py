@@ -7,10 +7,13 @@ import shutil
 from typing import TYPE_CHECKING
 
 import requests
+from dotenv import load_dotenv
 from sentence_transformers import SentenceTransformer
 
 if TYPE_CHECKING:
     import numpy as np
+
+load_dotenv()
 
 LOCAL_PROVIDER = "local"
 DOUBAO_PROVIDER = "doubao"
@@ -20,8 +23,10 @@ EMBEDDING_PROVIDER = QWEN_PROVIDER
 LOCAL_MODEL_ID = "IEITYuan/Yuan-embedding-2.0-zh"
 LOCAL_VECTOR_DIMS = 1792
 
-DOUBAO_API_KEY = "b22a1ce8-9df9-4aec-9a94-a0a6be74cc86"
-DOUBAO_API_BASE = "https://ark.cn-beijing.volces.com/api/v3"
+DOUBAO_API_KEY = os.environ.get("DOUBAO_API_KEY", "")
+DOUBAO_API_BASE = os.environ.get(
+    "DOUBAO_API_BASE", "https://ark.cn-beijing.volces.com/api/v3"
+)
 DOUBAO_MODEL_ID = "ep-20260412051954-zl5fm"
 DOUBAO_VECTOR_DIMS = 2048
 DOUBAO_BATCH_SIZE = 64
@@ -29,11 +34,11 @@ DOUBAO_TIMEOUT_SECONDS = 60
 DOUBAO_SEND_DIMENSIONS = True
 DOUBAO_MULTIMODAL = True
 
-QWEN_API_KEY = (
-    "sk-ws-H.RYPXDXP.DATz.MEUCIEFJ1Yu1_HxHnYU6_8E_OY1f_hJaKbH9VUpaqtL1uenPAiEAyYrG7vGeOt"
-    "0RqCCBXlpzh-GwOCOxTWBcWiR3Y8YsVbk"
+QWEN_API_KEY = os.environ.get("QWEN_API_KEY", "")
+QWEN_API_URL = os.environ.get(
+    "QWEN_API_URL",
+    "https://dashscope.aliyuncs.com/api/v1/services/embeddings/text-embedding/text-embedding",
 )
-QWEN_API_URL = "https://dashscope.aliyuncs.com/api/v1/services/embeddings/text-embedding/text-embedding"
 QWEN_MODEL_ID = "text-embedding-v4"
 QWEN_VECTOR_DIMS = 2048
 QWEN_BATCH_SIZE = 10

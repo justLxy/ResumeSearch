@@ -5,17 +5,18 @@ from dataclasses import dataclass
 from typing import Any
 
 import requests
+from dotenv import load_dotenv
+
+load_dotenv()
 
 RERANK_PROVIDER = "dashscope_api"
 RERANK_MODEL_ID = "qwen3-rerank"
-RERANK_API_URL = (
+RERANK_API_URL = os.environ.get(
+    "RERANK_API_URL",
     "https://ws-nl8tvztfpss60i8t.cn-beijing.maas.aliyuncs.com/api/v1/services/"
-    "rerank/text-rerank/text-rerank"
+    "rerank/text-rerank/text-rerank",
 )
-RERANK_API_KEY = (
-    "sk-ws-H.RYPXDXP.DATz.MEUCIEFJ1Yu1_HxHnYU6_8E_OY1f_hJaKbH9VUpaqtL1uenPAiEAyYrG7vGeOt"
-    "0RqCCBXlpzh-GwOCOxTWBcWiR3Y8YsVbk"
-)
+RERANK_API_KEY = os.environ.get("RERANK_API_KEY", "")
 RERANK_BATCH_SIZE = 20
 RERANK_TIMEOUT_SECONDS = 60
 RERANK_INSTRUCT: str | None = "Given a recruitment query, retrieve relevant candidate resumes that match the required skills, experience, and qualifications."
@@ -56,6 +57,8 @@ def score_pairs(query: str, documents: list[str]) -> list[float]:
 
 
 def _score_batch(query: str, documents: list[str]) -> list[float]:
+    if not RERANK_API_KEY.strip():
+        raise RuntimeError("RERANK_API_KEY is required to call the rerank service")
     payload = _build_payload(query, documents)
     response = requests.post(
         RERANK_API_URL,
