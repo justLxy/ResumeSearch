@@ -1,6 +1,6 @@
 import pytest
 
-import embedding_service
+from resume_search.infrastructure import embedding_service
 
 
 class FakeResponse:

@@ -2,8 +2,7 @@ import json
 import unittest
 from unittest.mock import patch
 
-import app
-from app import (
+from resume_search.config import (
     DENSE_RETRIEVER,
     EVIDENCE_DENSE_RETRIEVER,
     EVIDENCE_RETRIEVER,
@@ -11,42 +10,50 @@ from app import (
     INTENT_LOOKUP,
     INTENT_SEMANTIC,
     QUERY_PARSER_MODEL_ID,
+)
+from resume_search.services.filters import (
     _build_filters,
-    _call_query_parser_llm,
-    _default_snippet,
-    _evidence_lexical_query,
-    _format_hit,
-    _hybrid_total,
-    _lexical_total,
-    _lookup_fast_path,
-    _merge_case_insensitive_skill_buckets,
+    _filters_from_llm_constraints,
     _min_years_filter,
-    _normalize_limit,
-    _normalize_offset,
+)
+from resume_search.services.formatting import _default_snippet, _format_hit
+from resume_search.services.normalization import (
+    _normalize_school_tier,
+    _normalize_school_tier_list,
+    _school_tier_filter,
+)
+from resume_search.services.query_builder import _evidence_lexical_query
+from resume_search.services.query_planning import (
+    _call_query_parser_llm,
+    _lookup_fast_path,
     _parse_query_with_llm,
     _plan_query,
     _query_parser_system_prompt,
-    _rerank_document,
-    _rerank_results,
+)
+from resume_search.services.facets import _merge_case_insensitive_skill_buckets
+from resume_search.services.reranking import _rerank_document, _rerank_results
+from resume_search.services.retrieval import (
+    _hybrid_total,
+    _lexical_total,
     _rrf_merge,
     _run_hybrid_search,
-    _school_tier_filter,
-    _normalize_school_tier,
-    _normalize_school_tier_list,
-    _filters_from_llm_constraints,
 )
-from import_to_es import (
+from resume_search.services.search import _normalize_limit, _normalize_offset
+from resume_search.services import normalization
+from resume_search.infrastructure.embedding_service import VECTOR_DIMS
+from indexing.mappings import (
     EMBEDDING_NORMALIZED,
     EVIDENCE_INDEX_BODY,
     EVIDENCE_VECTOR_FIELD,
     SEMANTIC_PROFILE_VERSION,
-    VECTOR_DIMS,
     INDEX_BODY,
-    _enrich_doc,
+)
+from indexing.enrichment import (
     _collect_all_schools,
-    _resume_evidence_docs,
+    _enrich_doc,
     _estimate_years_experience,
 )
+from indexing.evidence import _resume_evidence_docs
 from evaluate_search import evaluate_query_plan
 
 
@@ -82,7 +89,7 @@ class SearchLogicTests(unittest.TestCase):
             calls.append({"url": url, "headers": headers, "json": json, "timeout": timeout})
             return FakeResponse()
 
-        with patch("app.requests.post", side_effect=fake_post):
+        with patch("resume_search.infrastructure.llm_client.requests.post", side_effect=fake_post):
             plan = _call_query_parser_llm(
                 "找做过 RAG 和向量检索的人",
                 facets={
@@ -312,7 +319,7 @@ class SearchLogicTests(unittest.TestCase):
             calls.append(path)
             return {"hits": {"total": {"value": 0}, "hits": []}}
 
-        with patch("app._es", side_effect=fake_es):
+        with patch("resume_search.services.retrieval._es", side_effect=fake_es):
             responses, warnings = _run_hybrid_search(
                 "推荐系统",
                 [0.1, 0.2, 0.3],
@@ -395,7 +402,7 @@ class SearchLogicTests(unittest.TestCase):
         )
 
         with patch(
-            "app._fetch_resume_hits_for_evidence",
+            "resume_search.services.retrieval._fetch_resume_hits_for_evidence",
             return_value={"resume-1": _hit("resume-1", "候选人")},
         ):
             results = _rrf_merge([evidence_response], 10)
@@ -566,7 +573,7 @@ class SearchLogicTests(unittest.TestCase):
         dense_response["_vector_field"] = EVIDENCE_VECTOR_FIELD
 
         with patch(
-            "app._fetch_resume_hits_for_evidence",
+            "resume_search.services.retrieval._fetch_resume_hits_for_evidence",
             return_value={
                 "lexical-1": _hit("lexical-1", "词面候选"),
                 "vector-1": _hit("vector-1", "向量候选"),
@@ -624,7 +631,7 @@ class SearchLogicTests(unittest.TestCase):
         dense_response["_vector_field"] = EVIDENCE_VECTOR_FIELD
 
         with patch(
-            "app._fetch_resume_hits_for_evidence",
+            "resume_search.services.retrieval._fetch_resume_hits_for_evidence",
             return_value={"target": _hit("target", "目标候选人")},
         ):
             results = _rrf_merge(
@@ -651,7 +658,7 @@ class SearchLogicTests(unittest.TestCase):
         dense_response["_vector_field"] = EVIDENCE_VECTOR_FIELD
 
         with patch(
-            "app._fetch_resume_hits_for_evidence",
+            "resume_search.services.retrieval._fetch_resume_hits_for_evidence",
             return_value={
                 "single": _hit("single", "单证据候选人"),
                 "pooled": _hit("pooled", "多证据候选人"),
@@ -682,7 +689,7 @@ class SearchLogicTests(unittest.TestCase):
         )
 
         with patch(
-            "app._fetch_resume_hits_for_evidence",
+            "resume_search.services.retrieval._fetch_resume_hits_for_evidence",
             return_value={
                 "single": _hit("single", "单证据候选人"),
                 "pooled": _hit("pooled", "多证据候选人"),
@@ -980,7 +987,7 @@ class SearchLogicTests(unittest.TestCase):
 
     def test_query_plan_uses_llm_keyword_constraints_without_rerank(self) -> None:
         with patch(
-            "app._call_query_parser_llm",
+            "resume_search.services.query_planning._call_query_parser_llm",
             return_value={
                 "intent": "keyword",
                 "lexical_query": "推荐系统",
@@ -1036,7 +1043,7 @@ class SearchLogicTests(unittest.TestCase):
         # 学历下限由 LLM 展开成可接受集合（本科及以上 → 本科/硕士/博士），
         # 后端只做一条 terms 过滤，不再有 min_degree / 下限区间逻辑。
         with patch(
-            "app._call_query_parser_llm",
+            "resume_search.services.query_planning._call_query_parser_llm",
             return_value={
                 "intent": "semantic",
                 "lexical_query": "大模型 RAG Agent",
@@ -1063,7 +1070,7 @@ class SearchLogicTests(unittest.TestCase):
     def test_query_plan_treats_degree_enumeration_as_terms_filter(self) -> None:
         # "本科或者硕士" 是枚举（两者都要），不是下限——不能把本科排除掉。
         with patch(
-            "app._call_query_parser_llm",
+            "resume_search.services.query_planning._call_query_parser_llm",
             return_value={
                 "intent": "keyword",
                 "lexical_query": "东南大学",
@@ -1087,14 +1094,14 @@ class SearchLogicTests(unittest.TestCase):
 
     def test_normalize_degree_list_dedupes_and_orders(self) -> None:
         # degrees 列表去重 + 按 本科<硕士<博士 排序；非法值丢弃。
-        self.assertEqual(app._normalize_degree_list(["硕士", "本科", "本科"]), ["本科", "硕士"])
-        self.assertEqual(app._normalize_degree_list(["博士", "本科"]), ["本科", "博士"])
-        self.assertEqual(app._normalize_degree_list(["不存在", ""]), [])
-        self.assertEqual(app._normalize_degree_list(None), [])
+        self.assertEqual(normalization._normalize_degree_list(["硕士", "本科", "本科"]), ["本科", "硕士"])
+        self.assertEqual(normalization._normalize_degree_list(["博士", "本科"]), ["本科", "博士"])
+        self.assertEqual(normalization._normalize_degree_list(["不存在", ""]), [])
+        self.assertEqual(normalization._normalize_degree_list(None), [])
 
     def test_query_plan_keeps_llm_skill_constraints_soft(self) -> None:
         with patch(
-            "app._call_query_parser_llm",
+            "resume_search.services.query_planning._call_query_parser_llm",
             return_value={
                 "intent": "keyword",
                 "lexical_query": "java",
@@ -1121,7 +1128,7 @@ class SearchLogicTests(unittest.TestCase):
 
     def test_query_plan_disables_rerank_for_lookup_queries(self) -> None:
         with patch(
-            "app._call_query_parser_llm",
+            "resume_search.services.query_planning._call_query_parser_llm",
             return_value={
                 "intent": "lookup",
                 "lexical_query": "M20260013",
@@ -1144,7 +1151,7 @@ class SearchLogicTests(unittest.TestCase):
 
     def test_query_plan_routes_semantic_as_hybrid_query(self) -> None:
         with patch(
-            "app._call_query_parser_llm",
+            "resume_search.services.query_planning._call_query_parser_llm",
             return_value={
                 "intent": "semantic",
                 "lexical_query": "推荐系统 NLP SQL",
@@ -1172,7 +1179,7 @@ class SearchLogicTests(unittest.TestCase):
 
     def test_query_plan_disables_dense_for_keyword_queries(self) -> None:
         with patch(
-            "app._call_query_parser_llm",
+            "resume_search.services.query_planning._call_query_parser_llm",
             return_value={
                 "intent": "keyword",
                 "lexical_query": "北京大学",
@@ -1199,7 +1206,7 @@ class SearchLogicTests(unittest.TestCase):
 
     def test_query_plan_routes_natural_language_to_semantic(self) -> None:
         with patch(
-            "app._call_query_parser_llm",
+            "resume_search.services.query_planning._call_query_parser_llm",
             return_value={
                 "intent": "semantic",
                 "lexical_query": "推荐系统召回 NLP 模型落地",
@@ -1232,7 +1239,7 @@ class SearchLogicTests(unittest.TestCase):
         ]
 
         with patch(
-            "app._score_rerank_documents",
+            "resume_search.services.reranking._score_rerank_documents",
             return_value=[0.05, 0.95],
         ):
             reranked, warnings = _rerank_results("需要 RAG 和向量检索经验", results, top_n=2)
@@ -1260,7 +1267,7 @@ class SearchLogicTests(unittest.TestCase):
         # the results, reorder them by rerank score, and surface a low-relevance
         # warning instead of an empty page.
         with patch(
-            "app._score_rerank_documents",
+            "resume_search.services.reranking._score_rerank_documents",
             return_value=[0.28, 0.31],
         ):
             reranked, warnings = _rerank_results("量子计算芯片设计经验", results, top_n=2)
@@ -1278,7 +1285,7 @@ class SearchLogicTests(unittest.TestCase):
 
         # One candidate clears the floor -> keep the window (no abstain).
         with patch(
-            "app._score_rerank_documents",
+            "resume_search.services.reranking._score_rerank_documents",
             return_value=[0.28, 0.91],
         ):
             reranked, warnings = _rerank_results("需要 RAG 经验", results, top_n=2)
@@ -1594,12 +1601,12 @@ def _evidence_hit(
 
 class QueryPlanFastPathAndCacheTests(unittest.TestCase):
     def setUp(self) -> None:
-        import app
+        from resume_search.services import query_planning
 
-        app._query_plan_cache.clear()
+        query_planning._query_plan_cache.clear()
 
     def test_email_lookup_short_circuits_llm(self) -> None:
-        with patch("app._call_query_parser_llm") as mock_llm:
+        with patch("resume_search.services.query_planning._call_query_parser_llm") as mock_llm:
             parsed = _parse_query_with_llm("zhangwei_mock@example.com")
 
         mock_llm.assert_not_called()
@@ -1626,7 +1633,7 @@ class QueryPlanFastPathAndCacheTests(unittest.TestCase):
             "enable_dense": True,
         }
         with patch(
-            "app._call_query_parser_llm", return_value=payload
+            "resume_search.services.query_planning._call_query_parser_llm", return_value=payload
         ) as mock_llm:
             first = _parse_query_with_llm("找做过 RAG 的人")
             second = _parse_query_with_llm("找做过 RAG 的人")
@@ -1647,7 +1654,7 @@ class QueryPlanFastPathAndCacheTests(unittest.TestCase):
             "enable_dense": False,
         }
         with patch(
-            "app._call_query_parser_llm", return_value=payload
+            "resume_search.services.query_planning._call_query_parser_llm", return_value=payload
         ) as mock_llm:
             _parse_query_with_llm("北京大学")
             _parse_query_with_llm("  北京大学  ")
@@ -1656,7 +1663,7 @@ class QueryPlanFastPathAndCacheTests(unittest.TestCase):
 
     def test_failed_parse_is_not_cached(self) -> None:
         with patch(
-            "app._call_query_parser_llm", side_effect=RuntimeError("boom")
+            "resume_search.services.query_planning._call_query_parser_llm", side_effect=RuntimeError("boom")
         ) as mock_llm:
             first = _parse_query_with_llm("做过推荐系统的人")
             second = _parse_query_with_llm("做过推荐系统的人")

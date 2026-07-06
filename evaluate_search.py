@@ -13,7 +13,8 @@ from typing import Any
 import requests
 from fastapi.testclient import TestClient
 
-import app as search_app
+from resume_search import config as _config
+from resume_search.api import app as _fastapi_app
 
 
 @dataclass(frozen=True)
@@ -84,7 +85,7 @@ def main() -> None:
     if not cases:
         raise SystemExit(f"No eval cases found in {args.qrels}")
 
-    client = TestClient(search_app.app)
+    client = TestClient(_fastapi_app)
     results = [evaluate_case(client, case, args.limit) for case in cases]
     report = build_report(
         results,
@@ -182,7 +183,7 @@ def fetch_ids(query: dict[str, Any]) -> set[str]:
         "_source": False,
         "query": query,
     }
-    url = f"{search_app.ES_URL}/{search_app.INDEX_ALIAS}/_search"
+    url = f"{_config.ES_URL}/{_config.INDEX_ALIAS}/_search"
     response = requests.post(url, json=body, timeout=30)
     response.raise_for_status()
     hits = response.json().get("hits", {}).get("hits", [])
@@ -384,8 +385,8 @@ def build_report(
             "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "qrels": qrels_path,
             "limit": limit,
-            "index_alias": search_app.INDEX_ALIAS,
-            "evidence_index_alias": search_app.EVIDENCE_INDEX_ALIAS,
+            "index_alias": _config.INDEX_ALIAS,
+            "evidence_index_alias": _config.EVIDENCE_INDEX_ALIAS,
             "skipped": len(skipped_cases),
         },
         "overall": summarize(results),

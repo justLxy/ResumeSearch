@@ -4,7 +4,7 @@
 
 系统以 **Elasticsearch 9.x** 为检索引擎，以 **Qwen3.5 Flash** 作为在线 **LLM Query Planner** 实现用户 query 的意图分类（精确查找/关键词检索/语义检索）与结构化约束抽取，以 **Qwen text-embedding-v4**（可选豆包 API 或本地 Yuan 1.5B）提供 2048 维证据向量化，以 **Qwen3 Reranker** 对 RRF 融合后的 top-N 结果做精排。前端为无框架纯 HTML/CSS/JS 单页应用，包含动态筛选面板、Debug 排名可解释性面板和完整的检索质量评估框架（77 条评测用例，覆盖 9 种查询类型，支持 P@K / R@K / MRR / NDCG 等指标）。
 
-> **Parser 概念边界**：本项目当前只有用户输入 query 会调用 LLM。离线简历解析不依赖 LLM，`resume_parser.py` 是针对 HTML `.doc` 简历的规则化解析器；`app.py` 中的 LLM Query Planner 只负责在线检索时解析用户 query。数据文件里的 `parser_version`（如 `html-doc-v1` 或实验数据中的 `llm-diverse-v2`）描述的是简历数据来源/生成版本，不代表检索服务运行时会用 LLM 解析简历。
+> **Parser 概念边界**：本项目当前只有用户输入 query 会调用 LLM。离线简历解析不依赖 LLM，`indexing/resume_parser.py` 是针对 HTML `.doc` 简历的规则化解析器；`resume_search/services/query_planning.py` 中的 LLM Query Planner 只负责在线检索时解析用户 query。数据文件里的 `parser_version`（如 `html-doc-v1` 或实验数据中的 `llm-diverse-v2`）描述的是简历数据来源/生成版本，不代表检索服务运行时会用 LLM 解析简历。
 
 ---
 
@@ -14,8 +14,8 @@
 - [2. 项目架构总览](#2-项目架构总览)
 - [3. 技术栈与依赖](#3-技术栈与依赖)
 - [4. 数据处理流程](#4-数据处理流程)
-  - [4.1 离线简历解析 (resume_parser.py，非 LLM)](#41-离线简历解析-resume_parserpy非-llm)
-  - [4.2 证据切片构建与向量化 (import_to_es.py)](#42-证据切片构建与向量化-import_to_espy)
+  - [4.1 离线简历解析 (indexing/resume_parser.py，非 LLM)](#41-离线简历解析-indexingresume_parserpy非-llm)
+  - [4.2 证据切片构建与向量化 (indexing/ 包)](#42-证据切片构建与向量化-indexing-包)
   - [4.3 Embedding 服务 (embedding_service.py)](#43-embedding-服务-embedding_servicepy)
   - [4.4 Elasticsearch 索引设计](#44-elasticsearch-索引设计)
 - [5. 检索流程详解](#5-检索流程详解)
@@ -86,23 +86,27 @@
                             │  HTTP (fetch → /api/search)
                             ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│                    FastAPI 后端 (app.py)                         │
+│                 FastAPI 后端 (resume_search 包)                   │
 │                                                                 │
+│  api.py (路由)                                                   │
+│    │                                                            │
+│    ▼  services/search.py (编排)                                  │
 │  ┌──────────────┐  ┌──────────────┐  ┌─────────────────┐       │
-│  │ LLM Query    │→│ 并行检索调度  │→│ RRF 融合 + 排序 │       │
-│  │ Planner      │  │ ThreadPool   │  │ _rrf_merge()    │       │
-│  │ Qwen3.5 Flash│  │ Executor     │  │ Qwen3 rerank    │       │
+│  │ query_planning│→│  retrieval   │→│  retrieval      │       │
+│  │ (LLM Planner) │  │ 并行混合检索 │  │ RRF 融合 + 排序 │       │
+│  │ Qwen3.5 Flash │  │ ThreadPool   │  │ + reranking     │       │
 │  └──────────────┘  └──────────────┘  └─────────────────┘       │
-│         │                │                                      │
-│         │    ┌───────────┼───────────┐                          │
-│         │    ▼           ▼           ▼                          │
-│         │  Evidence    Evidence    主索引                        │
-│         │  BM25检索    kNN检索    详情回填                       │
-│         │  (词面)      (向量)                                     │
-│         ▼                                                       │
-│  embedding_service.py  ←→  Qwen / 豆包 API / 本地 Yuan embedding │
+│    │ query_builder    │                     │                   │
+│    │ filters          │    ┌────────────────┼──────────┐        │
+│    │                  ▼    ▼                 ▼          │        │
+│    │              Evidence  Evidence      主索引         │        │
+│    │              BM25检索  kNN检索       详情回填        │        │
+│    │              (词面)    (向量)                        │        │
+│    ▼                                        ▼            ▼        │
+│  infrastructure/ : es_client · llm_client · embedding · rerank   │
+│         ↕ Qwen / 豆包 API / 本地 Yuan embedding · Qwen3 rerank    │
 └────────────────────────┬────────────────────────────────────────┘
-                         │  HTTP (requests → ES REST API)
+                         │  HTTP (es_client → ES REST API)
                          ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │                  Elasticsearch 9.x                              │
@@ -123,29 +127,60 @@
 └─────────────────────────────────────────────────────────────────┘
 
 离线数据导入流程：
-┌──────────┐     ┌──────────────┐     ┌──────────────┐     ┌─────────┐
-│ .doc 文件 │ ──→ │ resume_parser│ ──→ │ import_to_es │ ──→ │   ES    │
-│ (HTML格式)│     │ 解析结构化   │     │ 证据切片     │     │ 双索引  │
-│           │     │ JSON         │     │ 向量化       │     │         │
-└──────────┘     └──────────────┘     │ bulk index   │     └─────────┘
-                                      └──────────────┘
+┌──────────┐     ┌─────────────────────┐     ┌──────────────────────┐     ┌─────────┐
+│ .doc 文件 │ ──→ │ indexing.resume_parser│ ─→ │ indexing.pipeline    │ ──→ │   ES    │
+│ (HTML格式)│     │ 解析结构化 JSON      │     │ enrichment/evidence  │     │ 双索引  │
+│           │     │                     │     │ 向量化 + bulk index  │     │         │
+└──────────┘     └─────────────────────┘     └──────────────────────┘     └─────────┘
 ```
 
-### 模块职责一览
+### 代码结构与模块职责
 
-| 模块文件                | 核心职责                                                         |
-|-------------------------|------------------------------------------------------------------|
-| `resume_parser.py`      | 规则化解析 HTML 格式 `.doc` 简历文件，提取结构化字段（候选人、教育、实习、项目、技能等），不调用 LLM |
-| `import_to_es.py`       | 加载解析结果 → 构建证据切片 → 调用 embedding 服务向量化 → 批量写入 ES 双索引 |
-| `embedding_service.py`  | 统一封装 Qwen、豆包 API、本地 Yuan embedding 后端，提供 `encode_single` / `encode_batch` |
-| `app.py`                | FastAPI 后端：Qwen3.5 Flash LLM Query Planner → 并行混合检索 → RRF 融合 → Qwen3 rerank → 结果格式化 |
-| `web/index.html`        | 前端页面骨架：搜索框、筛选面板、结果区域、详情抽屉               |
-| `web/app.js`            | 前端交互逻辑：搜索触发、facet 渲染、结果卡片、Debug 面板        |
-| `web/styles.css`        | 前端样式                                                         |
-| `evaluate_search.py`    | 检索质量评估脚本，基于 eval_queries.jsonl 计算 P@K / R@K / MRR / 分级 NDCG（2^rel-1 指数增益）/ success@1（单目标类型）|
+后端已按 Clean Architecture 分层为 `resume_search/`（检索链路）与 `indexing/`（索引构建链路）两个包，依赖方向自内向外单向无环：`api → services → infrastructure / domain`，`config` / `domain` 为叶子。检索服务入口为 `resume_search.api:app`，索引构建入口为 `indexing.cli`、`indexing.resume_parser`（均用 `python -m` 运行）。
+
+**`resume_search/`（检索服务）**
+
+| 模块 | 核心职责 |
+|------|----------|
+| `config.py` | 环境变量、路径、检索/排序/缓存常量（唯一配置源，不依赖业务模块） |
+| `domain/models.py` | `QueryPlan` 等纯数据模型 |
+| `domain/constants.py` | 学历/院校档位/技能标签的规范化词表 |
+| `infrastructure/es_client.py` | Elasticsearch HTTP 访问的唯一入口 `es_request` |
+| `infrastructure/llm_client.py` | LLM query-parser 的 HTTP 边界 |
+| `infrastructure/embedding_service.py` | 封装 Qwen / 豆包 API / 本地 Yuan embedding，提供 `encode_single` / `encode_batch` |
+| `infrastructure/rerank_service.py` | 封装 Qwen3 rerank API，提供 `score_pairs` |
+| `services/normalization.py` | 学历/院校/技能规范化与去重工具 |
+| `services/filters.py` | 结构化约束 → ES filter 子句 |
+| `services/query_builder.py` | 查询文本/意图 → 证据检索的 bool/dis_max/knn DSL（含 AND/OR 召回、coverage 子句） |
+| `services/query_planning.py` | LLM query planner + 正则快速通道 + TTL 缓存 → `QueryPlan` |
+| `services/facets.py` | facet 聚合与筛选词表（带缓存） |
+| `services/formatting.py` | ES hit / 证据 debug → 前端候选人卡片 |
+| `services/reranking.py` | Cross-encoder 精排与低相关度标记 |
+| `services/retrieval.py` | 并行混合检索 + 手写 RRF 融合（切片聚合到候选人、coverage 跨切片并集） |
+| `services/search.py` | 顶层检索编排，被 api 直接调用 |
+| `api.py` | FastAPI app 与路由（`/api/search` 等） |
+
+**`indexing/`（离线索引构建）**
+
+| 模块 | 核心职责 |
+|------|----------|
+| `resume_parser.py` | 规则化解析 HTML 格式 `.doc` 简历，提取结构化字段，不调用 LLM |
+| `mappings.py` | 候选人/证据双索引的 ES mapping、IK 分词、向量字段与导入常量 |
+| `enrichment.py` | 文档富化：派生字段、清洗、工作年限估算、就读院校汇总 |
+| `evidence.py` | 证据切片构建与向量化 |
+| `es_admin.py` | 版本化索引创建、别名切换、批量写入、增量删除 |
+| `pipeline.py` | 导入编排 `import_resumes`（加载 → 富化 → 切片 → 写入 → 切别名） |
+| `cli.py` | 命令行入口 |
+
+**其余脚本（保持根目录，独立工具）**
+
+| 模块文件 | 核心职责 |
+|----------|----------|
+| `web/index.html` / `web/app.js` / `web/styles.css` | 前端页面、交互逻辑、样式 |
+| `evaluate_search.py` | 检索质量评估：基于 eval_queries.jsonl 计算 P@K / R@K / MRR / 分级 NDCG / success@1 |
 | `generate_mock_resumes.py` | 确定性生成贴合真实字段结构的模拟简历（mock-realistic-v1，含 hard negative） |
 | `build_eval_queries.py` | 基于生成数据的 ground-truth 确定性派生 eval_queries.jsonl 的 qrels |
-| `tests/test_search_logic.py` | 单元测试，覆盖查询解析、RRF 融合、过滤器构建等核心逻辑     |
+| `tests/` | 单元测试，覆盖查询解析、RRF 融合、过滤器构建、AND/OR 召回、coverage 并集等 |
 
 ---
 
@@ -184,9 +219,9 @@ huggingface-hub>=0.20
 
 数据处理分为三个阶段：**简历解析** → **证据切片构建与向量化** → **写入 ES 索引**。
 
-### 4.1 离线简历解析 (`resume_parser.py`，非 LLM)
+### 4.1 离线简历解析 (`indexing/resume_parser.py`，非 LLM)
 
-这里的"简历解析"是离线数据处理阶段的 HTML 结构化抽取，不是 `app.py` 中的 LLM Query Planner。当前运行链路中，简历解析不调用任何 LLM；只有用户输入搜索 query 时，后端才会调用 Query Planner（Qwen3.5 Flash）做意图分类和约束抽取。
+这里的"简历解析"是离线数据处理阶段的 HTML 结构化抽取，不是 `query_planning` 里的 LLM Query Planner。当前运行链路中，简历解析不调用任何 LLM；只有用户输入搜索 query 时，后端才会调用 Query Planner（Qwen3.5 Flash）做意图分类和约束抽取。
 
 #### 输入格式
 
@@ -274,13 +309,13 @@ huggingface-hub>=0.20
 
 ```bash
 # 解析单个文件
-python resume_parser.py path/to/resume.doc --pretty
+python -m indexing.resume_parser path/to/resume.doc --pretty
 
 # 解析目录下所有 .doc 文件，输出为 JSONL
-python resume_parser.py data/ --jsonl -o parsed_resumes.jsonl
+python -m indexing.resume_parser data/ --jsonl -o parsed_resumes.jsonl
 ```
 
-### 4.2 证据切片构建与向量化 (`import_to_es.py`)
+### 4.2 证据切片构建与向量化 (`indexing/` 包)
 
 这是数据管道的核心环节，完成 **解析结果 → 证据切片 → 向量化 → 双索引写入** 的全流程。
 
@@ -338,19 +373,19 @@ python resume_parser.py data/ --jsonl -o parsed_resumes.jsonl
 
 ```bash
 # 从 JSONL 文件导入（最常用）
-python import_to_es.py data/ai_generated.jsonl
+python -m indexing.cli data/ai_generated.jsonl
 
 # 从目录解析并导入
-python import_to_es.py data/
+python -m indexing.cli data/
 
 # 指定 ES 地址
-python import_to_es.py data/ --es-url http://localhost:9200
+python -m indexing.cli data/ --es-url http://localhost:9200
 
 # 增量更新（不重建索引）
-python import_to_es.py new_resumes.jsonl --no-recreate
+python -m indexing.cli new_resumes.jsonl --no-recreate
 
 # 增量更新并删除不在本批次中的旧文档
-python import_to_es.py current_resumes.jsonl --no-recreate --delete-missing
+python -m indexing.cli current_resumes.jsonl --no-recreate --delete-missing
 ```
 
 ### 4.3 Embedding 服务 (`embedding_service.py`)
@@ -412,7 +447,7 @@ DOUBAO_VECTOR_DIMS = 2048
 
 Qwen、豆包 API key 当前都硬编码在 `embedding_service.py` 顶部，符合开发阶段快速实验的使用方式。`QWEN_VECTOR_DIMS` / `DOUBAO_VECTOR_DIMS` / `LOCAL_VECTOR_DIMS` 必须与接口或模型实际返回的向量维度一致；如果接口返回维度变化，导入脚本会直接报错，避免把错误维度写入 ES。
 
-> 切换 embedding provider 或向量维度后，需要重新运行 `import_to_es.py` 重建索引。旧索引里的向量维度和模型元数据不会自动迁移，不能直接混用。
+> 切换 embedding provider 或向量维度后，需要重新运行 `python -m indexing.cli` 重建索引。旧索引里的向量维度和模型元数据不会自动迁移，不能直接混用。
 
 #### 关键 API
 
@@ -601,6 +636,23 @@ dis_max(
 
 > 实体带修饰词的场景（如"北京邮电大学硕士"）由 LLM Query Planner 在解析阶段把"硕士"抽成 `constraints`、`lexical_query` 只留实体核心来解决，不依赖这条 BM25 路做模糊兜底。
 
+##### 多关键词 keyword 查询的 AND/OR 混合召回
+
+keyword 意图下的多关键词查询（用户用空格/顿号分隔，如"腾讯 阿里巴巴"）走 **AND/OR 混合**：同时命中所有词的候选人排最前，只命中其中一个的也要召回，而不是硬 AND。
+
+这背后有一个"切片级索引"的关键约束。证据索引是**切片级**的（一段实习经历 = 一个 doc），候选人的"腾讯经历"和"阿里经历"分属两个不同切片。`_evidence_lexical_query` 里的评分主查询用 `operator:"and"`，要求所有关键词出现在**同一切片**——跨切片的候选人（甚至同时有两段经历的人）都会被漏掉。为此 `query_builder` 在 keyword 意图、且 query 含 ≥2 个 coverage token 时，追加一条 `_keyword_or_recall_query`：
+
+```
+bool(
+    should=[ phrase("腾讯"), phrase("阿里巴巴") ],
+    minimum_should_match=1   // 命中任一 token 即召回
+)
+```
+
+用 `minimum_should_match=1` 而非 `partial_terms` 的 70%（2 词时 70% 会退化成 AND，违背"只命中一个也召回"）。单实体查询（无空格 → 单 token，如"哥伦比亚大学"）不进此路，避免 IK 泛词爆库（见上文 match_phrase 说明）。
+
+命中词数的多寡由下游的 **term coverage 乘数**（见 5.3 Step 4）体现在排序上：同时命中"腾讯"和"阿里巴巴"的候选人 coverage=2、乘数更高，稳压只命中一个词的候选人。这样召回率与"全命中优先"两个诉求同时满足，且排序框架无需为此改动。
+
 ### 5.2 两路并行检索
 
 当 query 不为空时，系统通过 `ThreadPoolExecutor` **并行**发出最多两个检索请求（如果启用了向量检索）：
@@ -688,6 +740,8 @@ dis_max (tie_breaker=0.0)
 除了主要的 dis_max 评分查询外，系统还会添加 **term coverage** 辅助查询。它的作用不是改变排序，而是为后续的 RRF 融合提供"这个候选人覆盖了多少个查询词"的信息。
 
 对于多词 query（如"Python 自然语言处理"），会为每个词生成一个 `constant_score` 查询，检查该词是否在候选人的任意字段中出现。覆盖率越高的候选人，在 RRF 阶段会获得额外加分。
+
+> **coverage 跨切片取并集**：由于证据是切片级的，同一候选人的多个关键词可能分布在不同切片（如"腾讯"在一段实习、"阿里巴巴"在另一段）。融合时 coverage 按候选人**跨全部切片取命中 token 的并集**，而非按单切片取 max——否则两段经历各命中一词的全命中候选人会被低估成 coverage=1，与只命中一词的人无法区分。取并集后全命中者 coverage=2，据此排到部分命中者之前。
 
 ### 5.3 RRF 融合排序
 
@@ -1130,10 +1184,10 @@ EMBEDDING_PROVIDER = LOCAL_PROVIDER
 
 ```bash
 # 如果有 .doc 简历文件，放入 data/ 目录
-python import_to_es.py data/
+python -m indexing.cli data/
 
 # 如果使用 JSONL 格式的模拟数据
-python import_to_es.py data/ai_generated.jsonl
+python -m indexing.cli data/ai_generated.jsonl
 ```
 
 > **⚠️ 只有切换到 `LOCAL_PROVIDER` 时才会下载本地 Yuan embedding 模型**（约 2-4GB），需要网络连接。如果国内访问 HuggingFace 受限，可设置 `HF_ENDPOINT=https://hf-mirror.com`。Qwen 和豆包 API 模式都不会下载本地模型。
@@ -1141,7 +1195,7 @@ python import_to_es.py data/ai_generated.jsonl
 ### 步骤 4：启动后端
 
 ```bash
-uvicorn app:app --host 0.0.0.0 --port 8000 --reload
+uvicorn resume_search.api:app --host 0.0.0.0 --port 8000 --reload
 ```
 
 ### 步骤 5：访问前端
@@ -1166,9 +1220,14 @@ python evaluate_search.py --details --output reports/current.json
 
 | 变量            | 说明                                        | 默认值                    |
 |-----------------|---------------------------------------------|---------------------------|
+| `ES_URL`        | Elasticsearch 地址                          | `http://localhost:9200`   |
+| `QUERY_PARSER_API_URL` | LLM Query Planner 接口地址（可用环境变量覆盖） | 阿里云百炼 compatible-mode |
+| `QUERY_PARSER_API_KEY` | LLM Query Planner API key             | 空（回退到内置降级链路）   |
 | `HF_ENDPOINT`   | HuggingFace Hub 镜像地址                    | `https://huggingface.co`  |
 
-### `app.py` 中的关键常量
+### 检索链路关键常量（`resume_search/config.py`）
+
+> 重构后所有检索/排序常量集中在 `resume_search/config.py`。
 
 | 常量                         | 值     | 说明                                         |
 |------------------------------|--------|----------------------------------------------|
@@ -1187,7 +1246,7 @@ python evaluate_search.py --details --output reports/current.json
 | `DENSE_RANK_WINDOW_SIZE`     | 300    | Dense 检索的最大结果窗口                     |
 | `ENABLE_RERANK`              | `True` | 是否对 `intent == semantic` 的 query 启用 Qwen3 reranker |
 | `RERANK_TOP_N`               | 20     | RRF 后进入 reranker 的候选人数               |
-| `RERANK_RELEVANCE_FLOOR`     | 0.5    | 重排窗口最高分低于此地板则判定"库中无相关候选"，弃权返回空（见 5.5） |
+| `RERANK_RELEVANCE_FLOOR`     | 0.35   | 重排窗口最高分低于此地板则标记低相关度（不弃权、不清空，见 5.5） |
 | `MIN_YEARS_TOLERANCE_RATIO`  | 0.10   | `min_years` 软容差比例（见 5.1 Step 1）      |
 | `MIN_YEARS_TOLERANCE_FLOOR`  | 0.5    | `min_years` 软容差的最小绝对值（年）          |
 | `QUERY_PARSER_PROVIDER`      | `qwen` | 自由文本 query 的 LLM 解析 provider      |
@@ -1204,14 +1263,14 @@ python evaluate_search.py --details --output reports/current.json
 | `FACETS_CACHE_TTL_SECONDS`   | 60     | Facet 聚合结果缓存时间                       |
 | `FILTER_VOCAB_CACHE_TTL_SECONDS` | 300 | 过滤词表缓存时间                            |
 
-### `import_to_es.py` 中的关键常量
+### 索引构建关键常量（`indexing/mappings.py`）
 
 | 常量                           | 值     | 说明                                       |
 |--------------------------------|--------|--------------------------------------------|
 | `BULK_BATCH_SIZE`              | 100    | Bulk API 每批文档数                        |
 | `VECTOR_EVIDENCE_SECTION_TYPES`| `{project, internship}` | 需要向量化的证据类型；技能标签和教育经历只走词面检索 |
 
-### `embedding_service.py` 中的关键常量
+### embedding 关键常量（`resume_search/infrastructure/embedding_service.py`）
 
 | 常量          | 默认值     | 说明                     |
 |---------------|------------|--------------------------|
@@ -1234,7 +1293,7 @@ python evaluate_search.py --details --output reports/current.json
 | `LOCAL_MODEL_ID` | `IEITYuan/Yuan-embedding-2.0-zh` | 本地 Yuan embedding 模型名 |
 | `LOCAL_VECTOR_DIMS` | 1792 | 本地 Yuan embedding 向量维度 |
 
-### `rerank_service.py` 中的关键常量
+### rerank 关键常量（`resume_search/infrastructure/rerank_service.py`）
 
 | 常量          | 默认值     | 说明                     |
 |---------------|------------|--------------------------|
@@ -1268,13 +1327,22 @@ python evaluate_search.py --details --output reports/current.json
 - **结构化输出**：默认 `json_object`，代码保留 `json_schema` 严格 schema 链路与自动回退，换支持 schema 的模型即可启用。
 - **多层容错降级**：LLM 失败 → 保守词面检索；JSON 损坏 → fallback；空 query → 不调 LLM。解析失败不影响搜索可用性。
 
-### 10.3 当前指标基线
+### 10.3 代码架构（Clean Architecture）
+
+后端已从单文件（原 app.py 2420 行、import_to_es.py 1375 行）重构为分层包，职责清晰、单向依赖：
+
+- **`resume_search/`（检索链路）**：`config`（配置）· `domain`（模型/词表）· `infrastructure`（ES/LLM/embedding/rerank 的 IO 边界）· `services`（规划/过滤/查询构建/检索/融合/精排/格式化/facet/编排，自底向上）· `api`（FastAPI 路由）。检索服务入口 `resume_search.api:app`。
+- **`indexing/`（索引构建链路）**：`resume_parser` · `mappings` · `enrichment` · `evidence` · `es_admin` · `pipeline` · `cli`。命令行入口 `python -m indexing.cli` / `python -m indexing.resume_parser`。
+- 无兼容 shim：所有调用方直接依赖新模块路径，不保留旧的扁平模块名。
+- 收益：ES/LLM 访问各自单一边界（换实现、加缓存、整体打桩只动一处）；多数模块 <400 行；新人按 `api → services → infrastructure` 单向依赖即可读懂全链路。详见 `PROJECT_REVIEW.md` 第十四节。
+
+### 10.4 当前指标基线
 
 最新 `reports/current.json`（200 份 `mock-realistic-v1` 模拟简历 + 77 条评测 query）：overall NDCG@10≈0.97、MRR@10≈0.99、R@100=1.0、empty_acc=1.0、forbidden@10=0、planner 全字段=1.0。R@5/R@10 偏低是相关集变大的分母效应（实体类相关集 60+），属健康口径。详见第 7 节。
 
-### 10.4 后续可继续的方向
+### 10.5 后续可继续的方向
 
 - **有结果查询内部的排序噪声**：`forbidden@10` 主要来自 `jd_match`、`semantic_capability`、`cross_language` 这些库中确有相关人、但前 10 混入了 forbidden 的场景。这是精排质量问题（不是"该不该返回"），是下一步主要抓手。
-- **API key 与配置外置**：当前 key 硬编码在源码中（开发阶段取舍），生产应移至环境变量或密钥管理。
+- **API key 与配置外置**：ES 地址、Query Planner 接口与 key 已支持环境变量覆盖（见 `.env.example` 与 §9 环境变量表）；embedding / rerank 的 key 仍有部分硬编码默认值，生产应统一移至密钥管理。
 - **旧索引清理策略**：versioned index 多次重建会留下旧索引，需保留最近 N 个可回滚、定期清理（详见 `PROJECT_REVIEW.md` 第九节）。
 - **生产环境磁盘阈值**：本地曾临时关闭 ES 磁盘 watermark，生产须通过扩容/清理解决，不能关闭保护。

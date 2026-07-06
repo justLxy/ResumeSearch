@@ -1,4 +1,4 @@
-import rerank_service
+from resume_search.infrastructure import rerank_service
 
 
 def test_build_payload_contains_query_documents_and_top_n() -> None:
