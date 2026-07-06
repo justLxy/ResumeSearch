@@ -24,10 +24,5 @@ env/
 # Local Elasticsearch runtime
 elasticsearch-*/
 
-# Generated mock data and local parse outputs
-generate_mock_resumes.py
-mock_resumes*.jsonl
-parsed_resumes*.jsonl
-
 
 奇安信集团-*
