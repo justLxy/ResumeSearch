@@ -375,14 +375,14 @@ def _build_structured_filter_cases(fam, by_id) -> list[dict]:
     """
     # (id, query 文本中的技能片段, 族, 学历, 城市) —— 组合经数据验证 ≥2 人
     table = [
-        ("sf_ml_nanjing_master", "RAG 向量检索 大模型", "ml_llm", "硕士", "南京"),
-        ("sf_go_suzhou_bachelor", "Golang Kubernetes gRPC", "backend_go", "本科", "苏州"),
+        ("sf_ml_wuhan_master", "RAG 向量检索 大模型", "ml_llm", "硕士", "武汉"),
+        ("sf_go_chengdu_master", "Golang Kubernetes gRPC", "backend_go", "硕士", "成都"),
         ("sf_cpp_guangzhou_phd", "C++ RDMA 低延迟", "backend_cpp", "博士", "广州"),
         ("sf_blue_beijing_master", "蓝队 应急响应 威胁狩猎", "blue_team", "硕士", "北京"),
-        ("sf_java_shanghai_phd", "Java 架构 分布式事务", "backend_java", "博士", "上海"),
-        ("sf_redteam_suzhou_master", "内网渗透 横向移动", "red_team", "硕士", "苏州"),
-        ("sf_data_chengdu_master", "数据分析 A/B 实验 归因", "data_analysis", "硕士", "成都"),
-        ("sf_frontend_shanghai_master", "前端 WebGL 可视化", "frontend", "硕士", "上海"),
+        ("sf_java_chengdu_master", "Java 架构 分布式事务", "backend_java", "硕士", "成都"),
+        ("sf_redteam_shanghai_master", "内网渗透 横向移动", "red_team", "硕士", "上海"),
+        ("sf_data_shenzhen_master", "数据分析 A/B 实验 归因", "data_analysis", "硕士", "深圳"),
+        ("sf_frontend_suzhou_master", "前端 WebGL 可视化", "frontend", "硕士", "苏州"),
     ]
     out = []
     for cid, skill_text, family, degree, city in table:
@@ -393,6 +393,7 @@ def _build_structured_filter_cases(fam, by_id) -> list[dict]:
             if by_id[rid]["candidate"]["highest_degree"] == degree
             and city in by_id[rid]["application"]["expected_work_cities"]
         }
+        assert len(relevant) >= 2, f"{cid} structured_filter 相关集不足: {len(relevant)}"
         out.append({
             "id": cid, "type": "structured_filter", "query": query,
             "expected_plan": {"intent": "semantic", "lexical_query": skill_text, "semantic_query": skill_text,
