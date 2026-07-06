@@ -1178,6 +1178,14 @@ def _evidence_lexical_query(
     # 不需要也不应走 partial_terms，故仅在非 keyword 意图下启用。
     if query_intent != INTENT_KEYWORD:
         queries.append(_partial_terms_query(query_text))
+    elif len(_coverage_tokens(query_text)) >= 2:
+        # 多关键词 keyword 查询（用户用空格/顿号分隔，如 "腾讯 阿里巴巴"）：
+        # 命中任一 token 即召回。否则上面那条 operator:"and" 要求所有词出现在
+        # 同一证据切片里，而"腾讯经历"和"阿里经历"分属不同切片，永远 0 召回。
+        # 单实体查询（"哥伦比亚大学"，无空格 → 单 token）不进此路，避免 IK 切出
+        # 的泛词"大学"把候选池扩到全库。命中词数多寡由 coverage should + 候选人
+        # 维度 multiplier 主导排序，全命中者自然靠前。
+        queries.append(_keyword_or_recall_query(query_text))
     scoring_query = {
         "dis_max": {
             "tie_breaker": 0.0,
@@ -1233,6 +1241,41 @@ def _partial_terms_query(query_text: str) -> dict[str, Any]:
             "type": "best_fields",
             "operator": "or",
             "minimum_should_match": PARTIAL_TERMS_MINIMUM_SHOULD_MATCH,
+            "boost": 1,
+        }
+    }
+
+
+def _keyword_or_recall_query(query_text: str) -> dict[str, Any]:
+    """多关键词 keyword 查询的 OR 召回：命中任一 token 即召回。
+
+    与 _partial_terms_query 的区别：
+    - 这里 minimum_should_match=1（命中一个就召回），不是 70%——"腾讯 阿里巴巴"
+      只匹配其中一个的候选人也要被召回（诉求 2），70% 在 2 词时会退化成 AND。
+    - 按 token 逐个组 should 子句，而非把整串交给 multi_match 的 operator:"or"，
+      这样一个 token 内部若被 IK 切成多词（如 "阿里巴巴"→[阿里,巴巴]）仍按短语
+      连续匹配，不会因单个泛词碎片命中全库。
+    - boost 低（1），只负责"开召回门"；命中词数对排序的影响由候选人维度的
+      coverage multiplier 承担，全命中者靠前。
+    """
+    return {
+        "bool": {
+            "_name": "evidence_term:keyword_or_recall:W1",
+            "should": [
+                {
+                    "multi_match": {
+                        "query": token,
+                        "fields": [
+                            "title^5",
+                            "text^4",
+                            "skills_text^5",
+                        ],
+                        "type": "phrase",
+                    }
+                }
+                for token in _coverage_tokens(query_text)
+            ],
+            "minimum_should_match": 1,
             "boost": 1,
         }
     }
@@ -1515,7 +1558,10 @@ def _rrf_merge(
     evidence_route_ranks: dict[str, list[int]] = {}
     hit_map: dict[str, dict[str, Any]] = {}
     best_rank: dict[str, int] = {}
-    term_coverage: dict[str, int] = {}
+    # 跨切片并集：候选人命中的不同 coverage token 名集合。用 max(单切片命中数)
+    # 会把"腾讯经历"和"阿里经历"分属两切片、各命中 1 词的全命中候选人低估成
+    # coverage=1，与只有一段经历者无法区分。取并集后全命中者 coverage=2。
+    term_coverage_names: dict[str, set[str]] = {}
     lexical_tier: dict[str, int] = {}
     retrieval_debug: dict[str, dict[str, Any]] = {}
     coverage_enabled = len(_coverage_tokens(query_text)) >= 2
@@ -1536,9 +1582,8 @@ def _rrf_merge(
                 evidence_route_ranks.setdefault(doc_id, []).append(rank)
                 evidence_best_route_rank[doc_id] = min(evidence_best_route_rank.get(doc_id, rank), rank)
             if coverage_enabled and retriever_name == EVIDENCE_RETRIEVER:
-                term_coverage[doc_id] = max(
-                    term_coverage.get(doc_id, 0),
-                    _matched_term_coverage(hit),
+                term_coverage_names.setdefault(doc_id, set()).update(
+                    _matched_coverage_names(hit)
                 )
             if is_evidence:
                 hit_map.setdefault(doc_id, hit)
@@ -1679,6 +1724,11 @@ def _rrf_merge(
         debug["dense_score"] = best_dense_match.get("score")
         debug["dense_field"] = best_dense_match.get("field")
         debug["dense_retriever"] = best_dense_match.get("retriever")
+
+    # 命中的不同 token 名集合大小 = 该候选人跨全部切片命中的关键词数。
+    term_coverage = {
+        doc_id: len(names) for doc_id, names in term_coverage_names.items()
+    }
 
     final_scores: dict[str, float] = {}
     score_multipliers: dict[str, float] = {}
@@ -1998,15 +2048,23 @@ def _evidence_snippet(hit: dict[str, Any], retriever_name: str | None = None) ->
     # 返回空串以避免无关的切片文本污染 UI。
     return ""
 
-def _matched_term_coverage(hit: dict[str, Any]) -> int:
+def _matched_coverage_names(hit: dict[str, Any]) -> set[str]:
+    """本切片命中的 coverage query 名集合（形如 "query_term:0"）。
+
+    每个 coverage 子句对应查询里的一个 token（见 _evidence_term_coverage_queries）。
+    在候选人维度对多个切片的名集合取并集，即得该候选人跨全部经历命中的关键词数——
+    这是"腾讯 阿里巴巴"两段经历分属两切片时，仍能算出 coverage=2 的关键。
+    """
     matched_queries = hit.get("matched_queries") or []
-    return len(
-        {
-            query_name
-            for query_name in matched_queries
-            if isinstance(query_name, str) and query_name.startswith(COVERAGE_QUERY_PREFIX)
-        }
-    )
+    return {
+        query_name
+        for query_name in matched_queries
+        if isinstance(query_name, str) and query_name.startswith(COVERAGE_QUERY_PREFIX)
+    }
+
+
+def _matched_term_coverage(hit: dict[str, Any]) -> int:
+    return len(_matched_coverage_names(hit))
 
 
 def _merge_matched_queries(existing: list[Any], incoming: list[Any]) -> list[str]:

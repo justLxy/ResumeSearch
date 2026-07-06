@@ -934,6 +934,50 @@ class SearchLogicTests(unittest.TestCase):
         )
         self.assertIn("partial_terms", semantic_json)
 
+    def test_keyword_multi_token_enables_or_recall(self) -> None:
+        # 多关键词 keyword 查询（"腾讯 阿里巴巴"）必须能召回只命中其中一个词的
+        # 候选人——否则 operator:"and" 要求同一切片含全部词，跨经历的候选人 0 召回。
+        clause = _find_clause_with_name_prefix(
+            _evidence_lexical_query("腾讯 阿里巴巴", query_intent=INTENT_KEYWORD),
+            "evidence_term:keyword_or_recall",
+        )
+        self.assertIsNotNone(clause, "多关键词 keyword 查询应有 OR 召回子句")
+        bool_params = clause["bool"]
+        # minimum_should_match=1：命中任一 token 即召回（不是 70%，2 词时会退化成 AND）。
+        self.assertEqual(bool_params["minimum_should_match"], 1)
+        self.assertEqual(len(bool_params["should"]), 2)
+
+    def test_keyword_single_entity_has_no_or_recall(self) -> None:
+        # 单实体查询（无空格 → 单 token，如 "哥伦比亚大学"）不启用 OR 召回，
+        # 避免 IK 切出的泛词"大学"把候选池扩到全库。
+        single_json = json.dumps(
+            _evidence_lexical_query("哥伦比亚大学", query_intent=INTENT_KEYWORD),
+            ensure_ascii=False,
+        )
+        self.assertNotIn("keyword_or_recall", single_json)
+
+    def test_coverage_unions_across_evidence_slices(self) -> None:
+        # 同一候选人的两段经历分属两个证据切片，各命中一个关键词。跨切片取并集后
+        # coverage 应为 2（而非按单切片取 max 得到的 1），据此排到只命中一段的候选人之前。
+        lexical_response = _response(
+            EVIDENCE_RETRIEVER,
+            [
+                # 同一 resume_id 的两个切片，各命中不同的 coverage token
+                _evidence_slice_hit("both:s1", "both", matched_queries=["query_term:0"]),
+                _evidence_slice_hit("both:s2", "both", matched_queries=["query_term:1"]),
+                # 对照：只命中一个词的候选人
+                _evidence_slice_hit("one:s1", "one", matched_queries=["query_term:0"]),
+            ],
+        )
+
+        results = _rrf_merge([lexical_response], 10, query_text="腾讯 阿里巴巴")
+
+        by_id = {item["id"]: item for item in results}
+        self.assertEqual(by_id["both"]["retrieval_debug"]["term_coverage"], 2)
+        self.assertEqual(by_id["one"]["retrieval_debug"]["term_coverage"], 1)
+        # 全命中候选人排在部分命中之前。
+        self.assertEqual([item["id"] for item in results], ["both", "one"])
+
     def test_query_plan_uses_llm_keyword_constraints_without_rerank(self) -> None:
         with patch(
             "app._call_query_parser_llm",
@@ -1449,6 +1493,26 @@ def _hit(
     }
     if matched_queries is not None:
         hit["matched_queries"] = matched_queries
+    return hit
+
+
+def _evidence_slice_hit(
+    slice_id: str,
+    resume_id: str,
+    score: float = 1.0,
+    matched_queries: list[str] | None = None,
+) -> dict:
+    """证据切片命中：_id 是切片 id，_source.resume_id / section_type 决定按候选人聚合。
+
+    _hit_resume_id 对证据检索按 _source.resume_id 归并，因此同一候选人的多个切片
+    （不同 _id、相同 resume_id）会聚合成一个候选人做一次 RRF。
+    """
+    # _id 用 resume_id：证据检索按 _source.resume_id 聚合到候选人，最终输出的
+    # hit["_id"] 也是候选人 id（生产里由 _fetch_resume_hits_for_evidence 拉父简历
+    # 得到）。单测直接把 _id 设为 resume_id，等价于聚合后的父简历。刻意不设
+    # evidence_id/section_type，避免触发对 ES 的父简历拉取。
+    hit = _hit(resume_id, resume_id, score=score, matched_queries=matched_queries)
+    hit["_source"]["resume_id"] = resume_id
     return hit
 
 
