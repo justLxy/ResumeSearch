@@ -11,7 +11,8 @@
 - grade 2（明显相关）：技能/语义高度重叠的相邻族，由 _FAMILY_ADJACENCY 按实测
   技能重叠 + 岗位常识派生（topical 类 query 自动展开；实体/专业/精确类不适用）。
 - forbidden：与 query 主题"沾边但不对"的 hard-negative 族（不该进前排）。
-- 库外负例（negative_semantic）：库里压根没有的主题 → expect_empty=true。
+- 库外负例（negative_semantic）：库里压根没有的主题 → expect_reject=true
+  （当前 reranking 不清空结果，而是给候选打 low_relevance 标记；拒识 = 首位命中低相关度）。
 
 用法：
     python build_eval_queries.py            # 写 eval_queries.jsonl
@@ -21,11 +22,11 @@ from __future__ import annotations
 
 import argparse
 import json
-from collections import defaultdict
+from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
 
-import generate_mock_resumes as gen
+import resume_gen as gen
 
 PRIMARY_METRICS = [
     "P@5", "P@10", "R@10", "R@50", "R@100", "MRR@10", "NDCG@5", "NDCG@10", "forbidden@10",
@@ -276,11 +277,12 @@ def _build_jd_cases(fam, _by_id) -> list[dict]:
 def _build_negative_cases(_fam, _by_id) -> list[dict]:
     cases = []
     for spec in NEGATIVE_SPECS:
-        # 负例期望返回空，lexical/semantic 的具体压缩结果无意义，只断言意图与路由开关。
+        # 库外负例：库里无此主题，期望被"拒识"（首位候选打 low_relevance 标记）。
+        # lexical/semantic 的具体压缩结果无意义，只断言意图与路由开关。
         cases.append({
             "id": spec["id"], "type": "negative_semantic", "query": spec["query"],
             "expected_plan": {"intent": "semantic", "enable_dense": True, "enable_rerank": True},
-            "expect_empty": True, "relevance": {}, "forbidden_ids": [],
+            "expect_reject": True, "relevance": {}, "forbidden_ids": [],
             "evaluation": _evaluation_block(),
         })
     return cases
@@ -335,10 +337,11 @@ def _build_entity_exact_cases(fam, by_id) -> list[dict]:
     实体查询的相关集是"库里所有匹配该实体的人"，用 relevant_es_query 在当前索引
     上实时圈定，避免硬编码遗漏。期望 intent=keyword、dense=false。
     注意：主索引只有 candidate.school（最高学历院校），用 .keyword 精确匹配。
+    学校名从生成数据里按出现频次动态选取（取高频且≥2 人的），随生成分布自适应，
+    不再硬编码——避免院校池调整后相关集落空。
     """
-    # 选库中确实高频出现的学校，保证相关集非空
-    schools = ["北京邮电大学", "同济大学", "哈尔滨工业大学", "武汉大学",
-               "南京大学", "东南大学", "山东大学", "上海交通大学"]
+    freq = Counter(by_id[rid]["candidate"]["school"] for rid in by_id)
+    schools = [name for name, n in freq.most_common(8) if name and n >= 2]
     cases = []
     for school in schools:
         cases.append({
@@ -352,9 +355,12 @@ def _build_entity_exact_cases(fam, by_id) -> list[dict]:
 
 
 def _build_major_query_cases(fam, by_id) -> list[dict]:
-    """专业名查询：相关集为库里该专业的人（动态圈定），期望 keyword。"""
-    majors = ["计算机科学与技术", "软件工程", "信息安全", "网络空间安全",
-              "通信工程", "计算机技术", "网络工程", "信息管理与信息系统"]
+    """专业名查询：相关集为库里该专业的人（动态圈定），期望 keyword。
+
+    专业名同样从生成数据里按频次动态选取（高频且≥2 人），随专业池自适应。
+    """
+    freq = Counter(by_id[rid]["candidate"]["major"] for rid in by_id)
+    majors = [name for name, n in freq.most_common(8) if name and n >= 2]
     cases = []
     for major in majors:
         cases.append({
@@ -367,38 +373,54 @@ def _build_major_query_cases(fam, by_id) -> list[dict]:
     return cases
 
 
+def _best_degree_city(fam_ids: list[str], by_id: dict[str, dict]) -> tuple[str, str, list[str]] | None:
+    """在某族成员里找人数最多的 (学历, 期望城市) 组合，返回 (学历, 城市, [ids])。
+
+    用于结构化过滤 case：组合从真实生成数据里选人数最多者，保证相关集非空（≥2），
+    不再硬编码 (族, 学历, 城市) 三元组——随学历/城市分布自适应。
+    """
+    combos: dict[tuple[str, str], list[str]] = defaultdict(list)
+    for rid in fam_ids:
+        degree = by_id[rid]["candidate"]["highest_degree"]
+        for city in by_id[rid]["application"]["expected_work_cities"]:
+            combos[(degree, city)].append(rid)
+    if not combos:
+        return None
+    (degree, city), ids = max(combos.items(), key=lambda kv: len(kv[1]))
+    return degree, city, ids
+
+
 def _build_structured_filter_cases(fam, by_id) -> list[dict]:
     """结构化约束 + 检索文本：技能词 + 学历/城市硬过滤。
 
-    相关集直接由 ground-truth 派生 = 同族 ∩ 该学历 ∩ 期望城市含该市。组合从真实
-    数据里挑选保证非空（≥2 人）。期望 intent=semantic。
+    相关集直接由 ground-truth 派生 = 同族 ∩ 该学历 ∩ 期望城市含该市。学历/城市组合
+    从真实数据里动态挑人数最多者，保证 ≥2 人。期望 intent=semantic。
     """
-    # (id, query 文本中的技能片段, 族, 学历, 城市) —— 组合经数据验证 ≥2 人
-    table = [
-        ("sf_ml_wuhan_master", "RAG 向量检索 大模型", "ml_llm", "硕士", "武汉"),
-        ("sf_go_chengdu_master", "Golang Kubernetes gRPC", "backend_go", "硕士", "成都"),
-        ("sf_cpp_guangzhou_phd", "C++ RDMA 低延迟", "backend_cpp", "博士", "广州"),
-        ("sf_blue_beijing_master", "蓝队 应急响应 威胁狩猎", "blue_team", "硕士", "北京"),
-        ("sf_java_chengdu_master", "Java 架构 分布式事务", "backend_java", "硕士", "成都"),
-        ("sf_redteam_shanghai_master", "内网渗透 横向移动", "red_team", "硕士", "上海"),
-        ("sf_data_shenzhen_master", "数据分析 A/B 实验 归因", "data_analysis", "硕士", "深圳"),
-        ("sf_frontend_suzhou_master", "前端 WebGL 可视化", "frontend", "硕士", "苏州"),
+    # (id 前缀, query 技能片段, 族) —— 技能片段取自各族真实技能栈
+    topics = [
+        ("sf_ml", "RAG 向量检索 大模型", "ml_llm"),
+        ("sf_go", "Go Kubernetes gRPC", "backend_go"),
+        ("sf_cpp", "C++ RDMA 无锁编程", "backend_cpp"),
+        ("sf_blue", "SIEM 应急响应 威胁狩猎", "blue_team"),
+        ("sf_java", "Java Spring 分布式事务", "backend_java"),
+        ("sf_redteam", "内网渗透 横向移动", "red_team"),
+        ("sf_data", "SQL A/B测试 归因", "data_analysis"),
+        ("sf_frontend", "WebGL 可视化 TypeScript", "frontend"),
     ]
     out = []
-    for cid, skill_text, family, degree, city in table:
+    for prefix, skill_text, family in topics:
+        best = _best_degree_city(fam.get(family, []), by_id)
+        if not best:
+            continue
+        degree, city, ids = best
+        if len(ids) < 2:
+            continue
         query = f"{city} {degree} {skill_text}"
-        relevant = {
-            rid: 3
-            for rid in fam.get(family, [])
-            if by_id[rid]["candidate"]["highest_degree"] == degree
-            and city in by_id[rid]["application"]["expected_work_cities"]
-        }
-        assert len(relevant) >= 2, f"{cid} structured_filter 相关集不足: {len(relevant)}"
         out.append({
-            "id": cid, "type": "structured_filter", "query": query,
+            "id": f"{prefix}_{city}_{degree}", "type": "structured_filter", "query": query,
             "expected_plan": {"intent": "semantic", "lexical_query": skill_text, "semantic_query": skill_text,
                               "enable_dense": True, "enable_rerank": True},
-            "relevance": relevant, "forbidden_ids": [], "evaluation": _evaluation_block(),
+            "relevance": {rid: 3 for rid in ids}, "forbidden_ids": [], "evaluation": _evaluation_block(),
         })
     return out
 
@@ -456,7 +478,6 @@ def main() -> None:
         all_cases.extend(builder(fam, by_id))
 
     # 统计与一致性自检
-    from collections import Counter
     type_counts = Counter(c["type"] for c in all_cases)
     ids = [c["id"] for c in all_cases]
     assert len(ids) == len(set(ids)), "case id 重复"
@@ -465,14 +486,14 @@ def main() -> None:
         forb = set(c.get("forbidden_ids") or [])
         overlap = rel & forb
         assert not overlap, f"{c['id']} relevance 与 forbidden 重叠: {overlap}"
-        if c.get("expect_empty"):
-            assert not rel, f"{c['id']} expect_empty 但有相关 id"
+        if c.get("expect_reject"):
+            assert not rel, f"{c['id']} expect_reject 但有相关 id"
 
     print(f"生成 {len(all_cases)} 条 query")
     for t, n in sorted(type_counts.items()):
         print(f"  {t:22} {n}")
     # 静态 relevance 的 query 平均相关数
-    static = [c for c in all_cases if c.get("relevance") and not c.get("expect_empty")]
+    static = [c for c in all_cases if c.get("relevance") and not c.get("expect_reject")]
     if static:
         avg = sum(len(c["relevance"]) for c in static) / len(static)
         print(f"静态 relevance query 平均相关数: {avg:.1f}")

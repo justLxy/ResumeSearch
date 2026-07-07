@@ -25,7 +25,7 @@ class EvalCase:
     relevance: dict[str, float]
     relevant_ids: set[str]
     forbidden_ids: set[str]
-    expect_empty: bool
+    expect_reject: bool
     expected_plan: dict[str, Any] = field(default_factory=dict)
     api_params: dict[str, Any] = field(default_factory=dict)
 
@@ -62,7 +62,7 @@ class QueryResult:
     ndcg_at_10: float
     forbidden_at_10: int
     success_at_1: float
-    empty_success: bool | None
+    reject_success: bool | None
 
 
 def main() -> None:
@@ -130,9 +130,9 @@ def load_cases(path: Path) -> EvalCaseSet:
         if relevant_ids & forbidden_ids:
             overlap = ", ".join(sorted(relevant_ids & forbidden_ids))
             raise ValueError(f"{path}:{line_no} has ids marked relevant and forbidden: {overlap}")
-        if raw.get("expect_empty") and relevant_ids:
-            raise ValueError(f"{path}:{line_no} expects empty results but has relevant ids")
-        if not raw.get("expect_empty") and not relevant_ids:
+        if raw.get("expect_reject") and relevant_ids:
+            raise ValueError(f"{path}:{line_no} expects a low-relevance rejection but has relevant ids")
+        if not raw.get("expect_reject") and not relevant_ids:
             if "relevant_es_query" in raw and not raw.get("relevant_ids"):
                 skipped.append(
                     SkippedCase(
@@ -154,7 +154,7 @@ def load_cases(path: Path) -> EvalCaseSet:
                 relevance=relevance,
                 relevant_ids=relevant_ids,
                 forbidden_ids=forbidden_ids,
-                expect_empty=bool(raw.get("expect_empty", False)),
+                expect_reject=bool(raw.get("expect_reject", False)),
                 expected_plan=_load_expected_plan(raw),
                 api_params=_load_api_params(raw),
             )
@@ -194,9 +194,17 @@ def evaluate_case(client: TestClient, case: EvalCase, limit: int) -> QueryResult
     response = client.get("/api/search", params=_search_params(case, limit))
     response.raise_for_status()
     payload = response.json()
-    returned_ids = [item["id"] for item in payload.get("results", [])]
+    result_items = payload.get("results", [])
+    returned_ids = [item["id"] for item in result_items]
     query_plan = payload.get("query_plan") if isinstance(payload.get("query_plan"), dict) else {}
     planner_eval = evaluate_query_plan(query_plan, case.expected_plan)
+
+    # 库外/离域 query 的"正确拒识"：当前 reranking 不再清空结果，而是给每个候选打
+    # low_relevance 标记（rerank 分低于地板）。结果按 rerank 分降序，故首位命中
+    # low_relevance ⟺ 全窗口都低于地板 ⟺ 库中无精确匹配。空结果同样算拒识成功。
+    reject_success = None
+    if case.expect_reject:
+        reject_success = (not result_items) or bool(result_items[0].get("low_relevance"))
 
     return QueryResult(
         case=case,
@@ -216,7 +224,7 @@ def evaluate_case(client: TestClient, case: EvalCase, limit: int) -> QueryResult
         success_at_1=(
             1.0 if (returned_ids and returned_ids[0] in case.relevant_ids) else 0.0
         ),
-        empty_success=(len(returned_ids) == 0) if case.expect_empty else None,
+        reject_success=reject_success,
     )
 
 
@@ -400,7 +408,7 @@ def build_report(
 
 def summarize(results: list[QueryResult]) -> dict[str, Any]:
     judged = [result for result in results if result.case.relevant_ids]
-    empty_cases = [result for result in results if result.empty_success is not None]
+    reject_cases = [result for result in results if result.reject_success is not None]
     # 单目标口径：判定集里每条 query 恰好 1 个相关文档时，P@K 的上限是 1/K（数学假象），
     # 这类组改报 success@1（首位是否命中唯一目标）。
     single_target = bool(judged) and all(
@@ -421,9 +429,9 @@ def summarize(results: list[QueryResult]) -> dict[str, Any]:
         "ndcg5": _mean_metric(judged, "ndcg_at_5"),
         "ndcg10": _mean_metric(judged, "ndcg_at_10"),
         "forbidden10": sum(result.forbidden_at_10 for result in results),
-        "empty_accuracy": (
-            mean(1.0 if result.empty_success else 0.0 for result in empty_cases)
-            if empty_cases
+        "reject_accuracy": (
+            mean(1.0 if result.reject_success else 0.0 for result in reject_cases)
+            if reject_cases
             else None
         ),
     }
@@ -522,7 +530,7 @@ def result_to_detail(result: QueryResult) -> dict[str, Any]:
         "ndcg10": result.ndcg_at_10,
         "forbidden10": result.forbidden_at_10,
         "success_at_1": result.success_at_1,
-        "empty_success": result.empty_success,
+        "reject_success": result.reject_success,
     }
 
 
@@ -567,7 +575,7 @@ COMPARISON_METRICS = (
     "mrr10",
     "ndcg5",
     "ndcg10",
-    "empty_accuracy",
+    "reject_accuracy",
     "forbidden10",
 )
 
@@ -666,9 +674,9 @@ def compare_planner_summary(current: dict[str, Any], previous: dict[str, Any]) -
 def print_summary_table(row: dict[str, Any]) -> None:
     print("\nSearch quality summary")
     print(
-        "queries judged  P@5    P@10   R@5    R@10   R@50   R@100  MRR@10 NDCG@5 NDCG@10 empty_acc forbidden@10"
+        "queries judged  P@5    P@10   R@5    R@10   R@50   R@100  MRR@10 NDCG@5 NDCG@10 reject_acc forbidden@10"
     )
-    empty = "-" if row["empty_accuracy"] is None else f"{row['empty_accuracy']:.3f}"
+    reject = "-" if row["reject_accuracy"] is None else f"{row['reject_accuracy']:.3f}"
     print(
         f"{row['queries']:>7} "
         f"{row['judged']:>6}  "
@@ -681,17 +689,17 @@ def print_summary_table(row: dict[str, Any]) -> None:
         f"{row['mrr10']:.3f}  "
         f"{row['ndcg5']:.3f}  "
         f"{row['ndcg10']:.3f}  "
-        f"{empty:>9}  "
+        f"{reject:>10}  "
         f"{row['forbidden10']:>12}"
     )
 
 
 def print_type_summary(report: dict[str, Any]) -> None:
     print("\nType summary")
-    print("type                    queries judged P@5*  R@10  R@100 NDCG@5 NDCG@10 empty_acc forbidden@10")
+    print("type                    queries judged P@5*  R@10  R@100 NDCG@5 NDCG@10 reject_acc forbidden@10")
     print("(* 单目标类型 P@5 列改报 success@1，标记 †)")
     for case_type, row in (report.get("by_type") or {}).items():
-        empty = row.get("empty_accuracy")
+        reject = row.get("reject_accuracy")
         if row.get("single_target"):
             headline = row.get("success_at_1") or 0.0
             headline_str = f"{headline:.3f}†"
@@ -706,7 +714,7 @@ def print_type_summary(report: dict[str, Any]) -> None:
             f"{row['r100']:.3f} "
             f"{row['ndcg5']:.3f} "
             f"{row['ndcg10']:.3f} "
-            f"{'-' if empty is None else f'{empty:.3f}':>9} "
+            f"{'-' if reject is None else f'{reject:.3f}':>10} "
             f"{row['forbidden10']:>12}"
         )
 
@@ -746,7 +754,7 @@ def print_skipped_cases(skipped: list[SkippedCase]) -> None:
 
 def print_comparison_report(comparison: dict[str, Any], previous_path: Path) -> None:
     print(f"\nComparison vs {previous_path}")
-    print("scope                   queriesΔ NDCG@5Δ NDCG@10Δ MRR@10Δ R@10Δ R@100Δ emptyΔ  forbiddenΔ")
+    print("scope                   queriesΔ NDCG@5Δ NDCG@10Δ MRR@10Δ R@10Δ R@100Δ rejectΔ forbiddenΔ")
     print_comparison_row("overall", comparison["overall"])
     for case_type, row in (comparison.get("by_type") or {}).items():
         print_comparison_row(case_type, row)
@@ -763,7 +771,7 @@ def print_comparison_row(label: str, row: dict[str, Any]) -> None:
         f"{_format_delta(row['mrr10']['delta']):>7} "
         f"{_format_delta(row['r10']['delta']):>6} "
         f"{_format_delta(row['r100']['delta']):>7} "
-        f"{_format_delta(row['empty_accuracy']['delta']):>7} "
+        f"{_format_delta(row['reject_accuracy']['delta']):>7} "
         f"{_format_delta(row['forbidden10']['delta'], digits=0):>10}"
     )
 

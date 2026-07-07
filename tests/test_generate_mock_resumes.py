@@ -1,5 +1,5 @@
 import build_eval_queries
-import generate_mock_resumes as gen
+import resume_gen as gen
 
 
 def test_generated_resumes_use_real_companies_and_unique_experiences() -> None:

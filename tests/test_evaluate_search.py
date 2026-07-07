@@ -87,7 +87,7 @@ def test_build_report_groups_metrics_by_query_type() -> None:
             query="量子计算芯片设计经验",
             relevant_ids=set(),
             returned_ids=[],
-            empty_success=True,
+            reject_success=True,
         ),
     ]
 
@@ -96,10 +96,10 @@ def test_build_report_groups_metrics_by_query_type() -> None:
     assert report["overall"]["queries"] == 2
     assert report["overall"]["judged"] == 1
     assert report["overall"]["p5"] == 0.2
-    assert report["overall"]["empty_accuracy"] == 1.0
+    assert report["overall"]["reject_accuracy"] == 1.0
     assert report["by_type"]["exact_code"]["ndcg5"] == 1.0
     assert report["by_type"]["exact_code"]["ndcg10"] == 1.0
-    assert report["by_type"]["negative_semantic"]["empty_accuracy"] == 1.0
+    assert report["by_type"]["negative_semantic"]["reject_accuracy"] == 1.0
     assert report["details"][0]["relevant_hits_at_10"] == ["resume-1"]
     assert report["details"][0]["relevant_grades_at_10"] == {"resume-1": 1.0}
 
@@ -239,7 +239,7 @@ def test_search_params_include_optional_api_filters() -> None:
         relevance={"resume-1": 3.0},
         relevant_ids={"resume-1"},
         forbidden_ids=set(),
-        expect_empty=False,
+        expect_reject=False,
         api_params={
             "degree": "本科",
             "cities": ["北京", "上海"],
@@ -279,7 +279,7 @@ def _result(
     ndcg_at_10: float = 0.0,
     forbidden_at_10: int = 0,
     success_at_1: float = 0.0,
-    empty_success: bool | None = None,
+    reject_success: bool | None = None,
     expected_plan: dict | None = None,
     query_plan: dict | None = None,
 ) -> QueryResult:
@@ -293,7 +293,7 @@ def _result(
             relevance={doc_id: 1.0 for doc_id in relevant_ids},
             relevant_ids=relevant_ids,
             forbidden_ids=set(),
-            expect_empty=empty_success is not None,
+            expect_reject=reject_success is not None,
             expected_plan=expected_plan,
         ),
         returned_ids=returned_ids,
@@ -310,5 +310,5 @@ def _result(
         ndcg_at_10=ndcg_at_10,
         forbidden_at_10=forbidden_at_10,
         success_at_1=success_at_1,
-        empty_success=empty_success,
+        reject_success=reject_success,
     )
