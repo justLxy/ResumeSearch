@@ -1737,6 +1737,9 @@ class SchoolTierFilterTests(unittest.TestCase):
         names = _school_tier_filter("qs50_overseas")["terms"]["candidate.all_schools.keyword"]
         self.assertIn("斯坦福大学", names)
         self.assertIn("Stanford University", names)
+        # 扩到 QS 前 100 后新增校也应命中（中英文名各列）。
+        self.assertIn("南洋理工大学", names)
+        self.assertIn("Nanyang Technological University", names)
 
     def test_other_tier_uses_must_not_complement(self) -> None:
         f = _school_tier_filter("其他")
@@ -1753,6 +1756,7 @@ class SchoolTierFilterTests(unittest.TestCase):
 
     def test_normalize_accepts_display_aliases(self) -> None:
         self.assertEqual(_normalize_school_tier("C9"), "c9")
+        self.assertEqual(_normalize_school_tier("海外QS100"), "qs50_overseas")
         self.assertEqual(_normalize_school_tier("海外QS50"), "qs50_overseas")
         self.assertEqual(_normalize_school_tier("海外"), "qs50_overseas")
         self.assertEqual(_normalize_school_tier("985"), "985")

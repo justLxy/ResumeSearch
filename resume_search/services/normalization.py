@@ -120,7 +120,7 @@ def _school_tier_filter(tiers: Any) -> dict[str, Any] | None:
     """档位（单个或多个）→ 一行 ES 过滤。多档位取并集（OR）。
 
     查 candidate.all_schools.keyword（候选人全部就读学校）→ 任一学历命中即算。
-    封闭档（985/211/双一流/C9/海外QS50）合并成一条 terms；含"其他"时用
+    封闭档（985/211/双一流/C9/海外QS100）合并成一条 terms；含"其他"时用
     bool.should（minimum_should_match=1）把补集与封闭档并起来。
     """
     normalized = _normalize_school_tier_list(tiers)

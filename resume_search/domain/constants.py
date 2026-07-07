@@ -21,7 +21,7 @@ SCHOOL_TIER_LABELS = {
     "211": "211",
     "双一流": "双一流",
     "c9": "C9",
-    "qs50_overseas": "海外QS50",
+    "qs50_overseas": "海外QS100",
 }
 SCHOOL_TIER_OTHER = "其他"
 # 兼容前端/LLM 可能传入的显示名或别名 → 规范 key。
@@ -32,6 +32,8 @@ SCHOOL_TIER_ALIASES = {
     "c9": "c9",
     "C9": "c9",
     "qs50_overseas": "qs50_overseas",
+    "海外QS100": "qs50_overseas",
+    "海外qs100": "qs50_overseas",
     "海外QS50": "qs50_overseas",
     "海外qs50": "qs50_overseas",
     "海外": "qs50_overseas",

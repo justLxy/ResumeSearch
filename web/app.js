@@ -177,7 +177,7 @@ const schoolTierLabels = {
   "211": "211",
   "双一流": "双一流",
   "c9": "C9",
-  "qs50_overseas": "海外QS50",
+  "qs50_overseas": "海外QS100",
   "其他": "其他",
 };
 
