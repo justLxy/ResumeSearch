@@ -22,13 +22,17 @@ from resume_search.services.normalization import (
     _normalize_school_tier_list,
     _school_tier_filter,
 )
-from resume_search.services.query_builder import _evidence_lexical_query
+from resume_search.services.query_builder import (
+    _PHRASE_RECALL_FIELDS,
+    _evidence_lexical_query,
+)
 from resume_search.services.query_planning import (
     _call_query_parser_llm,
     _lookup_fast_path,
     _parse_query_with_llm,
     _plan_query,
     _query_parser_system_prompt,
+    _sanitize_llm_query_plan,
 )
 from resume_search.services.facets import _merge_case_insensitive_skill_buckets
 from resume_search.services.reranking import _rerank_document, _rerank_results
@@ -985,6 +989,29 @@ class SearchLogicTests(unittest.TestCase):
         # 全命中候选人排在部分命中之前。
         self.assertEqual([item["id"] for item in results], ["both", "one"])
 
+    def test_keyword_or_recall_uses_analyzer_symmetric_phrase_fields(self) -> None:
+        # 根因回归：OR 召回的 phrase 子句必须打分词对称的 .phrase 子字段，
+        # 不能打 title/text 主字段（index=ik_max_word / search=ik_smart 切分位置不
+        # 一致，phrase 会静默 0 命中，如 "并发长连接"）。
+        clause = _find_clause_with_name_prefix(
+            _evidence_lexical_query("北京邮电大学 并发长连接", query_intent=INTENT_KEYWORD),
+            "evidence_term:keyword_or_recall",
+        )
+        self.assertIsNotNone(clause)
+        for should in clause["bool"]["should"]:
+            fields = should["multi_match"]["fields"]
+            self.assertEqual(fields, _PHRASE_RECALL_FIELDS)
+            # 主字段 text/title（不带 .phrase）不得出现在 phrase 召回里。
+            self.assertNotIn("text^4", fields)
+            self.assertNotIn("title^5", fields)
+        # phrase 召回字段必须分词对称：要么是 .phrase 子字段，要么是 skills_text。
+        for field in _PHRASE_RECALL_FIELDS:
+            name = field.split("^", 1)[0]
+            self.assertTrue(
+                name.endswith(".phrase") or name == "skills_text",
+                f"{name} 不是分词对称字段，phrase 召回会静默失败",
+            )
+
     def test_query_plan_uses_llm_keyword_constraints_without_rerank(self) -> None:
         with patch(
             "resume_search.services.query_planning._call_query_parser_llm",
@@ -1038,6 +1065,45 @@ class SearchLogicTests(unittest.TestCase):
         self.assertEqual(debug_plan["raw_query"], "0.5年以上 北京 本科 推荐系统")
         self.assertEqual(debug_plan["lexical_query"], "推荐系统")
         self.assertEqual(debug_plan["constraints"]["skills"], ["推荐系统"])
+
+    def test_prompt_has_cities_anti_hallucination_rule(self) -> None:
+        # 根因回归：cities 字段必须像 degrees/school_tiers 一样带反臆测规则，
+        # 明确禁止从校名/公司名的城市前缀抠城市——这是城市幻觉硬过滤的根治处。
+        prompt = _query_parser_system_prompt()
+        self.assertIn("- cities:", prompt)
+        # 规则须点明"不得从校名/公司名前缀抠城市"这一核心约束。
+        self.assertIn("绝不能从校名/公司名/机构名的城市前缀里抠城市", prompt)
+        # 且给出对比 few-shot：北京邮电大学 并发长连接 → cities 留 []。
+        self.assertIn("输入: 北京邮电大学 并发长连接", prompt)
+
+    def test_sanitize_preserves_planner_city_decision(self) -> None:
+        # 城市正确性交给 prompt；后端 sanitize 只做规范化，忠实保留 planner 的判断——
+        # planner 判 cities=[] 就不落过滤，判 cities=["北京"] 就照常落过滤。
+        # 后端不再有 substring 兜底改写。
+        dropped = _sanitize_llm_query_plan(
+            {
+                "intent": "keyword",
+                "lexical_query": "北京邮电大学 并发长连接",
+                "semantic_query": "",
+                "constraints": {"cities": [], "skills": ["并发长连接"]},
+                "enable_dense": False,
+            },
+            "北京邮电大学 并发长连接",
+        )
+        self.assertNotIn("cities", dropped["constraints"])
+        self.assertEqual(dropped["constraints"].get("skills"), ["并发长连接"])
+
+        kept = _sanitize_llm_query_plan(
+            {
+                "intent": "keyword",
+                "lexical_query": "推荐系统",
+                "semantic_query": "推荐系统",
+                "constraints": {"cities": ["北京"]},
+                "enable_dense": False,
+            },
+            "北京 推荐系统",
+        )
+        self.assertEqual(kept["constraints"].get("cities"), ["北京"])
 
     def test_query_plan_degree_floor_expands_to_terms_filter(self) -> None:
         # 学历下限由 LLM 展开成可接受集合（本科及以上 → 本科/硕士/博士），
@@ -1835,6 +1901,71 @@ class CollectAllSchoolsTests(unittest.TestCase):
         }
         enriched = _enrich_doc(doc)
         self.assertEqual(enriched["candidate"]["all_schools"], ["清华大学", "南开大学"])
+
+
+def _es_reachable() -> bool:
+    try:
+        import urllib.request
+
+        from resume_search.config import ES_URL
+
+        with urllib.request.urlopen(f"{ES_URL}/", timeout=1) as resp:
+            return resp.status == 200
+    except Exception:
+        return False
+
+
+@unittest.skipUnless(_es_reachable(), "Elasticsearch 未就绪，跳过实时召回集成测试")
+class LiveEvidencePhraseRecallTests(unittest.TestCase):
+    """针对真实证据索引的分词对称性回归：phrase 召回必须能命中主字段正文里的词。
+
+    这类断言在 mock 层看不出问题——mock 不跑 IK 分词。此处直接打真实索引，确保
+    index(ik_max_word)/search(ik_smart) 切分不一致的词（如 "并发长连接"）仍可召回。
+    """
+
+    def _phrase_recall_hits(self, token: str) -> int:
+        from resume_search.config import EVIDENCE_INDEX_ALIAS
+        from resume_search.infrastructure.es_client import es_request
+
+        body = {
+            "size": 5,
+            "query": {
+                "bool": {
+                    "should": [
+                        {
+                            "multi_match": {
+                                "query": token,
+                                "fields": _PHRASE_RECALL_FIELDS,
+                                "type": "phrase",
+                            }
+                        }
+                    ],
+                    "minimum_should_match": 1,
+                }
+            },
+            "_source": ["resume_id", "section_type"],
+        }
+        result = es_request("POST", f"/{EVIDENCE_INDEX_ALIAS}/_search", body)
+        return result.get("hits", {}).get("total", {}).get("value", 0)
+
+    def test_asymmetric_token_is_recalled_via_phrase_fields(self) -> None:
+        # "并发长连接" 是 index/search 切分位置不一致的典型词。若语料里存在含该词的
+        # 切片，phrase 召回字段必须能命中它（>0）。语料缺失时跳过而非误报失败。
+        from resume_search.config import EVIDENCE_INDEX_ALIAS
+        from resume_search.infrastructure.es_client import es_request
+
+        exists = es_request(
+            "POST",
+            f"/{EVIDENCE_INDEX_ALIAS}/_search",
+            {"size": 0, "query": {"match_phrase": {"text.phrase": "并发长连接"}}},
+        )
+        if exists.get("hits", {}).get("total", {}).get("value", 0) == 0:
+            self.skipTest("语料中无 '并发长连接' 切片")
+        self.assertGreater(
+            self._phrase_recall_hits("并发长连接"),
+            0,
+            "分词对称的 phrase 召回字段应能命中含 '并发长连接' 的切片",
+        )
 
 
 if __name__ == "__main__":

@@ -273,6 +273,7 @@ def _query_parser_system_prompt() -> str:
         "字段规则:\n"
         "- degrees: 仅当 query 里**字面出现**学历词（本科/学士/硕士/研究生/博士/及以上等）时才填，由 LLM 展开——\"硕士\"→[硕士]；\"本科或硕士\"→[本科,硕士]；\"本科及以上\"→[本科,硕士,博士]；\"硕士及以上\"→[硕士,博士]。query 没提学历就必须是 []——绝不能因为学校/专业/岗位\"看起来高端\"就臆测学历，那会把合格候选人误过滤掉。\n"
         "- school_tiers: 院校档位列表（可多选，并列/或的关系取并集）。仅当 query 里**字面出现**院校档位词时才填，每项取值之一：985 / 211 / 双一流 / c9（C9联盟）/ qs50_overseas（海外名校、留学、留学生、海归、QS前100等）/ 其他（普通院校、双非）。\"985\"→[\"985\"]；\"海归\"或\"留学生\"→[\"qs50_overseas\"]；\"留学生或985\"→[\"qs50_overseas\",\"985\"]；\"双非\"→[\"其他\"]。query 没提院校档位就必须是 []——绝不能因为岗位/专业\"看起来高端\"就臆测院校档位。具体某所学校名（如\"北京大学\"\"东南大学\"）不是档位词，仍走 lexical_query，school_tiers 留 []。\n"
+        "- cities: 期望工作/所在城市列表。仅当 query 里**字面出现**独立的城市意图词（如\"北京\"\"在上海\"\"深圳工作\"）时才填。**绝不能从校名/公司名/机构名的城市前缀里抠城市**——\"北京邮电大学\"\"上海交通大学\"\"西安交通大学\"里的\"北京/上海/西安\"是学校名的一部分，不是工作城市，cities 必须留 []，整串学校名走 lexical_query。城市一旦填了会变成硬过滤，把在外地工作的合格候选人整个排除，所以拿不准就留 []。\n"
         "- lexical_query: 只放实体核心名/技能/高价值检索词，去掉已抽到 constraints 的学历/城市/年限，也去掉\"实习\"\"岗位\"\"职责\"\"要求\"\"熟悉\"等修饰/低信息词。长 JD 必须压缩成关键词串，不要复读原句。\n"
         "- semantic_query: 保留完整语义需求与上下文（长 JD 放原文）；负向约束（如\"不要纯推荐\"）也留在这里，不要变成硬过滤。\n"
         "- skills: 用户明确点名的技能，仍要保留在 lexical/semantic_query 里（是召回线索）；泛化能力不要硬塞。\n"
@@ -284,6 +285,8 @@ def _query_parser_system_prompt() -> str:
         '输出: {"intent":"keyword","lexical_query":"东南大学","semantic_query":"","constraints":{"degrees":["本科","硕士"],"cities":[],"skills":[],"min_years":null,"school_tiers":[]},"enable_dense":false}\n'
         "输入: 南京大学\n"
         '输出: {"intent":"keyword","lexical_query":"南京大学","semantic_query":"","constraints":{"degrees":[],"cities":[],"skills":[],"min_years":null,"school_tiers":[]},"enable_dense":false}\n'
+        "输入: 北京邮电大学 并发长连接\n"
+        '输出: {"intent":"keyword","lexical_query":"北京邮电大学 并发长连接","semantic_query":"","constraints":{"degrees":[],"cities":[],"skills":[],"min_years":null,"school_tiers":[]},"enable_dense":false}\n'
         "输入: 985硕士 做过推荐系统\n"
         '输出: {"intent":"semantic","lexical_query":"推荐系统","semantic_query":"做过推荐系统","constraints":{"degrees":["硕士"],"cities":[],"skills":[],"min_years":null,"school_tiers":["985"]},"enable_dense":true}\n'
         "输入: 留学生 或者 985\n"
@@ -347,6 +350,8 @@ def _sanitize_llm_query_plan(payload: dict[str, Any], raw_query: str) -> dict[st
     degrees = _normalize_degree_list(constraints.get("degrees"))
     if degrees:
         cleaned_constraints["degrees"] = degrees
+    # 城市抽取的正确性由 planner prompt 的 cities 字段规则保证（不得从校名/公司名
+    # 的城市前缀抠城市），后端只做规范化清洗，不再有 substring 兜底规则。
     cities = _clean_string_list(constraints.get("cities"))
     if cities:
         cleaned_constraints["cities"] = cities

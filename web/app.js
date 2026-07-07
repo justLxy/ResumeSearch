@@ -676,7 +676,7 @@ function renderResults() {
 
       const lexicalStatusRows = [
         hasEvidenceLexical
-          ? `<div class="debug-item"><span class="debug-label" title="证据索引中的 BM25 / phrase 词面召回&#10;先命中候选人档案、项目、实习、教育或技能证据片段，再按候选人聚合排名">词面证据排名：</span> <span class="debug-value">${evidenceGroupRank} <span class="tier-desc">(最佳片段 #${debug.evidence_rank}，分数: ${formatScore(debug.evidence_score || 0, 4)}${evidenceSupportCount > 1 ? `，证据数: ${evidenceSupportCount}` : ""})</span></span></div>`
+          ? `<div class="debug-item"><span class="debug-label" title="证据索引中的 BM25 / phrase 词面召回&#10;简历被切成项目 / 实习 / 教育 / 技能等证据片段，先对片段做词面检索，再按候选人聚合成一个排名&#10;• 词面证据排名：该候选人聚合后在词面召回里的名次&#10;• 最佳片段 #N：该候选人表现最好的片段，在全库所有片段的原始召回里排第 N（越小越好）&#10;• 分数：最佳片段的原始 BM25 分数&#10;• 命中证据：该候选人有几段证据命中了查询（前 3 段按 1.0/0.3/0.15 递减加权，第 4 段起不再加分）">词面证据排名：</span> <span class="debug-value">${evidenceGroupRank} <span class="tier-desc">(最佳片段全库第 #${debug.evidence_rank}，BM25 分数: ${formatScore(debug.evidence_score || 0, 4)}${evidenceSupportCount > 1 ? `，命中 ${evidenceSupportCount} 段证据` : "，命中 1 段证据"})</span></span></div>`
           : "",
       ].filter(Boolean).join("");
       const lexicalHtml = hasLexical
@@ -684,7 +684,7 @@ function renderResults() {
         : `<div class="debug-item warning"><span class="debug-label">词面证据命中：</span> <span class="debug-value">否 (未召回)</span></div>`;
         
       const denseHtml = hasDense 
-        ? `<div class="debug-item"><span class="debug-label" title="先在 evidence_vector 中检索证据片段，再按 resume_id 在完整向量结果中聚合成候选人排名&#10;括号里的 # 是最佳证据片段在原始 kNN 结果里的名次">全局向量聚合排名：</span> <span class="debug-value">${denseGroupRank} <span class="tier-desc">(最佳证据 ${escapeHtml(bestDenseLabel)} 原始 #${bestDenseRouteRank}，分数: ${formatScore(debug.dense_score || 0, 4)}${denseSupportCount > 1 ? `，证据数: ${denseSupportCount}` : ""})</span></span></div>`
+        ? `<div class="debug-item"><span class="debug-label" title="先在 evidence_vector 中检索证据片段，再按 resume_id 在完整向量结果中聚合成候选人排名&#10;• 全局向量聚合排名：该候选人聚合后在向量召回里的名次&#10;• 最佳证据 原始 #N：该候选人语义最相近的片段，在全库 kNN 原始结果里排第 N（越小越好）&#10;• 分数：该最佳片段的向量相似度分数&#10;• 命中证据：该候选人有几段证据进入了向量召回">全局向量聚合排名：</span> <span class="debug-value">${denseGroupRank} <span class="tier-desc">(最佳证据 ${escapeHtml(bestDenseLabel)} 全库第 #${bestDenseRouteRank}，相似度分数: ${formatScore(debug.dense_score || 0, 4)}${denseSupportCount > 1 ? `，命中 ${denseSupportCount} 段证据` : "，命中 1 段证据"})</span></span></div>`
         : `<div class="debug-item warning"><span class="debug-label">Dense 命中：</span> <span class="debug-value">否 (未召回)</span></div>`;
 
       const denseMatchesHtml = denseMatches.length

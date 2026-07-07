@@ -23,6 +23,12 @@ from resume_search.config import (
 )
 from resume_search.services.normalization import _normalize_highest_degree
 
+# phrase 匹配必须分词对称。证据索引里 title/text 用 ik_max_word 建索引、ik_smart
+# 检索，两侧切分位置可能不同（"并发长连接" index→[并发,发长,连接] vs search→
+# [并,发长,连接]），phrase 会静默 0 命中。.phrase 子字段两侧都用 ik_smart，
+# skills_text 本身就是单一 ik_smart analyzer，故三者都分词对称。boost 沿用主字段。
+_PHRASE_RECALL_FIELDS = ["title.phrase^5", "text.phrase^4", "skills_text^5"]
+
 
 def _query_tokens(query_text: str) -> list[str]:
     return [
@@ -258,6 +264,9 @@ def _keyword_or_recall_query(query_text: str) -> dict[str, Any]:
       连续匹配，不会因单个泛词碎片命中全库。
     - boost 低（1），只负责"开召回门"；命中词数对排序的影响由候选人维度的
       coverage multiplier 承担，全命中者靠前。
+    - phrase 匹配打 .phrase 子字段（分词对称，见 _PHRASE_RECALL_FIELDS）而非主
+      字段，否则 index(ik_max_word)/search(ik_smart) 切分位置不一致会让 phrase
+      静默 0 命中（如 "并发长连接"）。
     """
     return {
         "bool": {
@@ -266,11 +275,7 @@ def _keyword_or_recall_query(query_text: str) -> dict[str, Any]:
                 {
                     "multi_match": {
                         "query": token,
-                        "fields": [
-                            "title^5",
-                            "text^4",
-                            "skills_text^5",
-                        ],
+                        "fields": _PHRASE_RECALL_FIELDS,
                         "type": "phrase",
                     }
                 }
