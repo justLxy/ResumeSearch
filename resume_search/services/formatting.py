@@ -22,11 +22,26 @@ def _format_hit(hit: dict[str, Any], rrf_score: float | None = None) -> dict[str
     highlight = hit.get("highlight", {})
     retrieval_debug = hit.get("_retrieval_debug", {})
 
-    snippets = (
-        _highlight_snippets(highlight)
-        or _debug_evidence_snippets(retrieval_debug)
-        or [_default_snippet(projects, internships)]
-    )
+    snippets = _highlight_snippets(highlight)
+    if not snippets:
+        evidence_snippets, evidence_block_count, dense_block_count = _debug_evidence_snippets(
+            retrieval_debug
+        )
+        if evidence_snippets:
+            snippets = evidence_snippets
+            # 单一事实源：debug 面板两条"命中 N 段证据"必须等于卡片实际渲染的高亮块数。
+            # *_support_count 来自检索池（统计召回的切片数），而切片共享去规范化的
+            # skills_text，且向量 top 命中常与词面证据是同一份切片；渲染侧按文本去重后
+            # 会折叠这些重复，两条路径天然不一致。此处把上报计数回填为去重后真正展示的
+            # 块数，让 debug 与 UI 永远同源。仅在确有对应 debug 数据时覆盖，不动打分数学。
+            reconciled = dict(retrieval_debug)
+            if retrieval_debug.get("evidence_support_count") is not None:
+                reconciled["evidence_support_count"] = evidence_block_count
+            if retrieval_debug.get("dense_support_count") is not None:
+                reconciled["dense_support_count"] = dense_block_count
+            retrieval_debug = reconciled
+        else:
+            snippets = [_default_snippet(projects, internships)]
     years_experience = candidate.get("years_experience")
 
     return {
@@ -44,19 +59,28 @@ def _format_hit(hit: dict[str, Any], rrf_score: float | None = None) -> dict[str
     }
 
 
-def _debug_evidence_snippets(debug: dict[str, Any]) -> list[str]:
+def _debug_evidence_snippets(debug: dict[str, Any]) -> tuple[list[str], int, int]:
+    """从证据/向量 debug 匹配里抽取去重后的高亮块。
+
+    返回 (snippets, evidence_block_count, dense_block_count)：snippets 是最终渲染的
+    全部块（词面 + 向量）。两个计数分别是词面证据、向量证据贡献的去重后存活块数——
+    它们就是 debug 面板两条"命中 N 段证据"应显示的数字，与 UI 实际展示的块严格一致。
+    去重跨两路共享（seen_clean_texts）：向量 top 命中常与词面证据是同一份切片，
+    渲染时会被折叠，计数必须随之折叠，否则 label 与卡片再次对不上。
+    """
     seen_evidence_ids: set[str] = set()
     seen_clean_texts: set[str] = set()
     snippets: list[str] = []
-    
+
     import re
     def _clean(s: str) -> str:
         s = re.sub(r'<span class="snippet-label[^>]*>.*?</span>', '', s)
         s = re.sub(r'\[.*?\]', '', s)
         s = re.sub(r'<[^>]+>', '', s)
         return re.sub(r'\W+', '', s)
-        
-    def _add_matches(matches: list[dict[str, Any]]) -> None:
+
+    def _add_matches(matches: list[dict[str, Any]]) -> int:
+        blocks_added = 0
         for item in matches:
             ev_id = item.get("evidence_id")
             snippet = str(item.get("snippet") or "").strip()
@@ -79,12 +103,14 @@ def _debug_evidence_snippets(debug: dict[str, Any]) -> list[str]:
                             seen_clean_texts.add(clean_text)
                 if surviving_subs:
                     snippets.append(' <span class="snippet-sep">|</span> '.join(surviving_subs))
+                    blocks_added += 1
                 if ev_id:
                     seen_evidence_ids.add(ev_id)
-                    
-    _add_matches(debug.get("evidence_matches") or [])
-    _add_matches(debug.get("dense_matches") or [])
-    return snippets
+        return blocks_added
+
+    evidence_block_count = _add_matches(debug.get("evidence_matches") or [])
+    dense_block_count = _add_matches(debug.get("dense_matches") or [])
+    return snippets, evidence_block_count, dense_block_count
 
 
 def _highlight_snippets(highlight: dict[str, list[str]]) -> list[str]:

@@ -16,7 +16,11 @@ from resume_search.services.filters import (
     _filters_from_llm_constraints,
     _min_years_filter,
 )
-from resume_search.services.formatting import _default_snippet, _format_hit
+from resume_search.services.formatting import (
+    _debug_evidence_snippets,
+    _default_snippet,
+    _format_hit,
+)
 from resume_search.services.normalization import (
     _normalize_school_tier,
     _normalize_school_tier_list,
@@ -304,6 +308,149 @@ class SearchLogicTests(unittest.TestCase):
 
         self.assertIn("<mark>机器学习</mark>", formatted["project_snippet"])
         self.assertIn("<mark>百度</mark>", formatted["project_snippet"])
+
+    def test_debug_evidence_snippets_returns_block_count(self) -> None:
+        # skills 切片与 project 切片都因去规范化的 skills_text 命中同一份技能证据，
+        # 清洗去重后只剩一块。返回的 block_count 必须等于实际存活的块数。
+        debug = {
+            "evidence_matches": [
+                {
+                    "evidence_id": "r1:skills:0",
+                    "section_type": "skills",
+                    "snippet": '<span class="snippet-label">正文</span> 能力标签：RAG，<mark>Python</mark>，PyTorch',
+                },
+                {
+                    "evidence_id": "r1:project:1",
+                    "section_type": "project",
+                    "snippet": '<span class="snippet-label">技能词</span> RAG <mark>Python</mark> PyTorch',
+                },
+            ],
+        }
+
+        snippets, block_count, _dense_count = _debug_evidence_snippets(debug)
+
+        self.assertEqual(len(snippets), 1)
+        self.assertEqual(block_count, 1)
+
+    def test_debug_evidence_snippets_counts_distinct_blocks(self) -> None:
+        debug = {
+            "evidence_matches": [
+                {
+                    "evidence_id": "r1:skills:0",
+                    "section_type": "skills",
+                    "snippet": '<span class="snippet-label">正文</span> 能力标签：<mark>Python</mark>',
+                },
+                {
+                    "evidence_id": "r1:project:1",
+                    "section_type": "project",
+                    "snippet": '<span class="snippet-label">正文</span> 推荐系统召回项目，负责 <mark>Python</mark> 特征工程',
+                },
+            ],
+        }
+
+        snippets, block_count, _dense_count = _debug_evidence_snippets(debug)
+
+        self.assertEqual(len(snippets), 2)
+        self.assertEqual(block_count, 2)
+
+    def test_format_hit_reconciles_support_count_with_rendered_blocks(self) -> None:
+        # 复现 “Python” 搜索：检索池报 3 段证据（skills/profile/project 三切片，
+        # 因 skills_text 去规范化而重复命中），但去重后卡片只渲染 2 块。
+        # debug 上报的 evidence_support_count 必须被回填为真正展示的块数（2）。
+        hit = _hit("resume-1", "候选人")
+        hit["_retrieval_debug"] = {
+            "evidence_support_count": 3,
+            "evidence_matches": [
+                {
+                    "evidence_id": "resume-1:skills:0",
+                    "section_type": "skills",
+                    "snippet": '<span class="snippet-label">正文</span> 能力标签：RAG，<mark>Python</mark>，PyTorch，TensorFlow',
+                },
+                {
+                    "evidence_id": "resume-1:profile:0",
+                    "section_type": "profile",
+                    "snippet": '<span class="snippet-label">正文</span> ：机器学习工程师(LLM方向) <span class="snippet-sep">|</span> <span class="snippet-label">技能词</span> RAG <mark>Python</mark> PyTorch TensorFlow',
+                },
+                {
+                    "evidence_id": "resume-1:project:1",
+                    "section_type": "project",
+                    "snippet": '<span class="snippet-label">技能词</span> RAG <mark>Python</mark> PyTorch TensorFlow',
+                },
+            ],
+        }
+
+        formatted = _format_hit(hit)
+
+        rendered_blocks = formatted["project_snippet"].count("margin-bottom: 6px;")
+        self.assertEqual(rendered_blocks, 2)
+        self.assertEqual(
+            formatted["retrieval_debug"]["evidence_support_count"],
+            rendered_blocks,
+        )
+
+    def test_format_hit_reconciles_dense_support_count_with_rendered_blocks(self) -> None:
+        # 复现 “资深java高并发”：向量池报 3 段证据，但 top 向量命中（高并发项目）与
+        # 词面证据是同一份切片，渲染时被折叠，只剩 2 个 Dense 块。
+        # dense_support_count 必须回填为真正展示的向量块数（2）。
+        hit = _hit("resume-1", "候选人")
+        hit["_retrieval_debug"] = {
+            "evidence_support_count": 1,
+            "dense_support_count": 3,
+            "evidence_matches": [
+                {
+                    "evidence_id": "resume-1:project:1",
+                    "section_type": "project",
+                    "snippet": '<span class="snippet-label">标题</span> <mark>高并发</mark>电商订单与库存核心系统重构',
+                },
+            ],
+            "dense_matches": [
+                {
+                    "evidence_id": "resume-1:project:1",
+                    "section_type": "project",
+                    "snippet": '<span class="snippet-label dense-label">Dense 匹配</span> 高并发电商订单与库存核心系统重构：项目描述...',
+                },
+                {
+                    "evidence_id": "resume-1:internship:1",
+                    "section_type": "internship",
+                    "snippet": '<span class="snippet-label dense-label">Dense 匹配</span> 用友网络 / Java开发实习生：交易研发部...',
+                },
+                {
+                    "evidence_id": "resume-1:project:2",
+                    "section_type": "project",
+                    "snippet": '<span class="snippet-label dense-label">Dense 匹配</span> 企业级云原生分布式任务调度平台研发：项目描述...',
+                },
+            ],
+        }
+
+        formatted = _format_hit(hit)
+        debug = formatted["retrieval_debug"]
+        snippet = formatted["project_snippet"]
+
+        # 词面块 1 + 向量块 2 = 3 个渲染块；top 向量命中被折叠。
+        self.assertEqual(snippet.count("margin-bottom: 6px;"), 3)
+        self.assertEqual(snippet.count("dense-label"), 2)
+        self.assertEqual(debug["evidence_support_count"], 1)
+        self.assertEqual(debug["dense_support_count"], 2)
+
+    def test_format_hit_prefers_highlight_snippets_over_debug_evidence(self) -> None:
+        # 有真高亮时走 highlight 路径，不触发 debug 证据回填，evidence_support_count 原样保留。
+        hit = _hit("resume-1", "候选人")
+        hit["highlight"] = {"skills_text": ["RAG <mark>Python</mark>"]}
+        hit["_retrieval_debug"] = {
+            "evidence_support_count": 3,
+            "evidence_matches": [
+                {
+                    "evidence_id": "resume-1:skills:0",
+                    "section_type": "skills",
+                    "snippet": '<span class="snippet-label">正文</span> <mark>Python</mark>',
+                },
+            ],
+        }
+
+        formatted = _format_hit(hit)
+
+        self.assertIn("<mark>Python</mark>", formatted["project_snippet"])
+        self.assertEqual(formatted["retrieval_debug"]["evidence_support_count"], 3)
 
     def test_hybrid_merge_keeps_independent_dense_hits(self) -> None:
         vector_response = _response(
