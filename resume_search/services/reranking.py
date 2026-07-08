@@ -13,6 +13,7 @@ from resume_search.config import (
     RERANK_TOP_N,
 )
 from resume_search.services.formatting import _append_doc_line, _clean_doc_text
+from resume_search.services.quality import score_bucket
 
 
 def _rerank_results(
@@ -51,10 +52,11 @@ def _rerank_results(
             f"below floor {RERANK_RELEVANCE_FLOOR}; results may not precisely match"
         )
 
-    scored: list[tuple[float, int, dict[str, Any]]] = []
+    scored: list[tuple[float, float, int, dict[str, Any]]] = []
     for pre_rank, (result, score) in enumerate(zip(window, scores), start=1):
         rerank_score = float(score)
         item = dict(result)
+        quality_score = float(item.get("quality_score") or 0.0)
         debug = dict(item.get("retrieval_debug") or {})
         debug.update(
             {
@@ -71,11 +73,13 @@ def _rerank_results(
         # 逐候选人低相关度标记：rerank 分数低于门槛 → 前端在姓名旁打 tag，
         # 提示"该候选人与查询的相关度较低"。判断权交给 HR，不再清空。
         item["low_relevance"] = rerank_score < RERANK_RELEVANCE_FLOOR
-        scored.append((rerank_score, pre_rank, item))
+        scored.append((rerank_score, quality_score, pre_rank, item))
 
-    scored.sort(key=lambda row: (-row[0], row[1]))
+    # 排序键：rerank 分分桶降序 → 同桶（相关性实质相同）内质量降序 → 原 RRF 名次。
+    # 质量只在 cross-encoder 分量化相等时才起作用，不覆盖相关性判断。
+    scored.sort(key=lambda row: (-score_bucket(row[0]), -row[1], row[2]))
     reranked_window: list[dict[str, Any]] = []
-    for rerank_rank, (_score, _pre_rank, item) in enumerate(scored, start=1):
+    for rerank_rank, (_score, _quality, _pre_rank, item) in enumerate(scored, start=1):
         debug = dict(item.get("retrieval_debug") or {})
         debug["rerank_rank"] = rerank_rank
         item["retrieval_debug"] = debug

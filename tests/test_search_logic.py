@@ -39,6 +39,7 @@ from resume_search.services.query_planning import (
     _sanitize_llm_query_plan,
 )
 from resume_search.services.facets import _merge_case_insensitive_skill_buckets
+from resume_search.services.quality import compute_quality_score, score_bucket
 from resume_search.services.reranking import _rerank_document, _rerank_results
 from resume_search.services.retrieval import (
     _hybrid_total,
@@ -2113,6 +2114,73 @@ class LiveEvidencePhraseRecallTests(unittest.TestCase):
             0,
             "分词对称的 phrase 召回字段应能命中含 '并发长连接' 的切片",
         )
+
+
+class QualityScoreTests(unittest.TestCase):
+    """候选人质量分与 tie-break 排序：只在相关性主分分桶相同时生效。"""
+
+    def test_quality_score_bounded_in_unit_interval(self) -> None:
+        rich = {
+            "candidate": {
+                "all_schools": ["清华大学"],
+                "school": "清华大学",
+                "major": "计算机",
+                "highest_degree": "硕士",
+                "years_experience": 2.0,
+            },
+            "skills": ["Python", "C++"],
+            "education": [{"school": "清华大学"}],
+            "internships": [
+                {"company": "A", "description": "x" * 200,
+                 "start_date": "2023-01-01", "end_date": "2023-12-31"},
+                {"company": "B", "description": "y" * 200,
+                 "start_date": "2022-01-01", "end_date": "2022-12-31"},
+            ],
+            "projects": [{"name": "P", "description": "z" * 300, "responsibility": "r" * 100}],
+            "awards": [{"has_award": "是", "name": "ACM", "level": "一等奖"}],
+            "languages": {"english_exam_score": "CET6 600"},
+        }
+        score = compute_quality_score(rich)
+        self.assertGreaterEqual(score, 0.0)
+        self.assertLessEqual(score, 1.0)
+
+    def test_c9_outscores_other_school_all_else_equal(self) -> None:
+        base = {
+            "candidate": {"major": "计算机", "highest_degree": "本科"},
+            "skills": ["Python"],
+        }
+        c9 = {**base, "candidate": {**base["candidate"], "all_schools": ["北京大学"]}}
+        other = {**base, "candidate": {**base["candidate"], "all_schools": ["某野鸡大学"]}}
+        self.assertGreater(compute_quality_score(c9), compute_quality_score(other))
+
+    def test_empty_source_scores_zero(self) -> None:
+        self.assertEqual(compute_quality_score({}), 0.0)
+
+    def test_awards_saturate_and_higher_level_scores_more(self) -> None:
+        one_gold = {"awards": [{"has_award": "是", "name": "x", "level": "一等奖"}]}
+        one_bronze = {"awards": [{"has_award": "是", "name": "x", "level": "三等奖"}]}
+        self.assertGreater(compute_quality_score(one_gold), compute_quality_score(one_bronze))
+        # 无效奖项（has_award 否 / 无名称）在奖项维度不计分：与同样"有 awards 键
+        # 但全为无效"者相比，含一个有效奖项者总分更高（隔离出奖项维度的贡献）。
+        invalid = {"awards": [{"has_award": "否", "name": "x", "level": "一等奖"},
+                              {"has_award": "是", "level": "一等奖"}]}
+        valid = {"awards": [{"has_award": "是", "name": "x", "level": "一等奖"}]}
+        self.assertGreater(compute_quality_score(valid), compute_quality_score(invalid))
+
+    def test_score_bucket_quantizes_to_four_digits(self) -> None:
+        self.assertEqual(score_bucket(0.03214), score_bucket(0.032139))
+        self.assertNotEqual(score_bucket(0.0321), score_bucket(0.0322))
+        self.assertEqual(score_bucket(None), 0.0)
+
+    def test_tie_break_orders_by_quality_within_same_bucket_only(self) -> None:
+        # 主分不同桶：高相关性者恒在前，质量不得翻转。
+        # 主分同桶：质量高者在前。
+        hi_rel_lo_q = {"score": 0.0400, "quality_score": 0.1}
+        tie_hi_q = {"score": 0.0321, "quality_score": 0.8}
+        tie_lo_q = {"score": 0.0321, "quality_score": 0.4}
+        rows = [tie_lo_q, hi_rel_lo_q, tie_hi_q]
+        rows.sort(key=lambda r: (-score_bucket(r["score"]), -r["quality_score"]))
+        self.assertEqual(rows, [hi_rel_lo_q, tie_hi_q, tie_lo_q])
 
 
 if __name__ == "__main__":

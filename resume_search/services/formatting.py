@@ -10,11 +10,13 @@ import re
 from typing import Any
 
 from resume_search.services.query_builder import _is_dense_retriever
+from resume_search.services.quality import compute_quality_score
 
 
 def _format_hit(hit: dict[str, Any], rrf_score: float | None = None) -> dict[str, Any]:
     source = hit.get("_source", {})
     score = round(rrf_score, 4) if rrf_score is not None else round(hit.get("_score") or 0, 3)
+    quality_score = compute_quality_score(source)
     candidate = source.get("candidate", {})
     education = source.get("education") or []
     projects = source.get("projects") or []
@@ -47,6 +49,7 @@ def _format_hit(hit: dict[str, Any], rrf_score: float | None = None) -> dict[str
     return {
         "id": hit.get("_id"),
         "score": score,
+        "quality_score": quality_score,
         "candidate": candidate,
         "application": source.get("application", {}),
         "education_summary": _education_summary(candidate, education),

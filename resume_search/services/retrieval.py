@@ -35,6 +35,7 @@ from resume_search.services.formatting import (
     _evidence_match_debug,
     _format_hit,
 )
+from resume_search.services.quality import score_bucket
 from resume_search.services.query_builder import (
     _coverage_tokens,
     _evidence_body,
@@ -382,6 +383,11 @@ def _rrf_merge(
         if coverage_enabled:
             hit["_retrieval_debug"]["term_coverage"] = term_coverage.get(doc_id, 0)
         results.append(_format_hit(hit, final_scores[doc_id]))
+
+    # 质量 tie-break：results 已按相关性主分（含 best_rank / resume_id）排好序，
+    # 全部处于同一 RRF 量纲。把主分量化到分桶精度后做一次【稳定】重排——
+    # 同桶（相关性实质相同）内按 quality_score 降序，跨桶及同桶同质量者保持原相关性序。
+    results.sort(key=lambda r: (-score_bucket(r.get("score")), -float(r.get("quality_score") or 0.0)))
     return results
 
 
