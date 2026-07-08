@@ -823,7 +823,7 @@ function renderResults() {
                   <div class="formula-row final-row">
                     <span class="formula-label">最终加权得分：</span>
                     <span class="formula-calc"><span class="formula-val final-val">${rrfScore}</span></span>
-                  </div>
+                  </div>` : ''}
                   ${item.quality_score !== undefined ? `
                   <div class="formula-row" style="margin-top: 4px;">
                     <span class="formula-label" title="仅当匹配得分相同时作为二级排序依据：学校层次 / 奖项 / 实习 / 项目 / 完整度。不影响相关性主排序。">候选人质量分（同分时二级排序）：</span>
