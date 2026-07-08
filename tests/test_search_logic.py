@@ -2172,6 +2172,27 @@ class QualityScoreTests(unittest.TestCase):
         self.assertNotEqual(score_bucket(0.0321), score_bucket(0.0322))
         self.assertEqual(score_bucket(None), 0.0)
 
+    def test_browse_quality_sort_is_stable_descending(self) -> None:
+        from resume_search.services.search import _sort_browse_by_quality
+
+        # ES 已按 apply_time 降序返回（用 id 顺序代表投递时间序）；稳定排序后，
+        # 质量分降序，同质量分者保持原顺序（tie-break = 投递时间）。
+        rows = [
+            {"id": "new_hi", "quality_score": 0.8},
+            {"id": "new_lo", "quality_score": 0.3},
+            {"id": "old_hi", "quality_score": 0.8},
+            {"id": "mid", "quality_score": 0.5},
+        ]
+        ordered = [r["id"] for r in _sort_browse_by_quality(list(rows))]
+        self.assertEqual(ordered, ["new_hi", "old_hi", "mid", "new_lo"])
+
+    def test_browse_quality_sort_handles_missing_score(self) -> None:
+        from resume_search.services.search import _sort_browse_by_quality
+
+        rows = [{"id": "a"}, {"id": "b", "quality_score": 0.5}]
+        ordered = [r["id"] for r in _sort_browse_by_quality(list(rows))]
+        self.assertEqual(ordered, ["b", "a"])
+
     def test_tie_break_orders_by_quality_within_same_bucket_only(self) -> None:
         # 主分不同桶：高相关性者恒在前，质量不得翻转。
         # 主分同桶：质量高者在前。

@@ -103,6 +103,9 @@ def search(
     elif filters:
         browse_size = MAX_BROWSE_RESULT_SIZE
         body = _filter_browse_body(filters, browse_size)
+        # ES 侧按投递时间降序拉取，Python 侧再按质量分重排——浏览模式无相关性可言
+        # （score 全 0），用户是在"逛"候选人库，优质候选人应排在前。投递时间序被
+        # 保留为同质量者的 stable tie-break（越新越靠前）。
         body["sort"] = [
             {"application.apply_time": {"order": "desc", "unmapped_type": "date"}},
             {"resume_id": {"order": "asc"}},
@@ -110,7 +113,9 @@ def search(
         es_result = _es("POST", f"/{INDEX_ALIAS}/_search", body)
         matched_total = es_result.get("hits", {}).get("total", {}).get("value", 0)
         candidate_total = matched_total
-        results = [_format_hit(hit) for hit in es_result.get("hits", {}).get("hits", [])]
+        results = _sort_browse_by_quality(
+            [_format_hit(hit) for hit in es_result.get("hits", {}).get("hits", [])]
+        )
     else:
         browse_size = MAX_BROWSE_RESULT_SIZE
         body = {
@@ -125,7 +130,9 @@ def search(
         es_result = _es("POST", f"/{INDEX_ALIAS}/_search", body)
         matched_total = es_result.get("hits", {}).get("total", {}).get("value", 0)
         candidate_total = matched_total
-        results = [_format_hit(hit) for hit in es_result.get("hits", {}).get("hits", [])]
+        results = _sort_browse_by_quality(
+            [_format_hit(hit) for hit in es_result.get("hits", {}).get("hits", [])]
+        )
 
     available_count = len(results)
     paged_results = results[page_offset : page_offset + page_size]
@@ -150,6 +157,16 @@ def search(
         "results": paged_results,
         "facets": facets,
     }
+
+
+def _sort_browse_by_quality(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """浏览模式按候选人质量分降序【稳定】重排。
+
+    ES 已按 apply_time 降序返回，稳定排序使同质量分的候选人保持投递时间序
+    （越新越靠前）。质量分由 _format_hit 挂在结果上，此处直接读，不重复计算。
+    """
+    results.sort(key=lambda r: -float(r.get("quality_score") or 0.0))
+    return results
 
 
 def _normalize_limit(limit: int | None) -> int:
