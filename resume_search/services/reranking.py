@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from resume_search.config import (
@@ -14,6 +15,8 @@ from resume_search.config import (
 )
 from resume_search.services.formatting import _append_doc_line, _clean_doc_text
 from resume_search.services.quality import score_bucket
+
+logger = logging.getLogger(__name__)
 
 
 def _rerank_results(

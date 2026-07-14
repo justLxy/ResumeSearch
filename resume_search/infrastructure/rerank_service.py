@@ -20,6 +20,9 @@ RERANK_API_KEY = os.environ.get("RERANK_API_KEY", "")
 RERANK_BATCH_SIZE = 20
 RERANK_TIMEOUT_SECONDS = 60
 RERANK_INSTRUCT: str | None = "Given a recruitment query, retrieve relevant candidate resumes that match the required skills, experience, and qualifications."
+# qwen3-rerank rejects overly long queries with a 400; cap the query text so a
+# pasted full JD degrades to a truncated query instead of failing the request.
+RERANK_MAX_QUERY_CHARS = 1024
 
 
 @dataclass(frozen=True)
@@ -69,7 +72,10 @@ def _score_batch(query: str, documents: list[str]) -> list[float]:
         json=payload,
         timeout=RERANK_TIMEOUT_SECONDS,
     )
-    response.raise_for_status()
+    if not response.ok:
+        raise RuntimeError(
+            f"rerank API {response.status_code} error: {response.text[:500]}"
+        )
     data = response.json()
     return _extract_scores(data, len(documents))
 
@@ -83,7 +89,7 @@ def _build_payload(query: str, documents: list[str]) -> dict[str, Any]:
         parameters["instruct"] = RERANK_INSTRUCT
     return {
         "model": RERANK_MODEL_ID,
-        "query": query.strip(),
+        "query": query.strip()[:RERANK_MAX_QUERY_CHARS],
         "documents": [_clean_document(document) for document in documents],
         "parameters": parameters,
     }
