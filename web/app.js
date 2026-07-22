@@ -16,6 +16,14 @@ const state = {
   requestSeq: 0,
 };
 
+const uploadState = {
+  open: false,
+  uploading: false,
+  items: [], // { id, file, filename, size, clientError, status, message, resumeId }
+  existingNames: new Set(),
+  seq: 0,
+};
+
 const els = {
   searchInput: document.querySelector("#searchInput"),
   searchButton: document.querySelector("#searchButton"),
@@ -34,6 +42,18 @@ const els = {
   drawerContent: document.querySelector("#drawerContent"),
   drawerClose: document.querySelector("#drawerClose"),
   clusterStatus: document.querySelector("#clusterStatus"),
+  uploadOpenButton: document.querySelector("#uploadOpenButton"),
+  uploadOverlay: document.querySelector("#uploadOverlay"),
+  uploadModal: document.querySelector("#uploadModal"),
+  uploadCloseButton: document.querySelector("#uploadCloseButton"),
+  uploadDropzone: document.querySelector("#uploadDropzone"),
+  uploadFileInput: document.querySelector("#uploadFileInput"),
+  uploadFileList: document.querySelector("#uploadFileList"),
+  uploadEmptyHint: document.querySelector("#uploadEmptyHint"),
+  uploadListCount: document.querySelector("#uploadListCount"),
+  uploadSummary: document.querySelector("#uploadSummary"),
+  uploadClearButton: document.querySelector("#uploadClearButton"),
+  uploadSubmitButton: document.querySelector("#uploadSubmitButton"),
 };
 
 function escapeHtml(value) {
@@ -1206,4 +1226,320 @@ async function checkESHealth() {
 checkESHealth();
 setInterval(checkESHealth, 30000);
 
+/* —— 简历批量上传 —— */
+
+function formatFileSize(bytes) {
+  const n = Number(bytes) || 0;
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function isDocFilename(name) {
+  return /\.doc$/i.test(String(name || "").trim());
+}
+
+function validateUploadFile(file, pendingNames) {
+  const filename = String(file?.name || "").trim();
+  if (!filename || !isDocFilename(filename)) {
+    return "仅支持 .doc 格式";
+  }
+  if (!file.size) {
+    return "文件为空";
+  }
+  const key = filename.toLowerCase();
+  if (uploadState.existingNames.has(key)) {
+    return "data 目录下已存在同名文件";
+  }
+  if (pendingNames.has(key)) {
+    return "列表中已有同名文件";
+  }
+  return "";
+}
+
+function addUploadFiles(fileList) {
+  if (uploadState.uploading) return;
+  const pendingNames = new Set(
+    uploadState.items
+      .filter((item) => !item.clientError && item.status !== "error")
+      .map((item) => item.filename.toLowerCase())
+  );
+  const files = Array.from(fileList || []);
+  for (const file of files) {
+    const filename = String(file.name || "").trim() || "未命名文件";
+    const clientError = validateUploadFile(file, pendingNames);
+    const item = {
+      id: `u${++uploadState.seq}`,
+      file,
+      filename,
+      size: file.size || 0,
+      clientError,
+      status: clientError ? "error" : "pending",
+      message: clientError || "",
+      resumeId: "",
+    };
+    if (!clientError) {
+      pendingNames.add(filename.toLowerCase());
+    }
+    uploadState.items.push(item);
+  }
+  renderUploadList();
+}
+
+function removeUploadItem(id) {
+  if (uploadState.uploading) return;
+  uploadState.items = uploadState.items.filter((item) => item.id !== id);
+  renderUploadList();
+}
+
+function clearUploadItems() {
+  if (uploadState.uploading) return;
+  uploadState.items = [];
+  if (els.uploadFileInput) els.uploadFileInput.value = "";
+  renderUploadList();
+}
+
+function uploadStatusLabel(item) {
+  if (item.status === "uploading") return "上传中…";
+  if (item.status === "success") return "成功";
+  if (item.status === "error") return "失败";
+  if (item.clientError) return "无效";
+  return "待上传";
+}
+
+function renderUploadList() {
+  if (!els.uploadFileList) return;
+  const items = uploadState.items;
+  els.uploadListCount.textContent = `${items.length} 个`;
+  els.uploadEmptyHint.hidden = items.length > 0;
+  els.uploadFileList.innerHTML = items
+    .map((item) => {
+      const statusClass =
+        item.status === "success"
+          ? "is-success"
+          : item.status === "uploading"
+            ? "is-uploading"
+            : item.status === "error" || item.clientError
+              ? "is-error"
+              : "is-pending";
+      const errorText = item.message || item.clientError || "";
+      const canRemove = !uploadState.uploading && item.status !== "uploading";
+      const removeHtml = canRemove
+        ? `<button class="upload-file-remove" type="button" data-remove="${escapeHtml(item.id)}" aria-label="移除">×</button>`
+        : `<span class="upload-file-remove-placeholder"></span>`;
+      return `<li class="upload-file-item${item.clientError || item.status === "error" ? " has-error" : ""}" data-id="${escapeHtml(item.id)}">
+        <span class="upload-file-name" title="${escapeHtml(item.filename)}">${escapeHtml(item.filename)}</span>
+        <span class="upload-file-meta">${escapeHtml(formatFileSize(item.size))}</span>
+        <span class="upload-file-status ${statusClass}">${escapeHtml(uploadStatusLabel(item))}</span>
+        ${removeHtml}
+        ${errorText ? `<div class="upload-file-error">${escapeHtml(errorText)}</div>` : ""}
+      </li>`;
+    })
+    .join("");
+
+  const readyCount = items.filter((item) => item.status === "pending" && !item.clientError).length;
+  const hasSuccess = items.some((item) => item.status === "success");
+  const hasError = items.some((item) => item.status === "error" || item.clientError);
+
+  if (uploadState.uploading) {
+    els.uploadSummary.className = "upload-summary";
+    els.uploadSummary.textContent = "正在上传并索引，请稍候…（含向量化，可能较久）";
+  } else if (!items.length) {
+    els.uploadSummary.className = "upload-summary";
+    els.uploadSummary.textContent = "";
+  } else if (readyCount > 0) {
+    els.uploadSummary.className = "upload-summary";
+    els.uploadSummary.textContent = `${readyCount} 个文件可上传${hasError ? "（部分文件无效，将不会提交）" : ""}`;
+  } else if (hasSuccess && !hasError) {
+    els.uploadSummary.className = "upload-summary is-success";
+    els.uploadSummary.textContent = "全部上传成功，已写入索引";
+  } else if (hasSuccess) {
+    els.uploadSummary.className = "upload-summary";
+    els.uploadSummary.textContent = "部分上传成功，请查看各文件状态";
+  } else {
+    els.uploadSummary.className = "upload-summary is-error";
+    els.uploadSummary.textContent = "没有可上传的有效文件";
+  }
+
+  els.uploadSubmitButton.disabled = uploadState.uploading || readyCount === 0;
+  els.uploadClearButton.disabled = uploadState.uploading || items.length === 0;
+}
+
+async function openUploadModal() {
+  if (!els.uploadModal) return;
+  uploadState.open = true;
+  els.uploadOverlay.hidden = false;
+  els.uploadModal.hidden = false;
+  document.body.style.overflow = "hidden";
+  try {
+    const resp = await fetch("/api/resumes/existing-filenames");
+    const data = await resp.json();
+    uploadState.existingNames = new Set(
+      (data.filenames || []).map((name) => String(name).toLowerCase())
+    );
+  } catch {
+    uploadState.existingNames = new Set();
+  }
+  // 重新校验已选文件（existing 列表可能已更新）
+  const pendingNames = new Set();
+  for (const item of uploadState.items) {
+    if (item.status === "success") continue;
+    const err = validateUploadFile(item.file, pendingNames);
+    item.clientError = err;
+    if (err) {
+      item.status = "error";
+      item.message = err;
+    } else if (item.status === "error" && !item.message?.includes("索引") && !item.message?.includes("解析")) {
+      item.status = "pending";
+      item.message = "";
+      pendingNames.add(item.filename.toLowerCase());
+    } else if (item.status === "pending") {
+      pendingNames.add(item.filename.toLowerCase());
+    }
+  }
+  renderUploadList();
+}
+
+function closeUploadModal() {
+  if (uploadState.uploading) return;
+  uploadState.open = false;
+  if (els.uploadOverlay) els.uploadOverlay.hidden = true;
+  if (els.uploadModal) els.uploadModal.hidden = true;
+  document.body.style.overflow = "";
+}
+
+async function submitUpload() {
+  if (uploadState.uploading) return;
+  const ready = uploadState.items.filter((item) => item.status === "pending" && !item.clientError);
+  if (!ready.length) return;
+
+  uploadState.uploading = true;
+  for (const item of ready) {
+    item.status = "uploading";
+    item.message = "";
+  }
+  renderUploadList();
+
+  const form = new FormData();
+  for (const item of ready) {
+    form.append("files", item.file, item.filename);
+  }
+
+  let payload = null;
+  try {
+    const resp = await fetch("/api/resumes/upload", {
+      method: "POST",
+      body: form,
+    });
+    payload = await resp.json().catch(() => null);
+    if (!resp.ok) {
+      throw new Error((payload && payload.detail) || `上传失败（HTTP ${resp.status}）`);
+    }
+  } catch (err) {
+    const message = err?.message || "网络错误，上传失败";
+    for (const item of ready) {
+      item.status = "error";
+      item.message = message;
+    }
+    uploadState.uploading = false;
+    renderUploadList();
+    return;
+  }
+
+  const byName = new Map();
+  for (const result of payload?.results || []) {
+    const key = String(result.filename || "").toLowerCase();
+    if (!byName.has(key)) byName.set(key, []);
+    byName.get(key).push(result);
+  }
+
+  for (const item of ready) {
+    const key = item.filename.toLowerCase();
+    const matches = byName.get(key) || [];
+    const result = matches.shift();
+    if (!result) {
+      item.status = "error";
+      item.message = "服务端未返回该文件结果";
+      continue;
+    }
+    if (result.status === "success") {
+      item.status = "success";
+      item.message = result.message || "已解析并索引";
+      item.resumeId = result.resume_id || "";
+      uploadState.existingNames.add(key);
+    } else {
+      item.status = "error";
+      item.message = result.message || "上传失败";
+    }
+  }
+
+  uploadState.uploading = false;
+  renderUploadList();
+
+  const succeeded = (payload?.summary?.succeeded || 0) > 0;
+  if (succeeded) {
+    // 刷新检索结果与 facets
+    runSearch();
+  }
+}
+
+function wireUploadUi() {
+  if (!els.uploadOpenButton || !els.uploadModal) return;
+
+  els.uploadOpenButton.addEventListener("click", () => openUploadModal());
+  els.uploadCloseButton?.addEventListener("click", () => closeUploadModal());
+  els.uploadOverlay?.addEventListener("click", () => closeUploadModal());
+  els.uploadClearButton?.addEventListener("click", () => clearUploadItems());
+  els.uploadSubmitButton?.addEventListener("click", () => submitUpload());
+
+  els.uploadDropzone?.addEventListener("click", () => {
+    if (!uploadState.uploading) els.uploadFileInput?.click();
+  });
+  els.uploadDropzone?.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      if (!uploadState.uploading) els.uploadFileInput?.click();
+    }
+  });
+  els.uploadFileInput?.addEventListener("change", (event) => {
+    addUploadFiles(event.target.files);
+    event.target.value = "";
+  });
+
+  const dropzone = els.uploadDropzone;
+  if (dropzone) {
+    ["dragenter", "dragover"].forEach((type) => {
+      dropzone.addEventListener(type, (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        if (!uploadState.uploading) dropzone.classList.add("is-dragover");
+      });
+    });
+    ["dragleave", "drop"].forEach((type) => {
+      dropzone.addEventListener(type, (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        dropzone.classList.remove("is-dragover");
+      });
+    });
+    dropzone.addEventListener("drop", (event) => {
+      if (uploadState.uploading) return;
+      addUploadFiles(event.dataTransfer?.files);
+    });
+  }
+
+  els.uploadFileList?.addEventListener("click", (event) => {
+    const btn = event.target.closest("[data-remove]");
+    if (!btn) return;
+    removeUploadItem(btn.getAttribute("data-remove"));
+  });
+
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && uploadState.open && !uploadState.uploading) {
+      closeUploadModal();
+    }
+  });
+}
+
+wireUploadUi();
 runSearch();

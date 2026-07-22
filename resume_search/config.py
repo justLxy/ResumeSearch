@@ -17,6 +17,7 @@ load_dotenv()
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 BASE_DIR = PROJECT_ROOT
 WEB_DIR = PROJECT_ROOT / "web"
+DATA_DIR = PROJECT_ROOT / "data"
 SCHOOL_TIERS_PATH = PROJECT_ROOT / "school_tiers.json"
 
 # --- Elasticsearch ---

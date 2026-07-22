@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>ResumeSearch 简历检索</title>
     <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
-    <link rel="stylesheet" href="/static/styles.css?v=20260628-4" />
+    <link rel="stylesheet" href="/static/styles.css?v=20260722-1" />
   </head>
   <body>
     <header class="search-header">
@@ -27,7 +27,10 @@
           <button data-query="做过大模型 RAG 检索增强和向量数据库落地">大模型 RAG 向量检索（语义）</button>
         </div>
       </div>
-      <div id="clusterStatus" class="cluster-status"><span></span><strong>ES</strong><em>检测中…</em></div>
+      <div class="header-actions">
+        <button id="uploadOpenButton" class="header-action-btn" type="button">上传简历</button>
+        <div id="clusterStatus" class="cluster-status"><span></span><strong>ES</strong><em>检测中…</em></div>
+      </div>
     </header>
 
     <main class="page">
@@ -99,6 +102,38 @@
       <div id="drawerContent" class="drawer-content"></div>
     </aside>
 
-    <script src="/static/app.js?v=20260628-4"></script>
+    <div id="uploadOverlay" class="upload-overlay" hidden></div>
+    <div id="uploadModal" class="upload-modal" role="dialog" aria-modal="true" aria-labelledby="uploadModalTitle" hidden>
+      <div class="upload-modal-head">
+        <div>
+          <h2 id="uploadModalTitle">批量上传简历</h2>
+          <p class="upload-modal-hint">支持 .doc 格式，可多选或拖拽；同名文件将被拒绝</p>
+        </div>
+        <button id="uploadCloseButton" class="icon-button" type="button" aria-label="关闭上传"><span aria-hidden="true">×</span></button>
+      </div>
+      <div id="uploadDropzone" class="upload-dropzone" tabindex="0">
+        <input id="uploadFileInput" type="file" accept=".doc,application/msword" multiple hidden />
+        <div class="upload-dropzone-icon" aria-hidden="true">↑</div>
+        <p class="upload-dropzone-title">拖拽简历到此处，或点击选择文件</p>
+        <p class="upload-dropzone-sub">仅 .doc · 可批量选择</p>
+      </div>
+      <div class="upload-list-wrap">
+        <div class="upload-list-head">
+          <span>待上传文件</span>
+          <span id="uploadListCount">0 个</span>
+        </div>
+        <ul id="uploadFileList" class="upload-file-list"></ul>
+        <p id="uploadEmptyHint" class="upload-empty-hint">尚未选择文件</p>
+      </div>
+      <div class="upload-modal-foot">
+        <div id="uploadSummary" class="upload-summary"></div>
+        <div class="upload-actions">
+          <button id="uploadClearButton" class="ghost-button" type="button">清空</button>
+          <button id="uploadSubmitButton" class="primary-button" type="button" disabled>开始上传</button>
+        </div>
+      </div>
+    </div>
+
+    <script src="/static/app.js?v=20260722-1"></script>
   </body>
 </html>

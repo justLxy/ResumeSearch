@@ -129,6 +129,136 @@ def import_resumes(
     }
 
 
+def import_resume_paths(
+    paths: list[str | Path],
+    es_url: str = DEFAULT_ES_URL,
+    index: str = DEFAULT_INDEX,
+    alias: str = DEFAULT_ALIAS,
+    evidence_index: str = DEFAULT_EVIDENCE_INDEX,
+    evidence_alias: str = DEFAULT_EVIDENCE_ALIAS,
+) -> dict[str, Any]:
+    """增量导入指定 .doc 路径：解析 → 富化 → 证据切片/向量化 → 写入现有索引。
+
+    不重建索引、不扫描整个 data 目录。同 resume_id 会覆盖候选人文档，并先清理其
+    旧证据切片再写入，避免切片数量变化时留下孤儿文档。
+    """
+    path_list = [Path(p) for p in paths]
+    if not path_list:
+        return {
+            "parsed": 0,
+            "failed": [],
+            "indexed": 0,
+            "evidence_indexed": 0,
+            "results": [],
+        }
+
+    raw_docs = parse_resume_batch(path_list)
+    ok_docs: list[dict[str, Any]] = []
+    failed: list[dict[str, Any]] = []
+    for doc in raw_docs:
+        if doc.get("parse_status") == "ok":
+            ok_docs.append(_enrich_doc(doc))
+        else:
+            failed.append(
+                {
+                    "filename": (doc.get("file") or {}).get("name") or "",
+                    "resume_id": doc.get("resume_id"),
+                    "errors": doc.get("parse_errors") or [],
+                }
+            )
+
+    target_index = _write_target(es_url, index, alias)
+    target_evidence_index = _write_target(es_url, evidence_index, evidence_alias)
+    _ensure_write_targets(
+        es_url,
+        target_index=target_index,
+        target_evidence_index=target_evidence_index,
+        index=index,
+        evidence_index=evidence_index,
+        alias=alias,
+        evidence_alias=evidence_alias,
+    )
+
+    evidence_docs: list[dict[str, Any]] = []
+    if ok_docs:
+        evidence_docs = _build_evidence_docs(ok_docs)
+        add_evidence_embeddings(evidence_docs)
+        resume_ids = {str(doc["resume_id"]) for doc in ok_docs if doc.get("resume_id")}
+        _delete_evidence_for_resumes(es_url, target_evidence_index, resume_ids)
+        _bulk_index(es_url, target_index, ok_docs, id_field="resume_id")
+        _request("POST", f"{es_url}/{target_index}/_refresh", ok_statuses={200})
+        if evidence_docs:
+            _bulk_index(es_url, target_evidence_index, evidence_docs, id_field="evidence_id")
+            _request("POST", f"{es_url}/{target_evidence_index}/_refresh", ok_statuses={200})
+
+    return {
+        "index": target_index,
+        "alias": alias,
+        "evidence_index": target_evidence_index,
+        "evidence_alias": evidence_alias,
+        "parsed": len(ok_docs),
+        "failed": failed,
+        "indexed": len(ok_docs),
+        "evidence_indexed": len(evidence_docs),
+        "results": [
+            {
+                "filename": (doc.get("file") or {}).get("name") or "",
+                "resume_id": doc.get("resume_id"),
+                "status": "success",
+            }
+            for doc in ok_docs
+        ],
+    }
+
+
+def _ensure_write_targets(
+    es_url: str,
+    *,
+    target_index: str,
+    target_evidence_index: str,
+    index: str,
+    evidence_index: str,
+    alias: str,
+    evidence_alias: str,
+) -> None:
+    if not _target_exists(es_url, target_index):
+        created = index if target_index in {index, alias} else target_index
+        _request("PUT", f"{es_url}/{created}", json_body=INDEX_BODY, ok_statuses={200})
+        _wait_for_index_ready(es_url, created)
+        if not _target_exists(es_url, alias):
+            _switch_alias(es_url, created, alias)
+    if not _target_exists(es_url, target_evidence_index):
+        created = (
+            evidence_index
+            if target_evidence_index in {evidence_index, evidence_alias}
+            else target_evidence_index
+        )
+        _request(
+            "PUT",
+            f"{es_url}/{created}",
+            json_body=EVIDENCE_INDEX_BODY,
+            ok_statuses={200},
+        )
+        _wait_for_index_ready(es_url, created)
+        if not _target_exists(es_url, evidence_alias):
+            _switch_alias(es_url, created, evidence_alias)
+
+
+def _delete_evidence_for_resumes(
+    es_url: str,
+    target: str,
+    resume_ids: set[str],
+) -> None:
+    if not resume_ids or not _target_exists(es_url, target):
+        return
+    _request(
+        "POST",
+        f"{es_url}/{target}/_delete_by_query?refresh=true",
+        json_body={"query": {"terms": {"resume_id": sorted(resume_ids)}}},
+        ok_statuses={200},
+    )
+
+
 def _load_resume_docs(data_path: str | Path) -> list[dict[str, Any]]:
     path = Path(data_path)
     if path.is_file() and path.suffix.lower() == ".jsonl":

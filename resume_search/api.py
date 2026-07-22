@@ -7,13 +7,14 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, File, Query, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from resume_search.config import INDEX_ALIAS, WEB_DIR
 from resume_search.infrastructure.es_client import es_request as _es
 from resume_search.services.search import search as _search
+from resume_search.services.upload import list_existing_doc_filenames, upload_resume_files
 
 app = FastAPI(title="Resume Search Prototype")
 app.mount("/static", StaticFiles(directory=WEB_DIR), name="static")
@@ -63,6 +64,25 @@ def health() -> dict[str, Any]:
         }
     except Exception:
         return {"es_online": False, "status": "offline", "indices": 0}
+
+
+@app.get("/api/resumes/existing-filenames")
+def existing_filenames() -> dict[str, Any]:
+    return {"filenames": list_existing_doc_filenames()}
+
+
+@app.post("/api/resumes/upload")
+async def upload_resumes(files: list[UploadFile] = File(...)) -> dict[str, Any]:
+    if not files:
+        return {
+            "summary": {"total": 0, "succeeded": 0, "failed": 0},
+            "results": [],
+        }
+    payload: list[tuple[str, bytes]] = []
+    for item in files:
+        content = await item.read()
+        payload.append((item.filename or "", content))
+    return upload_resume_files(payload)
 
 
 @app.get("/api/resumes/{resume_id}")
